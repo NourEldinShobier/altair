@@ -15,7 +15,7 @@ already provides it)
 
 |           | Tests ported | of Rails' |      |
 | --------- | ------------ | --------- | ---- |
-| **Total** | **673**      | 26,775    | 2.5% |
+| **Total** | **742**      | 26,775    | 2.8% |
 
 ---
 
@@ -39,18 +39,18 @@ Rails: 36,129 lines · 3,670 tests
 
 Rails: 71,873 lines · 10,602 tests — the largest single body of work
 
-| Subsystem                   | Rails LOC | Status  | Notes                                         |
-| --------------------------- | --------- | ------- | --------------------------------------------- |
-| Connection adapters         | 21,714    | **n/a** | `Bun.sql` — Postgres, MySQL/MariaDB, SQLite   |
-| Attributes & dirty tracking | 1,144     | todo    | Types generated from the schema               |
-| Persistence                 | 1,006     | todo    | `save`, `update`, `destroy`, `create`         |
-| Associations                | 6,031     | todo    | `belongsTo`, `hasMany`, through, polymorphic  |
-| Relation / query interface  | 5,579     | todo    | Typed builder underneath, AR surface on top   |
-| Migrations                  | 2,705     | todo    | DSL, versions, schema dump, **type emission** |
-| Validations                 | —         | todo    | Delegates to Zod/VineJS                       |
-| Callbacks                   | —         | todo    | On `@altair/support` callbacks                |
-| Encryption                  | 2,046     | todo    | Late phase                                    |
-| Fixtures                    | 860       | todo    | Needed early for testing other packages       |
+| Subsystem                   | Rails LOC | Status   | Notes                                        |
+| --------------------------- | --------- | -------- | -------------------------------------------- |
+| Connection adapters         | 21,714    | **n/a**  | `Bun.sql` — Postgres, MySQL/MariaDB, SQLite  |
+| Attributes & dirty tracking | 1,144     | **done** | Typed via an attributes interface            |
+| Persistence                 | 1,006     | **done** | save, update, destroy, create, reload        |
+| Associations                | 6,031     | **next** | `belongsTo`, `hasMany`, through, polymorphic |
+| Relation / query interface  | 5,579     | **wip**  | where/order/limit/pluck/each; lazy thenable  |
+| Migrations                  | 2,705     | **done** | DSL, versions, rollback; type emission todo  |
+| Validations                 | —         | **wip**  | errors object, save/saveOrFail               |
+| Callbacks                   | —         | **done** | save/create/update/destroy/validation chains |
+| Encryption                  | 2,046     | todo     | Late phase                                   |
+| Fixtures                    | 860       | todo     | Needed early for testing other packages      |
 
 ## ActionPack → `@altair/router`, `@altair/controller`
 

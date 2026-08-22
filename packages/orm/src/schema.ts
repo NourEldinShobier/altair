@@ -1,0 +1,351 @@
+/**
+ * Migrations, ported from `ActiveRecord::Migration` and `SchemaStatements`.
+ *
+ * The DSL is Rails': a migration declares `up` and `down`, tables are built
+ * with a block that names columns by type, and applied versions are recorded in
+ * `schema_migrations` so a migration runs once.
+ */
+
+import type { Connection, Row } from "./connection.js";
+
+export type ColumnType =
+  | "string"
+  | "text"
+  | "integer"
+  | "bigint"
+  | "float"
+  | "decimal"
+  | "boolean"
+  | "datetime"
+  | "date"
+  | "json"
+  | "binary";
+
+export interface ColumnOptions {
+  null?: boolean;
+  default?: unknown;
+  limit?: number;
+  primaryKey?: boolean;
+  unique?: boolean;
+}
+
+export interface Column extends ColumnOptions {
+  name: string;
+  type: ColumnType;
+}
+
+/** Rails' `t.string :title` and friends. */
+export class TableDefinition {
+  readonly columns: Column[] = [];
+  readonly indexes: { columns: string[]; unique: boolean }[] = [];
+
+  constructor(readonly name: string) {}
+
+  column(name: string, type: ColumnType, options: ColumnOptions = {}): this {
+    this.columns.push({ name, type, ...options });
+    return this;
+  }
+
+  string(name: string, options?: ColumnOptions): this {
+    return this.column(name, "string", options);
+  }
+  text(name: string, options?: ColumnOptions): this {
+    return this.column(name, "text", options);
+  }
+  integer(name: string, options?: ColumnOptions): this {
+    return this.column(name, "integer", options);
+  }
+  bigint(name: string, options?: ColumnOptions): this {
+    return this.column(name, "bigint", options);
+  }
+  float(name: string, options?: ColumnOptions): this {
+    return this.column(name, "float", options);
+  }
+  decimal(name: string, options?: ColumnOptions): this {
+    return this.column(name, "decimal", options);
+  }
+  boolean(name: string, options?: ColumnOptions): this {
+    return this.column(name, "boolean", options);
+  }
+  datetime(name: string, options?: ColumnOptions): this {
+    return this.column(name, "datetime", options);
+  }
+  date(name: string, options?: ColumnOptions): this {
+    return this.column(name, "date", options);
+  }
+  json(name: string, options?: ColumnOptions): this {
+    return this.column(name, "json", options);
+  }
+  binary(name: string, options?: ColumnOptions): this {
+    return this.column(name, "binary", options);
+  }
+
+  /** Rails' `t.references :post` — a foreign key column plus its index. */
+  references(name: string, options: ColumnOptions & { index?: boolean } = {}): this {
+    this.column(`${name}_id`, "bigint", options);
+    if (options.index !== false) this.index([`${name}_id`]);
+    return this;
+  }
+
+  /** Rails' `t.timestamps`. */
+  timestamps(): this {
+    this.datetime("created_at", { null: false });
+    this.datetime("updated_at", { null: false });
+    return this;
+  }
+
+  index(columns: string[], options: { unique?: boolean } = {}): this {
+    this.indexes.push({ columns, unique: options.unique ?? false });
+    return this;
+  }
+}
+
+/** Maps a logical column type to this adapter's SQL type. */
+function sqlType(connection: Connection, column: Column): string {
+  const { type, limit } = column;
+  const pg = connection.adapter === "postgres";
+  const mysql = connection.adapter === "mysql";
+
+  switch (type) {
+    case "string":
+      return `VARCHAR(${limit ?? 255})`;
+    case "text":
+      return "TEXT";
+    case "integer":
+      return "INTEGER";
+    case "bigint":
+      return pg ? "BIGINT" : mysql ? "BIGINT" : "INTEGER";
+    case "float":
+      return pg ? "DOUBLE PRECISION" : "DOUBLE";
+    case "decimal":
+      return "DECIMAL(10,2)";
+    case "boolean":
+      return pg ? "BOOLEAN" : mysql ? "TINYINT(1)" : "INTEGER";
+    case "datetime":
+      return pg ? "TIMESTAMP" : "DATETIME";
+    case "date":
+      return "DATE";
+    case "json":
+      return pg ? "JSONB" : "JSON";
+    case "binary":
+      return pg ? "BYTEA" : "BLOB";
+  }
+}
+
+/** The auto-incrementing primary key clause, which every adapter spells differently. */
+function primaryKeyClause(connection: Connection): string {
+  switch (connection.adapter) {
+    case "postgres":
+      return `${connection.quote("id")} BIGSERIAL PRIMARY KEY`;
+    case "mysql":
+      return `${connection.quote("id")} BIGINT AUTO_INCREMENT PRIMARY KEY`;
+    case "sqlite":
+      return `${connection.quote("id")} INTEGER PRIMARY KEY AUTOINCREMENT`;
+  }
+}
+
+export class SchemaStatements {
+  constructor(readonly connection: Connection) {}
+
+  async createTable(
+    name: string,
+    build: (t: TableDefinition) => void,
+    options: { id?: boolean; ifNotExists?: boolean } = {},
+  ): Promise<void> {
+    const table = new TableDefinition(name);
+    build(table);
+
+    const parts: string[] = [];
+    if (options.id !== false) parts.push(primaryKeyClause(this.connection));
+
+    for (const column of table.columns) {
+      let clause = `${this.connection.quote(column.name)} ${sqlType(this.connection, column)}`;
+      if (column.null === false) clause += " NOT NULL";
+      if (column.unique) clause += " UNIQUE";
+      if (column.default !== undefined) clause += ` DEFAULT ${literal(column.default)}`;
+      parts.push(clause);
+    }
+
+    const exists = options.ifNotExists ? "IF NOT EXISTS " : "";
+    await this.connection.execute(
+      `CREATE TABLE ${exists}${this.connection.quote(name)} (${parts.join(", ")})`,
+    );
+
+    for (const index of table.indexes) {
+      await this.addIndex(name, index.columns, { unique: index.unique });
+    }
+  }
+
+  async dropTable(name: string, options: { ifExists?: boolean } = {}): Promise<void> {
+    const exists = options.ifExists ? "IF EXISTS " : "";
+    await this.connection.execute(`DROP TABLE ${exists}${this.connection.quote(name)}`);
+  }
+
+  async addColumn(
+    table: string,
+    name: string,
+    type: ColumnType,
+    options: ColumnOptions = {},
+  ): Promise<void> {
+    const column: Column = { name, type, ...options };
+    let clause = `${this.connection.quote(name)} ${sqlType(this.connection, column)}`;
+    if (column.null === false) clause += " NOT NULL";
+    if (column.default !== undefined) clause += ` DEFAULT ${literal(column.default)}`;
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} ADD COLUMN ${clause}`,
+    );
+  }
+
+  async removeColumn(table: string, name: string): Promise<void> {
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} DROP COLUMN ${this.connection.quote(name)}`,
+    );
+  }
+
+  async renameTable(from: string, to: string): Promise<void> {
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(from)} RENAME TO ${this.connection.quote(to)}`,
+    );
+  }
+
+  async addIndex(
+    table: string,
+    columns: string[],
+    options: { unique?: boolean; name?: string } = {},
+  ): Promise<void> {
+    const name = options.name ?? `index_${table}_on_${columns.join("_and_")}`;
+    const unique = options.unique ? "UNIQUE " : "";
+    await this.connection.execute(
+      `CREATE ${unique}INDEX ${this.connection.quote(name)} ON ${this.connection.quote(table)} (${columns
+        .map((c) => this.connection.quote(c))
+        .join(", ")})`,
+    );
+  }
+
+  async removeIndex(table: string, options: { name: string }): Promise<void> {
+    const drop =
+      this.connection.adapter === "mysql"
+        ? `DROP INDEX ${this.connection.quote(options.name)} ON ${this.connection.quote(table)}`
+        : `DROP INDEX ${this.connection.quote(options.name)}`;
+    await this.connection.execute(drop);
+  }
+
+  /** The table names in this database, which the schema dumper reads. */
+  async tables(): Promise<string[]> {
+    switch (this.connection.adapter) {
+      case "sqlite": {
+        const rows = await this.connection.query<Row>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "postgres": {
+        const rows = await this.connection.query<Row>(
+          "SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public'",
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "mysql": {
+        const rows = await this.connection.query<Row>(
+          "SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()",
+        );
+        return rows.map((row) => String(row.name));
+      }
+    }
+  }
+
+  async tableExists(name: string): Promise<boolean> {
+    return (await this.tables()).includes(name);
+  }
+}
+
+/**
+ * Renders a default value.
+ *
+ * Only literals reach this — defaults come from migration source, never from
+ * user input, so there is no injection surface. Values from a request are
+ * always bound, never interpolated.
+ */
+function literal(value: unknown): string {
+  if (value === null) return "NULL";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "1" : "0";
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+/** A single migration. Rails names these by a timestamp version. */
+export interface Migration {
+  version: string;
+  name?: string;
+  up: (schema: SchemaStatements) => Promise<void>;
+  down?: (schema: SchemaStatements) => Promise<void>;
+}
+
+/** Runs migrations and records which have been applied. */
+export class Migrator {
+  readonly schema: SchemaStatements;
+
+  constructor(
+    readonly connection: Connection,
+    readonly migrations: Migration[] = [],
+  ) {
+    this.schema = new SchemaStatements(connection);
+  }
+
+  async ensureSchemaTable(): Promise<void> {
+    await this.connection.execute(
+      `CREATE TABLE IF NOT EXISTS ${this.connection.quote("schema_migrations")} (${this.connection.quote("version")} VARCHAR(255) NOT NULL PRIMARY KEY)`,
+    );
+  }
+
+  async appliedVersions(): Promise<string[]> {
+    await this.ensureSchemaTable();
+    const rows = await this.connection.query<Row>(
+      `SELECT ${this.connection.quote("version")} FROM ${this.connection.quote("schema_migrations")} ORDER BY ${this.connection.quote("version")}`,
+    );
+    return rows.map((row) => String(row.version));
+  }
+
+  async pending(): Promise<Migration[]> {
+    const applied = new Set(await this.appliedVersions());
+    return [...this.migrations]
+      .sort((a, b) => a.version.localeCompare(b.version))
+      .filter((migration) => !applied.has(migration.version));
+  }
+
+  /** Runs every pending migration in version order. Rails' `db:migrate`. */
+  async up(): Promise<Migration[]> {
+    const pending = await this.pending();
+    for (const migration of pending) {
+      await migration.up(this.schema);
+      await this.connection.execute(
+        `INSERT INTO ${this.connection.quote("schema_migrations")} (${this.connection.quote("version")}) VALUES (${this.connection.placeholder(0)})`,
+        [migration.version],
+      );
+    }
+    return pending;
+  }
+
+  /** Rolls back the last applied migration. Rails' `db:rollback`. */
+  async down(steps = 1): Promise<Migration[]> {
+    const applied = await this.appliedVersions();
+    const toRevert = applied.slice(-steps).reverse();
+    const reverted: Migration[] = [];
+
+    for (const version of toRevert) {
+      const migration = this.migrations.find((m) => m.version === version);
+      if (!migration) continue;
+      if (!migration.down) {
+        throw new Error(`Migration ${version} is irreversible: it defines no down().`);
+      }
+      await migration.down(this.schema);
+      await this.connection.execute(
+        `DELETE FROM ${this.connection.quote("schema_migrations")} WHERE ${this.connection.quote("version")} = ${this.connection.placeholder(0)}`,
+        [version],
+      );
+      reverted.push(migration);
+    }
+    return reverted;
+  }
+}

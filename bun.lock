@@ -19,6 +19,13 @@
         "@altair/support": "workspace:*",
       },
     },
+    "packages/orm": {
+      "name": "@altair/orm",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/support": "workspace:*",
+      },
+    },
     "packages/router": {
       "name": "@altair/router",
       "version": "0.0.0",
@@ -33,6 +40,8 @@
   },
   "packages": {
     "@altair/controller": ["@altair/controller@workspace:packages/controller"],
+
+    "@altair/orm": ["@altair/orm@workspace:packages/orm"],
 
     "@altair/router": ["@altair/router@workspace:packages/router"],
 
