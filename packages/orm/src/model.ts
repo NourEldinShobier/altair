@@ -208,7 +208,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         preload: async (records, names) => {
           for (const name of names) {
             const definition = this.associationFor(name);
-            await preloadAssociation(records as unknown as InstanceLike[], definition);
+            await preloadAssociation(
+              records as unknown as InstanceLike[],
+              definition,
+              resolveAssociation,
+            );
           }
         },
       });
@@ -234,6 +238,51 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         name,
         kind: "hasMany",
         target: target as () => ModelLike,
+        ...options,
+      });
+    }
+
+    /**
+     * Rails' `has_many :comments, through: :posts`.
+     *
+     * Reaches the target through another association rather than a column on
+     * either table.
+     */
+    static hasManyThrough(
+      name: string,
+      through: string,
+      options: AssociationOptions & { source?: string } = {},
+    ): void {
+      this.defineAssociation({
+        name,
+        kind: "hasMany",
+        // A through association never queries the target directly, so the
+        // target resolver is only reached if something misuses it.
+        target: () => {
+          throw new Error(`"${name}" is a through association; it loads via "${through}".`);
+        },
+        through,
+        ...options,
+      });
+    }
+
+    /**
+     * A polymorphic belongsTo, whose target class is named by a companion
+     * `<name>_type` column. Rails' `belongs_to :commentable, polymorphic: true`.
+     */
+    static belongsToPolymorphic(
+      name: string,
+      types: Record<string, () => unknown>,
+      options: AssociationOptions = {},
+    ): void {
+      this.defineAssociation({
+        name,
+        kind: "belongsTo",
+        target: () => {
+          throw new Error(`"${name}" is polymorphic; its class comes from ${name}_type.`);
+        },
+        polymorphic: true,
+        types: types as Record<string, () => ModelLike>,
         ...options,
       });
     }
@@ -267,6 +316,32 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           // A to-many association is always a Relation so the declared type is
           // honest. When it was preloaded the relation already holds the
           // records and runs no query.
+          // A polymorphic target is decided per record: no type means no
+          // target, and an unknown type is an error the caller awaits rather
+          // than one thrown while building the accessor.
+          if (definition.polymorphic) {
+            if (cached !== undefined) return Promise.resolve(cached);
+
+            const typeKey = `${definition.name}_type`;
+            const foreignKey = definition.foreignKey ?? `${definition.name}_id`;
+
+            if (this[typeKey] == null || this[foreignKey] == null) return Promise.resolve(null);
+
+            return (async () => relationFor(this, definition).first())();
+          }
+
+          // A through association has no single relation to hand back, so it
+          // is loaded on demand and returned as an already-resolved one.
+          if (definition.through) {
+            if (Array.isArray(cached)) {
+              return Promise.resolve(cached);
+            }
+            return (async () => {
+              await preloadAssociation([this], definition, resolveAssociation);
+              return (this[cacheKey(definition.name)] as InstanceLike[]) ?? [];
+            })();
+          }
+
           if (definition.kind === "hasMany") {
             const relation = relationFor(this, definition);
             return Array.isArray(cached)
@@ -342,6 +417,77 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     static async exists(conditions: Conditions = {}): Promise<boolean> {
       return await this.all().where(conditions).exists();
+    }
+
+    /**
+     * Rails' `find_or_create_by`.
+     *
+     * Not atomic: two requests can both miss the lookup and both insert. Rails
+     * has the same gap and says so — a unique index is what actually prevents
+     * the duplicate, and this reports the resulting error.
+     */
+    static async findOrCreateBy<M extends typeof BaseModel>(
+      this: M,
+      conditions: Conditions,
+      extra: Partial<A> = {},
+    ): Promise<InstanceType<M>> {
+      const existing = await this.findBy(conditions);
+      if (existing) return existing as InstanceType<M>;
+
+      return await this.create({ ...(conditions as Partial<A>), ...extra });
+    }
+
+    /** Rails' `find_or_initialize_by`: the same lookup, without saving. */
+    static async findOrInitializeBy<M extends typeof BaseModel>(
+      this: M,
+      conditions: Conditions,
+      extra: Partial<A> = {},
+    ): Promise<InstanceType<M>> {
+      const existing = await this.findBy(conditions);
+      if (existing) return existing as InstanceType<M>;
+
+      return this.build({ ...(conditions as Partial<A>), ...extra });
+    }
+
+    /**
+     * Runs a block inside a database transaction.
+     *
+     * Everything the block touches joins the transaction, because the
+     * connection is swapped for the duration.
+     */
+    static async transaction<R>(body: () => Promise<R>): Promise<R> {
+      const outer = this.connectionOverride;
+      return await this.connection.transaction(async (tx) => {
+        this.connectionOverride = tx;
+        try {
+          return await body();
+        } finally {
+          this.connectionOverride = outer;
+        }
+      });
+    }
+
+    /** Deletes every matching row, running callbacks for each. Rails' `destroy_all`. */
+    static async destroyAll(conditions: Conditions = {}): Promise<number> {
+      const records = await this.all().where(conditions);
+      for (const record of records) await (record as BaseModel).destroy();
+      return records.length;
+    }
+
+    /**
+     * Declares a named scope. Rails' `scope :published, -> { where(...) }`.
+     *
+     * The scope becomes a static returning a Relation, so it composes with
+     * every other query method.
+     */
+    static scope(name: string, body: (relation: Relation<unknown>) => Relation<unknown>): void {
+      Object.defineProperty(this, name, {
+        configurable: true,
+        writable: true,
+        value: function scopedQuery(this: typeof BaseModel) {
+          return body(this.all() as Relation<unknown>);
+        },
+      });
     }
 
     /** Builds an unsaved record. */
@@ -673,6 +819,19 @@ export interface ModelClass<A extends object> {
 
   count(): Promise<number>;
   exists(conditions?: Conditions): Promise<boolean>;
+  findOrCreateBy<T>(
+    this: ModelConstructor<A, T>,
+    conditions: Conditions,
+    extra?: Partial<A>,
+  ): Promise<T>;
+  findOrInitializeBy<T>(
+    this: ModelConstructor<A, T>,
+    conditions: Conditions,
+    extra?: Partial<A>,
+  ): Promise<T>;
+  transaction<R>(body: () => Promise<R>): Promise<R>;
+  destroyAll(conditions?: Conditions): Promise<number>;
+  scope(name: string, body: (relation: Relation<unknown>) => Relation<unknown>): void;
   columnNames(): Promise<string[]>;
   hasTimestamps(): Promise<boolean>;
 
@@ -682,6 +841,16 @@ export interface ModelClass<A extends object> {
   belongsTo(name: string, target: () => unknown, options?: AssociationOptions): void;
   hasMany(name: string, target: () => unknown, options?: AssociationOptions): void;
   hasOne(name: string, target: () => unknown, options?: AssociationOptions): void;
+  hasManyThrough(
+    name: string,
+    through: string,
+    options?: AssociationOptions & { source?: string },
+  ): void;
+  belongsToPolymorphic(
+    name: string,
+    types: Record<string, () => unknown>,
+    options?: AssociationOptions,
+  ): void;
   associationFor(name: string): AssociationDefinition;
 
   defineCallbacks(names: string | string[], config?: unknown): void;
@@ -714,6 +883,23 @@ export type ModelConstructor<A extends object, T> = new (
 export type BelongsTo<T> = () => Promise<T | null>;
 export type HasOne<T> = () => Promise<T | null>;
 export type HasMany<T> = () => Relation<T>;
+
+/**
+ * Finds an association definition on a record's own class.
+ *
+ * Through associations hop between models, so preloading needs to ask the
+ * intermediate record's class what its associations are.
+ */
+function resolveAssociation(owner: InstanceLike, name: string): AssociationDefinition {
+  const klass = (
+    owner as { constructor: { associationFor?: (n: string) => AssociationDefinition } }
+  ).constructor;
+
+  if (typeof klass.associationFor !== "function") {
+    throw new Error(`Cannot resolve association "${name}": the record is not a model.`);
+  }
+  return klass.associationFor(name);
+}
 
 /** Rails' `underscore`d model name, used for error messages and params. */
 export function modelName(klass: { name: string }): string {

@@ -50,6 +50,9 @@ export class Relation<T> implements PromiseLike<T[]> {
   #offset: number | undefined;
   #selects: string[] | undefined;
   #includes: string[] = [];
+  #groups: string[] = [];
+  #havings: WhereClause[] = [];
+  #distinct = false;
   /**
    * Records handed over by `includes`. Chaining clears this — `#clone` does not
    * copy it — so adding a condition re-queries rather than filtering a stale
@@ -69,6 +72,9 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#offset = this.#offset;
     next.#selects = this.#selects ? [...this.#selects] : undefined;
     next.#includes = [...this.#includes];
+    next.#groups = [...this.#groups];
+    next.#havings = [...this.#havings];
+    next.#distinct = this.#distinct;
     return next;
   }
 
@@ -164,6 +170,27 @@ export class Relation<T> implements PromiseLike<T[]> {
     return next;
   }
 
+  /** Rails' `group`. */
+  group(...columns: string[]): Relation<T> {
+    const next = this.#clone();
+    next.#groups.push(...columns);
+    return next;
+  }
+
+  /** Rails' `having`, which filters groups rather than rows. */
+  having(sql: string, ...bindings: unknown[]): Relation<T> {
+    const next = this.#clone();
+    next.#havings.push({ sql, bindings });
+    return next;
+  }
+
+  /** Rails' `distinct`. */
+  distinct(value = true): Relation<T> {
+    const next = this.#clone();
+    next.#distinct = value;
+    return next;
+  }
+
   select(...columns: string[]): Relation<T> {
     const next = this.#clone();
     next.#selects = columns;
@@ -189,7 +216,7 @@ export class Relation<T> implements PromiseLike<T[]> {
       ? this.#selects.map((column) => this.#quoteColumn(column)).join(", ")
       : `${table}.*`;
 
-    let sql = `SELECT ${columns} FROM ${table}`;
+    let sql = `SELECT ${this.#distinct ? "DISTINCT " : ""}${columns} FROM ${table}`;
 
     if (this.#wheres.length > 0) {
       const clauses = this.#wheres.map((clause) => {
@@ -197,6 +224,18 @@ export class Relation<T> implements PromiseLike<T[]> {
         return clause.sql;
       });
       sql += ` WHERE ${clauses.join(" AND ")}`;
+    }
+
+    if (this.#groups.length > 0) {
+      sql += ` GROUP BY ${this.#groups.map((column) => this.#quoteColumn(column)).join(", ")}`;
+    }
+
+    if (this.#havings.length > 0) {
+      const clauses = this.#havings.map((clause) => {
+        bindings.push(...clause.bindings);
+        return clause.sql;
+      });
+      sql += ` HAVING ${clauses.join(" AND ")}`;
     }
 
     if (this.#orders.length > 0) {
@@ -314,6 +353,45 @@ export class Relation<T> implements PromiseLike<T[]> {
     return Number(rows[0]?.count ?? 0);
   }
 
+  /**
+   * Runs an aggregate over the current conditions.
+   *
+   * Rails spells these sum/average/minimum/maximum. They ignore order, limit
+   * and offset, which would otherwise change the answer rather than the rows.
+   */
+  async #aggregate(fn: string, column: string): Promise<number | null> {
+    const relation = this.#clone();
+    relation.#orders = [];
+    relation.#limit = undefined;
+    relation.#offset = undefined;
+
+    const { sql, bindings } = relation.toSql();
+    const aggregated = sql.replace(
+      /^SELECT .*? FROM/,
+      `SELECT ${fn}(${relation.#quoteColumn(column)}) AS ${this.connection.quote("value")} FROM`,
+    );
+
+    const rows = await this.connection.query<Row>(aggregated, bindings);
+    const value = rows[0]?.value;
+    return value === null || value === undefined ? null : Number(value);
+  }
+
+  async sum(column: string): Promise<number> {
+    return (await this.#aggregate("SUM", column)) ?? 0;
+  }
+
+  async average(column: string): Promise<number | null> {
+    return await this.#aggregate("AVG", column);
+  }
+
+  async minimum(column: string): Promise<number | null> {
+    return await this.#aggregate("MIN", column);
+  }
+
+  async maximum(column: string): Promise<number | null> {
+    return await this.#aggregate("MAX", column);
+  }
+
   async exists(): Promise<boolean> {
     return (await this.limit(1).toArray()).length > 0;
   }
@@ -336,10 +414,52 @@ export class Relation<T> implements PromiseLike<T[]> {
     }
   }
 
+  /** The WHERE clause and its bindings, shared by update and delete. */
+  #whereClause(): { sql: string; bindings: unknown[] } {
+    const bindings: unknown[] = [];
+    if (this.#wheres.length === 0) return { sql: "", bindings };
+
+    const clauses = this.#wheres.map((clause) => {
+      bindings.push(...clause.bindings);
+      return clause.sql;
+    });
+    return { sql: ` WHERE ${clauses.join(" AND ")}`, bindings };
+  }
+
+  #assertColumn(column: string): string {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
+      throw new Error(`Invalid column name: ${column}`);
+    }
+    return column;
+  }
+
+  /**
+   * Updates every matching row in one statement.
+   *
+   * Rails' `update_all`: no callbacks, no validations, no instantiation. Fast,
+   * and deliberately blunt — the name is the warning.
+   */
+  async updateAll(values: Record<string, unknown>): Promise<void> {
+    const entries = Object.entries(values);
+    if (entries.length === 0) return;
+
+    const where = this.#whereClause();
+    const assignments = entries
+      .map(([column]) => `${this.connection.quote(this.#assertColumn(column))} = ?`)
+      .join(", ");
+
+    const statement = `UPDATE ${this.connection.quote(this.#source.tableName)} SET ${assignments}${where.sql}`;
+
+    await this.connection.execute(this.#renumber(statement), [
+      ...entries.map(([, value]) => value),
+      ...where.bindings,
+    ]);
+  }
+
   /** Deletes every matching row without instantiating or running callbacks. */
   async deleteAll(): Promise<void> {
-    const { sql, bindings } = this.toSql();
-    const deleted = sql.replace(/^SELECT .*? FROM/, "DELETE FROM");
-    await this.connection.execute(deleted, bindings);
+    const where = this.#whereClause();
+    const statement = `DELETE FROM ${this.connection.quote(this.#source.tableName)}${where.sql}`;
+    await this.connection.execute(this.#renumber(statement), where.bindings);
   }
 }

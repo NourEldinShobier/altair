@@ -33,6 +33,26 @@ export interface AssociationOptions {
   foreignKey?: string;
   /** Defaults to the target's primary key. */
   primaryKey?: string;
+  /**
+   * Reaches the target through another association.
+   *
+   * Rails' `has_many :comments, through: :posts` — the name of an association
+   * on this model whose records own the target.
+   */
+  through?: string;
+  /**
+   * The association on the intermediate model to follow.
+   *
+   * Defaults to the target's own name, as Rails' `source:` does.
+   */
+  source?: string;
+  /**
+   * Marks a belongsTo as polymorphic: the target class is named by a
+   * companion `<name>_type` column rather than fixed at declaration.
+   */
+  polymorphic?: boolean;
+  /** Resolves a polymorphic type name to a model class. */
+  types?: Record<string, () => ModelLike>;
 }
 
 export interface AssociationDefinition extends AssociationOptions {
@@ -69,8 +89,55 @@ export function defaultForeignKey(modelName: string): string {
 export async function preloadAssociation(
   owners: InstanceLike[],
   definition: AssociationDefinition,
+  resolve?: (owner: InstanceLike, name: string) => AssociationDefinition,
 ): Promise<void> {
   if (owners.length === 0) return;
+
+  // A through association is two hops: load the intermediate records, then
+  // load the target from those. Both are still one query each, which is the
+  // whole point of preloading.
+  if (definition.through) {
+    if (!resolve) throw new Error("A through association needs the owner's association table");
+
+    const middle = resolve(owners[0]!, definition.through);
+    await preloadAssociation(owners, middle, resolve);
+
+    const intermediates = owners.flatMap((owner) => {
+      const loaded = owner[cacheKey(definition.through!)];
+      if (Array.isArray(loaded)) return loaded as InstanceLike[];
+      return loaded ? [loaded as InstanceLike] : [];
+    });
+
+    if (intermediates.length === 0) {
+      for (const owner of owners) owner[cacheKey(definition.name)] = [];
+      return;
+    }
+
+    const sourceName = definition.source ?? definition.name;
+    const sourceDefinition = resolve(intermediates[0]!, sourceName);
+    await preloadAssociation(intermediates, sourceDefinition, resolve);
+
+    for (const owner of owners) {
+      const loaded = owner[cacheKey(definition.through)];
+      const rows = Array.isArray(loaded)
+        ? (loaded as InstanceLike[])
+        : loaded
+          ? [loaded as InstanceLike]
+          : [];
+
+      owner[cacheKey(definition.name)] = rows.flatMap((row) => {
+        const value = row[cacheKey(sourceName)];
+        if (Array.isArray(value)) return value as InstanceLike[];
+        return value ? [value as InstanceLike] : [];
+      });
+    }
+    return;
+  }
+
+  if (definition.polymorphic) {
+    await preloadPolymorphic(owners, definition);
+    return;
+  }
 
   const target = definition.target();
 
@@ -118,6 +185,51 @@ export async function preloadAssociation(
   }
 }
 
+/**
+ * Loads a polymorphic belongsTo.
+ *
+ * The owners point at several different tables, so they are grouped by their
+ * type column and each group loaded from its own model — one query per type
+ * rather than one per record.
+ */
+async function preloadPolymorphic(
+  owners: InstanceLike[],
+  definition: AssociationDefinition,
+): Promise<void> {
+  const foreignKey = definition.foreignKey ?? `${definition.name}_id`;
+  const typeKey = `${definition.name}_type`;
+
+  const byType = new Map<string, InstanceLike[]>();
+  for (const owner of owners) {
+    const type = owner[typeKey];
+    if (typeof type !== "string" || owner[foreignKey] == null) {
+      owner[cacheKey(definition.name)] = null;
+      continue;
+    }
+    const bucket = byType.get(type);
+    if (bucket) bucket.push(owner);
+    else byType.set(type, [owner]);
+  }
+
+  for (const [type, group] of byType) {
+    const resolver = definition.types?.[type];
+    if (!resolver) {
+      throw new Error(
+        `Polymorphic association "${definition.name}" has no class registered for type "${type}".`,
+      );
+    }
+
+    const target = resolver();
+    const ids = [...new Set(group.map((owner) => owner[foreignKey]))];
+    const found = await target.where({ [target.primaryKey]: ids });
+    const byId = new Map(found.map((record) => [String(record[target.primaryKey]), record]));
+
+    for (const owner of group) {
+      owner[cacheKey(definition.name)] = byId.get(String(owner[foreignKey])) ?? null;
+    }
+  }
+}
+
 /** Where a preloaded association is stashed on the record. */
 export function cacheKey(name: string): string {
   return `__preloaded_${name}`;
@@ -128,6 +240,22 @@ export function relationFor(
   owner: InstanceLike,
   definition: AssociationDefinition,
 ): Relation<InstanceLike> {
+  if (definition.polymorphic) {
+    const typeKey = `${definition.name}_type`;
+    const type = owner[typeKey];
+    const resolver = typeof type === "string" ? definition.types?.[type] : undefined;
+
+    if (!resolver) {
+      throw new Error(
+        `Polymorphic association "${definition.name}" has no class registered for type "${String(type)}".`,
+      );
+    }
+
+    const polymorphicTarget = resolver();
+    const foreignKey = definition.foreignKey ?? `${definition.name}_id`;
+    return polymorphicTarget.where({ [polymorphicTarget.primaryKey]: owner[foreignKey] });
+  }
+
   const target = definition.target();
 
   if (definition.kind === "belongsTo") {
