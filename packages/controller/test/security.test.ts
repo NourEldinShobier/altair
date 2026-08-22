@@ -58,15 +58,15 @@ describe("message verifier", () => {
 
   it("rejects a tampered payload", () => {
     const message = verifier.generate({ admin: false });
-    const [payload, signature] = message.split("--");
-    const forged = `${payload}x--${signature}`;
+    const [payload, signature] = message.split(".");
+    const forged = `${payload}x.${signature}`;
 
     expect(verifier.verified(forged)).toBeNull();
   });
 
   it("rejects a tampered signature", () => {
     const message = verifier.generate("value");
-    expect(verifier.verified(`${message.split("--")[0]}--deadbeef`)).toBeNull();
+    expect(verifier.verified(`${message.split(".")[0]}.deadbeef`)).toBeNull();
   });
 
   it("rejects a message with no signature", () => {
@@ -87,6 +87,15 @@ describe("message verifier", () => {
   it("rejects a message signed with another secret", () => {
     const other = new MessageVerifier("different".repeat(4));
     expect(verifier.verified(other.generate("value"))).toBeNull();
+  });
+
+  // The same collision applied to signatures, where the payload could end in
+  // `-` and shift where the separator was found.
+  it("verifies reliably across many random payloads", () => {
+    for (let index = 0; index < 500; index += 1) {
+      const value = secureToken(32);
+      expect(verifier.verified<string>(verifier.generate(value))).toBe(value);
+    }
   });
 
   it("throws from verify", () => {
@@ -111,10 +120,10 @@ describe("message encryptor", () => {
   // into something else.
   it("rejects a tampered payload", () => {
     const message = encryptor.encrypt("value");
-    const parts = message.split("--");
+    const parts = message.split(".");
     parts[0] = `${parts[0]!.slice(0, -2)}AA`;
 
-    expect(encryptor.decrypt(parts.join("--"))).toBeNull();
+    expect(encryptor.decrypt(parts.join("."))).toBeNull();
   });
 
   it("rejects a wrong key", () => {
@@ -130,6 +139,16 @@ describe("message encryptor", () => {
 
   it("uses a fresh iv each time", () => {
     expect(encryptor.encrypt("same")).not.toBe(encryptor.encrypt("same"));
+  });
+
+  // Regression: with `--` as the separator, roughly one message in fifty
+  // contained `--` inside its base64url payload and silently failed to
+  // decrypt. This loop reproduced it within a few hundred iterations.
+  it("round-trips reliably across many random payloads", () => {
+    for (let index = 0; index < 500; index += 1) {
+      const value = { token: secureToken(32), index };
+      expect(encryptor.decrypt<typeof value>(encryptor.encrypt(value))).toEqual(value);
+    }
   });
 
   it("refuses a key of the wrong size", () => {
@@ -251,13 +270,13 @@ describe("signed and encrypted cookies", () => {
     jar.signed.set("plan", "pro");
 
     const cookie = decodeURIComponent(jar.toHeaders()[0]!.split("=")[1]!.split(";")[0]!);
-    const payload = Buffer.from(cookie.split("--")[0]!, "base64url").toString("utf8");
+    const payload = Buffer.from(cookie.split(".")[0]!, "base64url").toString("utf8");
 
     expect(payload).toContain("pro");
   });
 
   it("rejects a forged signed cookie", () => {
-    expect(jarFor("user_id=999--deadbeef").signed.get("user_id")).toBeNull();
+    expect(jarFor("user_id=999.deadbeef").signed.get("user_id")).toBeNull();
   });
 
   it("round-trips an encrypted cookie", () => {

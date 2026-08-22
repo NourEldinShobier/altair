@@ -11,6 +11,9 @@
  *     tampered payload fails to decrypt rather than decrypting to garbage.
  *   - Keys are derived per purpose, so the key signing a cookie is not the key
  *     encrypting a session.
+ *   - Parts are joined with `.`, not Rails' `--`. base64url includes `-`, so a
+ *     payload can contain `--` by chance and split into the wrong number of
+ *     parts. `.` is outside the base64url alphabet, which is why JWT uses it.
  *
  * Everything is built on `node:crypto`, which Bun implements natively.
  */
@@ -59,6 +62,16 @@ function decode(value: string): Buffer {
 }
 
 /**
+ * Separates the parts of a message.
+ *
+ * Not `--`: base64url's alphabet contains `-`, so roughly one message in fifty
+ * happens to contain `--` and splits into the wrong number of parts. That
+ * failure is silent — the message simply does not verify — and shows up as a
+ * session that occasionally vanishes.
+ */
+const SEPARATOR = ".";
+
+/**
  * Signs a payload so tampering is detectable. The payload stays readable —
  * signing is not encryption.
  */
@@ -74,18 +87,17 @@ export class MessageVerifier {
 
   generate(value: unknown, purpose?: string): string {
     const payload = encode(JSON.stringify({ value, purpose: purpose ?? null }));
-    return `${payload}--${this.#digestFor(payload)}`;
+    return `${payload}${SEPARATOR}${this.#digestFor(payload)}`;
   }
 
   /** Returns the value, or null when the message is missing or tampered with. */
   verified<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
     if (!message) return null;
 
-    const separator = message.lastIndexOf("--");
-    if (separator === -1) return null;
+    const parts = message.split(SEPARATOR);
+    if (parts.length !== 2) return null;
 
-    const payload = message.slice(0, separator);
-    const signature = message.slice(separator + 2);
+    const [payload, signature] = parts as [string, string];
 
     if (!this.#matches(this.#digestFor(payload), signature)) return null;
 
@@ -154,14 +166,14 @@ export class MessageEncryptor {
     const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
     const tag = cipher.getAuthTag();
 
-    return [encode(encrypted), encode(iv), encode(tag)].join("--");
+    return [encode(encrypted), encode(iv), encode(tag)].join(SEPARATOR);
   }
 
   /** Returns the value, or null when the message cannot be authenticated. */
   decrypt<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
     if (!message) return null;
 
-    const parts = message.split("--");
+    const parts = message.split(SEPARATOR);
     if (parts.length !== 3) return null;
 
     try {
