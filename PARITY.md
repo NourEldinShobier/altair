@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,271** | 26,775    | 4.7% |
+| **Total** | **1,331** | 26,775    | 5.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -20,7 +20,7 @@ language already provides it)
 | Package              | Tests | Covers                                                                      |
 | -------------------- | ----- | --------------------------------------------------------------------------- |
 | `@altair/support`    | 649   | Inflector, callbacks + decorators, cache, message signing/encryption        |
-| `@altair/orm`        | 183   | Connection, migrations, models, relations, associations, validations        |
+| `@altair/orm`        | 243   | Connection, migrations, models, relations, associations, validations        |
 | `@altair/controller` | 132   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
 | `@altair/cli`        | 67    | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 45    | Resourceful routing, typed path helpers                                     |
@@ -66,11 +66,11 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Relation / query interface    | 5,579     | **wip**  | where/order/group/aggregates/scopes/bulk writes             |
 | Fixtures & test helpers       | 860       | **done** | Transactional tests, savepoint nesting, fixtures, factories |
 | Schema dump & type emission   | —         | **done** | Types generated from the database itself                    |
-| Nested attributes             | —         | **next** |                                                             |
-| Single-table inheritance      | —         | todo     |                                                             |
-| Counter cache                 | —         | todo     |                                                             |
-| Optimistic locking            | —         | todo     |                                                             |
-| Multiple databases & sharding | —         | todo     |                                                             |
+| Nested attributes             | 1,146     | **done** | Collections, to-one, to-many, `_destroy`, limit, rejectIf   |
+| Single-table inheritance      | —         | **done** | Subclass queries, typed instantiation, `unscoped`           |
+| Counter cache                 | —         | **done** | Adjusted on create and destroy                              |
+| Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                            |
+| Multiple databases & sharding | —         | **next** |                                                             |
 | Encryption                    | 2,046     | todo     | Late phase                                                  |
 
 ## ActionPack → `@altair/router`, `@altair/controller`
@@ -123,7 +123,7 @@ Rails: 21,159 lines · 2,699 tests
 
 The framework's shape is complete: every Rails component has an Altair
 counterpart that runs. What remains is depth, and most of it is in ActiveRecord
-— nested attributes, STI, counter caches, locking and multiple databases. After that: ActiveStorage,
+— multiple databases and pinning a transaction to one pooled connection. After that: ActiveStorage,
 the middleware stack, ActiveSupport's instrumentation and time handling, form
 builders, and the dev server. ActionText and ActionMailbox are deliberately
 last, being the two components most applications never touch.

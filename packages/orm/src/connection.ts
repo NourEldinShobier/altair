@@ -74,6 +74,20 @@ export class Connection {
   }
 
   /**
+   * Runs a statement and reports how many rows it changed.
+   *
+   * Optimistic locking is built on this: an UPDATE guarded by a version that
+   * matches nothing changes no rows, and that count is the only signal that
+   * someone else saved first.
+   */
+  async executeCount(sql: string, bindings: readonly unknown[] = []): Promise<number> {
+    return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
+      const result = await this.sql.unsafe(sql, bindings as unknown[]);
+      return Number((result as { count?: number }).count ?? 0);
+    });
+  }
+
+  /**
    * Runs a block inside a transaction, rolling back if it throws.
    *
    * The callback receives a Connection bound to the transaction, so anything

@@ -50,6 +50,14 @@ export interface AssociationOptions {
    * Marks a belongsTo as polymorphic: the target class is named by a
    * companion `<name>_type` column rather than fixed at declaration.
    */
+  /**
+   * Keeps a count of the children on the parent row.
+   *
+   * `true` uses Rails' name for the column, which is the child's table plus
+   * `_count`. A string names it explicitly.
+   */
+  counterCache?: true | string;
+
   polymorphic?: boolean;
   /** Resolves a polymorphic type name to a model class. */
   types?: Record<string, () => ModelLike>;

@@ -31,6 +31,7 @@ import {
 } from "./validations.js";
 import {
   cacheKey,
+  defaultForeignKey,
   preloadAssociation,
   relationFor,
   type AssociationDefinition,
@@ -39,7 +40,35 @@ import {
   type ModelLike,
 } from "./associations.js";
 
+import {
+  existingId,
+  extractNested,
+  marksForDestruction,
+  normalizeCollection,
+  withoutControlKeys,
+  NestedAttributesLimitExceeded,
+  NestedRecordNotFound,
+  type NestedAttributesOptions,
+} from "./nested.js";
+
 export { RecordNotFound } from "./relation.js";
+
+/** The part of a model class nested attributes reach for. */
+interface NestedModel {
+  primaryKey: string;
+  build(values: Record<string, unknown>): NestedRecord;
+  where(conditions: Conditions): { first(): Promise<NestedRecord | null> };
+}
+
+interface NestedRecord {
+  assign(values: Record<string, unknown>): void;
+  saveOrFail(): Promise<void>;
+  destroy(): Promise<boolean>;
+  attributes(): Record<string, unknown>;
+}
+
+/** Thrown to unwind the nested-save transaction when the owner is invalid. */
+const NESTED_ROLLBACK = Symbol("altair.model.nestedRollback");
 
 const { before: beforeSave, around: aroundSave, after: afterSave } = callbackDecorators("save");
 const { before: beforeCreate, after: afterCreate } = callbackDecorators("create");
@@ -60,6 +89,23 @@ export {
   beforeValidation,
   afterValidation,
 };
+
+/**
+ * Raised when a record was saved by someone else since it was read.
+ *
+ * Rails' `ActiveRecord::StaleObjectError`. The update is refused rather than
+ * silently overwriting the other save, which is the entire point of the
+ * `lock_version` column.
+ */
+export class StaleObjectError extends Error {
+  constructor(
+    readonly model: string,
+    readonly id: unknown,
+  ) {
+    super(`Attempted to update a stale ${model} (id ${String(id)}).`);
+    this.name = "StaleObjectError";
+  }
+}
 
 /** Raised when `save` is called on a record that fails validation. */
 export class RecordInvalid extends Error {
@@ -112,6 +158,7 @@ const ORIGINAL = Symbol("altair.model.original");
 // bound to the real object, and every access here goes through a Proxy, so
 // `this.#field` inside a getter would throw "invalid private field".
 const PERSISTED = Symbol("altair.model.persisted");
+const NESTED = Symbol("altair.model.nested");
 
 export interface ModelOptions {
   primaryKey?: string;
@@ -155,6 +202,89 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     static associations: Record<string, AssociationDefinition> = {};
     static validations: ValidationDeclaration[] = [];
 
+    /** The column optimistic locking uses, when the table has one. */
+    static lockingColumn = "lock_version";
+
+    /** The column single-table inheritance stores the class name in. */
+    static inheritanceColumn = "type";
+
+    /** Subclasses that share this table, keyed by the name in `type`. */
+    static descendants: Record<string, typeof BaseModel> = {};
+
+    /** The class at the top of an STI hierarchy, on every subclass of it. */
+    static stiRoot: typeof BaseModel | undefined;
+
+    /**
+     * Joins the parent's table as a single-table-inheritance subclass.
+     *
+     *     class Car extends Vehicle {
+     *       static { this.inherit() }
+     *     }
+     *
+     * Rails discovers subclasses through Ruby's `inherited` hook. JavaScript
+     * has no equivalent, so this is the one line that cannot be inferred: a
+     * class that is never mentioned cannot be found by name when a row's
+     * `type` column says to build one.
+     */
+    static inherit(): void {
+      const parent = Object.getPrototypeOf(this) as typeof BaseModel;
+      const root = parent.stiRoot ?? parent;
+
+      this.stiRoot = root;
+      // The subclass reads and writes the root's table, which is what makes
+      // this single-table inheritance rather than two tables.
+      this.tableName = root.table;
+      this.columnCache = undefined;
+
+      // Copy on write, so a hierarchy under one root cannot see another's.
+      if (!Object.hasOwn(root, "descendants")) root.descendants = { ...root.descendants };
+      root.descendants[this.name] = this;
+    }
+
+    /** This class and every subclass of it, as they appear in `type`. */
+    static stiNames(): string[] {
+      const root = this.stiRoot ?? this;
+      const names = [this.name];
+
+      for (const [name, klass] of Object.entries(root.descendants)) {
+        if (klass !== this && klass.prototype instanceof this) names.push(name);
+      }
+
+      return names;
+    }
+
+    /** Whether this table stores a `type` column that STI should honour. */
+    static async usesInheritance(): Promise<boolean> {
+      return (await this.columnNames()).includes(this.inheritanceColumn);
+    }
+
+    static async lockingEnabled(): Promise<boolean> {
+      return (await this.columnNames()).includes(this.lockingColumn);
+    }
+
+    /** Associations that may be written through this model's own attributes. */
+    static nestedAttributes: Record<string, NestedAttributesOptions> = {};
+
+    /**
+     * Lets a form write an association through this model.
+     *
+     *     Post.acceptsNestedAttributesFor("comments", { allowDestroy: true })
+     *
+     * Rails' `accepts_nested_attributes_for`. Nothing is writable this way
+     * unless it is named here, which is what keeps a submitted hash from
+     * reaching arbitrary tables.
+     */
+    static acceptsNestedAttributesFor(name: string, options: NestedAttributesOptions = {}): void {
+      // Fails here rather than at save time, when the error would be about a
+      // column that does not exist.
+      this.associationFor(name);
+
+      if (!Object.hasOwn(this, "nestedAttributes")) {
+        this.nestedAttributes = { ...this.nestedAttributes };
+      }
+      this.nestedAttributes[name] = options;
+    }
+
     /**
      * Declares validations for an attribute. Rails' `validates`.
      *
@@ -174,13 +304,24 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     declare [ORIGINAL]: Record<string, unknown>;
 
     declare [PERSISTED]: boolean;
+    declare [NESTED]: Record<string, unknown>;
     readonly errors = new ValidationErrors();
 
     constructor(values: Partial<A> = {}, persisted = false) {
       super();
-      this[ATTRIBUTES] = { ...(values as Record<string, unknown>) };
-      this[ORIGINAL] = persisted ? { ...(values as Record<string, unknown>) } : {};
+      const klass = this.constructor as typeof BaseModel;
+
+      // `comments_attributes` is not a column, so it has to come out before
+      // anything treats these values as a row.
+      const { attributes, nested } =
+        Object.keys(klass.nestedAttributes).length > 0
+          ? extractNested(values as Record<string, unknown>, klass.nestedAttributes)
+          : { attributes: values as Record<string, unknown>, nested: {} };
+
+      this[ATTRIBUTES] = { ...attributes };
+      this[ORIGINAL] = persisted ? { ...attributes } : {};
       this[PERSISTED] = persisted;
+      this[NESTED] = nested;
 
       // ponytail: a Proxy gives attribute access without knowing the columns
       // up front. Generating accessors from the schema at codegen time would be
@@ -200,6 +341,16 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     static all<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
+      const relation = this.unscoped();
+
+      // A subclass sees only its own rows and its subclasses'. The root sees
+      // everything, which is what makes `Vehicle.all()` return cars and trucks.
+      if (this.stiRoot === undefined) return relation;
+      return relation.where({ [this.inheritanceColumn]: this.stiNames() });
+    }
+
+    /** Every row in the table, ignoring the inheritance column. */
+    static unscoped<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
       return new Relation<InstanceType<M>>({
         connection: this.connection,
         tableName: this.table,
@@ -229,6 +380,30 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         kind: "belongsTo",
         target: target as () => ModelLike,
         ...options,
+      });
+
+      if (options.counterCache) this.defineCounterCache(name, options.counterCache);
+    }
+
+    /**
+     * Keeps a column on the parent equal to how many children it has.
+     *
+     * Rails' `belongs_to :post, counter_cache: true`, which exists so that
+     * rendering a list of posts with comment counts is one query rather than
+     * one per post.
+     */
+    private static defineCounterCache(name: string, option: true | string): void {
+      // Comment belongs_to Post -> posts.comments_count.
+      const column = typeof option === "string" ? option : `${this.table}_count`;
+
+      // ponytail: adjusted on create and destroy only. Rails also moves the
+      // count when the foreign key changes on update; add that when someone
+      // reparents records often enough to notice.
+      this.setCallback("create", "after", async function (this: BaseModel) {
+        await adjustCounter(this, name, column, 1);
+      });
+      this.setCallback("destroy", "after", async function (this: BaseModel) {
+        await adjustCounter(this, name, column, -1);
       });
     }
 
@@ -505,8 +680,21 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return record;
     }
 
-    /** @internal Turns a row into a persisted instance. */
+    /**
+     * @internal Turns a row into a persisted instance.
+     *
+     * A row whose `type` names a registered subclass is built as that
+     * subclass, so `Vehicle.all()` hands back Cars — the behaviour that makes
+     * STI worth having rather than a column people check by hand.
+     */
     static instantiate<M extends typeof BaseModel>(this: M, row: Row): InstanceType<M> {
+      const declared = row[this.inheritanceColumn];
+
+      if (typeof declared === "string" && declared !== this.name) {
+        const subclass = (this.stiRoot ?? this).descendants[declared];
+        if (subclass) return new subclass(row as Partial<A>, true) as InstanceType<M>;
+      }
+
       return new this(row as Partial<A>, true) as InstanceType<M>;
     }
 
@@ -533,7 +721,20 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     assign(values: Partial<A>): void {
-      Object.assign(this[ATTRIBUTES], values);
+      const klass = this.constructor as typeof BaseModel;
+
+      if (Object.keys(klass.nestedAttributes).length === 0) {
+        Object.assign(this[ATTRIBUTES], values);
+        return;
+      }
+
+      const { attributes, nested } = extractNested(
+        values as Record<string, unknown>,
+        klass.nestedAttributes,
+      );
+
+      Object.assign(this[ATTRIBUTES], attributes);
+      Object.assign(this[NESTED], nested);
     }
 
     /** The attributes whose values differ from the last load or save. */
@@ -592,6 +793,177 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * create or update.
      */
     async save(): Promise<boolean> {
+      if (Object.keys(this[NESTED]).length === 0) return await this.saveRecord();
+
+      const klass = this.constructor as typeof BaseModel;
+
+      // ponytail: the children run on the class's connection, which is the
+      // same one on SQLite and on any adapter handing out a single connection.
+      // Pooled adapters need the transaction pinned first — the same gap the
+      // transactional test helper documents.
+      try {
+        return await klass.connection.transaction(async () => {
+          if (!(await this.saveWithNested(klass))) throw NESTED_ROLLBACK;
+          return true;
+        });
+      } catch (error) {
+        // A form that half-saves is not a state an application can reach.
+        if (error === NESTED_ROLLBACK) return false;
+        throw error;
+      }
+    }
+
+    private async saveWithNested(klass: typeof BaseModel): Promise<boolean> {
+      const pending = Object.entries(this[NESTED]);
+
+      // A belongs_to child has to exist before its owner, because the owner is
+      // the side holding the key.
+      for (const [name, payload] of pending) {
+        const definition = klass.associationFor(name);
+        if (definition.kind === "belongsTo")
+          await this.applyNestedParent(klass, definition, payload);
+      }
+
+      if (!(await this.saveRecord())) return false;
+
+      for (const [name, payload] of pending) {
+        const definition = klass.associationFor(name);
+        if (definition.kind === "belongsTo") continue;
+
+        if (definition.kind === "hasMany") await this.applyNestedMany(klass, definition, payload);
+        else await this.applyNestedChild(klass, definition, payload);
+      }
+
+      this[NESTED] = {};
+      return true;
+    }
+
+    /** A collection the owner's key points back to: has_many. */
+    private async applyNestedMany(
+      klass: typeof BaseModel,
+      definition: AssociationDefinition,
+      payload: unknown,
+    ): Promise<void> {
+      const options = klass.nestedAttributes[definition.name] ?? {};
+      const target = definition.target() as unknown as NestedModel;
+      const records = normalizeCollection(payload);
+
+      if (options.limit !== undefined && records.length > options.limit) {
+        throw new NestedAttributesLimitExceeded(definition.name, options.limit, records.length);
+      }
+
+      const foreignKey = definition.foreignKey ?? defaultForeignKey(klass.name);
+      const ownerId = this[ATTRIBUTES][klass.primaryKey];
+
+      for (const attributes of records) {
+        const id = existingId(attributes, target.primaryKey);
+        const values = withoutControlKeys(attributes, target.primaryKey);
+
+        if (id === undefined) {
+          // Rails ignores a destroy flag on a record that does not exist yet.
+          if (marksForDestruction(attributes)) continue;
+          if (options.rejectIf?.(attributes)) continue;
+
+          await target.build({ ...values, [foreignKey]: ownerId }).saveOrFail();
+          continue;
+        }
+
+        // Scoped to the owner, so an id typed into a form cannot reach a
+        // record belonging to someone else.
+        const child = await target
+          .where({ [target.primaryKey]: id, [foreignKey]: ownerId })
+          .first();
+        if (!child) throw new NestedRecordNotFound(definition.name, id);
+
+        if (marksForDestruction(attributes)) {
+          if (options.allowDestroy) await child.destroy();
+          continue;
+        }
+        if (options.rejectIf?.(attributes)) continue;
+
+        child.assign(values);
+        await child.saveOrFail();
+      }
+    }
+
+    /** A single record the owner's key points back to: has_one. */
+    private async applyNestedChild(
+      klass: typeof BaseModel,
+      definition: AssociationDefinition,
+      payload: unknown,
+    ): Promise<void> {
+      const options = klass.nestedAttributes[definition.name] ?? {};
+      const target = definition.target() as unknown as NestedModel;
+      if (payload === null || typeof payload !== "object") return;
+
+      const attributes = payload as Record<string, unknown>;
+      const values = withoutControlKeys(attributes, target.primaryKey);
+      const foreignKey = definition.foreignKey ?? defaultForeignKey(klass.name);
+      const ownerId = this[ATTRIBUTES][klass.primaryKey];
+
+      const existing = await target.where({ [foreignKey]: ownerId }).first();
+
+      if (existing) {
+        if (marksForDestruction(attributes)) {
+          if (options.allowDestroy) await existing.destroy();
+          return;
+        }
+        if (options.rejectIf?.(attributes)) return;
+
+        existing.assign(values);
+        await existing.saveOrFail();
+        return;
+      }
+
+      if (marksForDestruction(attributes)) return;
+      if (options.rejectIf?.(attributes)) return;
+
+      await target.build({ ...values, [foreignKey]: ownerId }).saveOrFail();
+    }
+
+    /** A record this one's key points at: belongs_to. */
+    private async applyNestedParent(
+      klass: typeof BaseModel,
+      definition: AssociationDefinition,
+      payload: unknown,
+    ): Promise<void> {
+      const options = klass.nestedAttributes[definition.name] ?? {};
+      const target = definition.target() as unknown as NestedModel;
+      if (payload === null || typeof payload !== "object") return;
+
+      const attributes = payload as Record<string, unknown>;
+      const values = withoutControlKeys(attributes, target.primaryKey);
+      const foreignKey = definition.foreignKey ?? defaultForeignKey(definition.target().name);
+      const id = existingId(attributes, target.primaryKey) ?? this[ATTRIBUTES][foreignKey];
+
+      if (id === undefined || id === null) {
+        if (marksForDestruction(attributes)) return;
+        if (options.rejectIf?.(attributes)) return;
+
+        const parent = target.build(values);
+        await parent.saveOrFail();
+        this[ATTRIBUTES][foreignKey] = parent.attributes()[target.primaryKey];
+        return;
+      }
+
+      const parent = await target.where({ [target.primaryKey]: id }).first();
+      if (!parent) throw new NestedRecordNotFound(definition.name, id);
+
+      if (marksForDestruction(attributes)) {
+        if (options.allowDestroy) {
+          await parent.destroy();
+          this[ATTRIBUTES][foreignKey] = null;
+        }
+        return;
+      }
+      if (options.rejectIf?.(attributes)) return;
+
+      parent.assign(values);
+      await parent.saveOrFail();
+      this[ATTRIBUTES][foreignKey] = parent.attributes()[target.primaryKey];
+    }
+
+    private async saveRecord(): Promise<boolean> {
       if (!(await this.validate())) return false;
 
       const klass = this.constructor as typeof BaseModel;
@@ -627,6 +999,13 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         this[ATTRIBUTES].created_at ??= now;
         this[ATTRIBUTES].updated_at = now;
       }
+
+      // A hierarchy's rows record which class wrote them, root included.
+      if (klass.stiRoot !== undefined || Object.keys(klass.descendants).length > 0) {
+        this[ATTRIBUTES][klass.inheritanceColumn] ??= klass.name;
+      }
+
+      if (await klass.lockingEnabled()) this[ATTRIBUTES][klass.lockingColumn] ??= 0;
 
       const entries = Object.entries(this[ATTRIBUTES]).filter(
         ([key, value]) => value !== undefined && key !== klass.primaryKey,
@@ -667,6 +1046,13 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       if (await klass.hasTimestamps()) changes.updated_at = new Date().toISOString();
       if (Object.keys(changes).length === 0) return;
 
+      // Optimistic locking: the version the record was read at goes in the
+      // WHERE clause, and the new one in the SET. If someone else saved in
+      // between, the row no longer matches and nothing is written.
+      const locking = await klass.lockingEnabled();
+      const readVersion = this[ORIGINAL][klass.lockingColumn];
+      if (locking) changes[klass.lockingColumn] = Number(readVersion ?? 0) + 1;
+
       const entries = Object.entries(changes);
       const assignments = entries
         .map(([key], index) => `${connection.quote(key)} = ${connection.placeholder(index)}`)
@@ -674,10 +1060,22 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const bindings = entries.map(([, value]) => serialize(value));
       bindings.push(this[ATTRIBUTES][klass.primaryKey]);
 
-      await connection.execute(
-        `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`,
-        bindings,
-      );
+      let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`;
+      if (locking) {
+        where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(entries.length + 1)}`;
+        bindings.push(Number(readVersion ?? 0));
+      }
+
+      const sql = `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${where}`;
+
+      if (locking) {
+        const affected = await connection.executeCount(sql, bindings);
+        if (affected === 0) {
+          throw new StaleObjectError(klass.name, this[ATTRIBUTES][klass.primaryKey]);
+        }
+      } else {
+        await connection.execute(sql, bindings);
+      }
 
       Object.assign(this[ATTRIBUTES], changes);
       this[ORIGINAL] = { ...this[ATTRIBUTES] };
@@ -757,6 +1155,37 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
   return BaseModel as unknown as ModelClass<A>;
 }
 
+/** Moves a parent's counter cache by one when a child is created or destroyed. */
+async function adjustCounter(
+  record: object,
+  name: string,
+  column: string,
+  delta: 1 | -1,
+): Promise<void> {
+  const klass = (record as { constructor: unknown }).constructor as {
+    associationFor(name: string): AssociationDefinition;
+    connection: Connection;
+  };
+
+  const definition = klass.associationFor(name);
+  const target = definition.target();
+  const foreignKey = definition.foreignKey ?? defaultForeignKey(target.name);
+  const id = (record as { [ATTRIBUTES]: Record<string, unknown> })[ATTRIBUTES][foreignKey];
+
+  // A child with no parent has no counter to move.
+  if (id === null || id === undefined) return;
+
+  const connection = klass.connection;
+  const counter = connection.quote(column);
+
+  // COALESCE, because a parent created before the column existed has null in
+  // it, and null + 1 is null — a counter that silently stops counting.
+  await connection.execute(
+    `UPDATE ${connection.quote(target.table)} SET ${counter} = COALESCE(${counter}, 0) ${delta > 0 ? "+" : "-"} 1 WHERE ${connection.quote(target.primaryKey)} = ${connection.placeholder(0)}`,
+    [id],
+  );
+}
+
 /** Values the database cannot store directly are serialized on the way in. */
 function serialize(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
@@ -805,7 +1234,22 @@ export interface ModelClass<A extends object> {
   readonly table: string;
   readonly connection: Connection;
 
+  lockingColumn: string;
+  lockingEnabled(): Promise<boolean>;
+
+  inheritanceColumn: string;
+  /** Subclasses sharing this table, keyed by the name stored in `type`. */
+  descendants: Record<string, unknown>;
+  stiRoot: unknown;
+  inherit(): void;
+  stiNames(): string[];
+  usesInheritance(): Promise<boolean>;
+
+  nestedAttributes: Record<string, NestedAttributesOptions>;
+  acceptsNestedAttributesFor(name: string, options?: NestedAttributesOptions): void;
+
   all<T>(this: ModelConstructor<A, T>): Relation<T>;
+  unscoped<T>(this: ModelConstructor<A, T>): Relation<T>;
   where<T>(this: ModelConstructor<A, T>, conditions: Conditions): Relation<T>;
   order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
   limit<T>(this: ModelConstructor<A, T>, count: number): Relation<T>;
