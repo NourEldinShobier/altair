@@ -11,6 +11,13 @@
         "typescript": "^7.0.2",
       },
     },
+    "packages/controller": {
+      "name": "@altair/controller",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/support": "workspace:*",
+      },
+    },
     "packages/router": {
       "name": "@altair/router",
       "version": "0.0.0",
@@ -24,6 +31,8 @@
     },
   },
   "packages": {
+    "@altair/controller": ["@altair/controller@workspace:packages/controller"],
+
     "@altair/router": ["@altair/router@workspace:packages/router"],
 
     "@altair/support": ["@altair/support@workspace:packages/support"],
