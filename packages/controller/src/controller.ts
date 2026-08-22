@@ -23,6 +23,10 @@ import {
   skipCallback,
 } from "@altair/support";
 import { Parameters } from "./parameters.js";
+import { CookieJar } from "./cookies.js";
+import { Flash, Session, type SessionOptions } from "./session.js";
+import { InvalidAuthenticityToken, isVerifiedRequest, maskedToken } from "./csrf.js";
+import type { Secrets } from "@altair/support";
 import { renderDocument, renderInertia, type InertiaOptions, type Node } from "@altair/view";
 
 export type ActionName = string;
@@ -32,6 +36,9 @@ export interface ControllerContext {
   params?: Record<string, unknown>;
   /** Route params from recognition, merged over query and body. */
   routeParams?: Record<string, string>;
+  /** Needed for signed and encrypted cookies, and so for sessions. */
+  secrets?: Secrets;
+  session?: SessionOptions;
 }
 
 /** Filters accept Rails' `only:`/`except:` alongside the usual conditions. */
@@ -88,6 +95,7 @@ export class Controller extends Callbacks {
   readonly request: Request;
   readonly params: Parameters;
   readonly url: URL;
+  readonly cookies: CookieJar;
 
   /** The action currently being processed. `only:` and `except:` read this. */
   actionName: ActionName = "";
@@ -101,6 +109,43 @@ export class Controller extends Callbacks {
 
     const query = Object.fromEntries(this.url.searchParams.entries());
     this.params = Parameters.from(query, context.params, context.routeParams);
+
+    this.cookies = new CookieJar(context.request, context.secrets);
+    this.#sessionOptions = context.session ?? {};
+  }
+
+  #sessionOptions: SessionOptions;
+  #session: Session | undefined;
+  #flash: Flash | undefined;
+
+  /** The session, decrypted from its cookie on first use. */
+  get session(): Session {
+    this.#session ??= new Session(this.cookies, this.#sessionOptions);
+    return this.#session;
+  }
+
+  /** Messages that survive one redirect. Rails' `flash`. */
+  get flash(): Flash {
+    this.#flash ??= new Flash(this.session);
+    return this.#flash;
+  }
+
+  /** A fresh masked CSRF token to embed in a form. */
+  get authenticityToken(): string {
+    return maskedToken(this.session);
+  }
+
+  /**
+   * Rails' `protect_from_forgery`, as a filter.
+   *
+   *     class ApplicationController extends Controller {
+   *       @beforeAction
+   *       verifyAuthenticity() { this.verifyAuthenticityToken() }
+   *     }
+   */
+  verifyAuthenticityToken(): void {
+    if (isVerifiedRequest(this.request, this.params, this.session)) return;
+    throw new InvalidAuthenticityToken();
   }
 
   /** Rails' `performed?`: whether a response has already been produced. */
@@ -130,8 +175,13 @@ export class Controller extends Callbacks {
       await (action as () => unknown | Promise<unknown>).call(this);
     });
 
-    // Rails sends a 204 when an action produces no response of its own.
-    return this.#response ?? new Response(null, { status: 204 });
+    // Flash is swept and the session written back before the response leaves,
+    // so a redirect carries what the action set.
+    this.#flash?.commit();
+    this.#session?.commit();
+
+    const response = this.#response ?? new Response(null, { status: 204 });
+    return this.cookies.applyTo(response);
   }
 
   #setResponse(response: Response): Response {

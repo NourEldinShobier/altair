@@ -15,7 +15,7 @@ already provides it)
 
 |           | Tests ported | of Rails' |      |
 | --------- | ------------ | --------- | ---- |
-| **Total** | **833**      | 26,775    | 3.1% |
+| **Total** | **892**      | 26,775    | 3.3% |
 
 ---
 
@@ -32,7 +32,7 @@ Rails: 36,129 lines · 3,670 tests
 | CurrentAttributes           | —         | —           | todo     | `AsyncLocalStorage`                                 |
 | Core extensions             | 8,549     | —           | **n/a**  | JavaScript has these; port only what's load-bearing |
 | Duration / TimeWithZone     | ~1,200    | —           | todo     | `Temporal` where possible                           |
-| MessageEncryptor / Verifier | 576       | —           | todo     | `node:crypto`                                       |
+| MessageEncryptor / Verifier | 576       | —           | **done** | AES-256-GCM, HMAC, PBKDF2 key derivation           |
 | XmlMini                     | 650       | —           | **n/a**  | `Bun.XML`                                           |
 
 ## ActiveRecord → `@altair/orm`
@@ -72,12 +72,12 @@ Rails: 30,329 lines · 3,828 tests
 
 Rails: 21,159 lines · 2,699 tests
 
-| Subsystem                          | Rails LOC | Status  | Notes                                |
-| ---------------------------------- | --------- | ------- | ------------------------------------ |
-| Helpers (form, tag, asset, number) | 13,926    | **n/a** | TSX composes; these disappear        |
-| Template resolution & layouts      | 2,356     | **done** | Layouts and partials are components |
+| Subsystem                          | Rails LOC | Status   | Notes                                |
+| ---------------------------------- | --------- | -------- | ------------------------------------ |
+| Helpers (form, tag, asset, number) | 13,926    | **n/a**  | TSX composes; these disappear        |
+| Template resolution & layouts      | 2,356     | **done** | Layouts and partials are components  |
 | Renderer                           | 1,178     | **done** | TSX → string; Inertia protocol; JSON |
-| Number/date formatting             | ~1,000    | todo    | `Intl`                               |
+| Number/date formatting             | ~1,000    | todo     | `Intl`                               |
 
 ## Everything else
 
