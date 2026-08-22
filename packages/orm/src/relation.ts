@@ -13,6 +13,7 @@
  */
 
 import type { Connection, Row } from "./connection.js";
+import { checkWritable } from "./databases.js";
 
 export type Direction = "asc" | "desc";
 
@@ -449,6 +450,7 @@ export class Relation<T> implements PromiseLike<T[]> {
    * and deliberately blunt — the name is the warning.
    */
   async updateAll(values: Record<string, unknown>): Promise<void> {
+    checkWritable("update");
     const entries = Object.entries(values);
     if (entries.length === 0) return;
 
@@ -467,6 +469,7 @@ export class Relation<T> implements PromiseLike<T[]> {
 
   /** Deletes every matching row without instantiating or running callbacks. */
   async deleteAll(): Promise<void> {
+    checkWritable("delete");
     const where = this.#whereClause();
     const statement = `DELETE FROM ${this.connection.quote(this.#source.tableName)}${where.sql}`;
     await this.connection.execute(this.#renumber(statement), where.bindings);

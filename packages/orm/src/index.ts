@@ -7,3 +7,4 @@ export * from "./validations.js";
 export * from "./introspect.js";
 export * from "./dump.js";
 export * from "./nested.js";
+export * from "./databases.js";

@@ -24,6 +24,7 @@ import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions } from "./relation.js";
 import { columnTypeFor } from "./dump.js";
+import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import type { ColumnType } from "./schema.js";
 import {
   runValidation,
@@ -357,8 +358,30 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return this.tableName;
     }
 
+    /** The database this model reads and writes, when it is not the primary. */
+    static databaseName: string | undefined;
+
+    /**
+     * Points this model at a named database. Rails' `connects_to`.
+     *
+     *     class Event extends Model<EventRow>("events") {
+     *       static { this.connectsTo({ database: "analytics" }) }
+     *     }
+     */
+    static connectsTo(options: { database: string }): void {
+      this.databaseName = options.database;
+    }
+
     static get connection(): Connection {
-      return this.connectionOverride ?? defaultConnection();
+      if (this.connectionOverride) return this.connectionOverride;
+
+      // A model pinned to a named database still follows the role in force, so
+      // a `connected_to({ role: "reading" })` block reaches its replica too.
+      if (this.databaseName && hasDatabases()) {
+        return database(this.databaseName, currentScope()?.role ?? ("writing" as Role));
+      }
+
+      return defaultConnection();
     }
 
     static all<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
@@ -817,6 +840,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * create or update.
      */
     async save(): Promise<boolean> {
+      checkWritable("save");
       if (Object.keys(this[NESTED]).length === 0) return await this.saveRecord();
 
       const klass = this.constructor as typeof BaseModel;
@@ -1121,6 +1145,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     async destroy(): Promise<boolean> {
+      checkWritable("destroy");
       if (this.isNewRecord) return false;
       const klass = this.constructor as typeof BaseModel;
       const connection = klass.connection;
@@ -1348,6 +1373,8 @@ export interface ModelClass<A extends object> {
   primaryKey: string;
   connectionOverride: Connection | undefined;
   columnCache: string[] | undefined;
+  databaseName: string | undefined;
+  connectsTo(options: { database: string }): void;
   columnTypeCache: Record<string, ColumnType> | undefined;
   columnTypes(): Promise<Record<string, ColumnType>>;
   castRow(row: Row): Row;

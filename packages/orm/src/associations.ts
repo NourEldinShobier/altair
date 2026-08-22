@@ -58,6 +58,15 @@ export interface AssociationOptions {
    */
   counterCache?: true | string;
 
+  /**
+   * The polymorphic association on the other side. Rails' `has_many :comments,
+   * as: :commentable`.
+   *
+   * The children are keyed by a pair of columns rather than one: an id and the
+   * owner's class name, which is what lets the same table point at several.
+   */
+  as?: string;
+
   polymorphic?: boolean;
   /** Resolves a polymorphic type name to a model class. */
   types?: Record<string, () => ModelLike>;
@@ -170,13 +179,19 @@ export async function preloadAssociation(
 
   // hasMany and hasOne both key the target by a column pointing back at us.
   const ownerClass = (owners[0] as { constructor: ModelLike }).constructor;
-  const foreignKey = definition.foreignKey ?? defaultForeignKey(ownerClass.name);
   const primaryKey = definition.primaryKey ?? ownerClass.primaryKey;
+  const foreignKey = definition.as
+    ? `${definition.as}_id`
+    : (definition.foreignKey ?? defaultForeignKey(ownerClass.name));
 
   const ids = [...new Set(owners.map((owner) => owner[primaryKey]).filter((id) => id != null))];
   if (ids.length === 0) return;
 
-  const found = await target.where({ [foreignKey]: ids });
+  const found = await target.where(
+    definition.as
+      ? { [foreignKey]: ids, [`${definition.as}_type`]: ownerClass.name }
+      : { [foreignKey]: ids },
+  );
 
   const grouped = new Map<string, InstanceLike[]>();
   for (const record of found) {
@@ -273,8 +288,17 @@ export function relationFor(
   }
 
   const ownerClass = (owner as { constructor: ModelLike }).constructor;
-  const foreignKey = definition.foreignKey ?? defaultForeignKey(ownerClass.name);
   const primaryKey = definition.primaryKey ?? ownerClass.primaryKey;
 
+  if (definition.as) {
+    // Both columns, always: matching only the id would hand back another
+    // table's children whenever the ids happened to collide.
+    return target.where({
+      [`${definition.as}_id`]: owner[primaryKey],
+      [`${definition.as}_type`]: ownerClass.name,
+    });
+  }
+
+  const foreignKey = definition.foreignKey ?? defaultForeignKey(ownerClass.name);
   return target.where({ [foreignKey]: owner[primaryKey] });
 }
