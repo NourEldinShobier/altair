@@ -139,8 +139,15 @@ export class Connection {
   async executeCount(sql: string, bindings: readonly unknown[] = []): Promise<number> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
       const result = await this.#run(sql, bindings);
+      // Drivers disagree, and not only in naming: MySQL sets `count` to 0 and
+      // reports the real number in `affectedRows`, so preferring one field
+      // over another reads a legitimate update as having changed nothing.
       const reported = result as { count?: number; affectedRows?: number; rowsAffected?: number };
-      return Number(reported.count ?? reported.affectedRows ?? reported.rowsAffected ?? 0);
+      return Math.max(
+        Number(reported.count ?? 0),
+        Number(reported.affectedRows ?? 0),
+        Number(reported.rowsAffected ?? 0),
+      );
     });
   }
 

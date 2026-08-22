@@ -149,27 +149,3 @@ describe("locking", () => {
     expect(await Person.count()).toBe(0);
   });
 });
-
-// TEMPORARY: reports what this driver calls the affected-row count.
-describe("diagnostic", () => {
-  it("reports the shape of an update result", async () => {
-    await Person.create({ name: "Ada" });
-
-    const raw = (await connection.sql.unsafe(
-      `UPDATE people SET name = 'X' WHERE id = ${connection.placeholder(0)}`,
-      [1],
-    )) as unknown as Record<string, unknown>;
-
-    console.log("ADAPTER:", connection.adapter);
-    console.log("OWN KEYS:", JSON.stringify(Object.getOwnPropertyNames(raw)));
-    console.log("PROTO KEYS:", JSON.stringify(Object.getOwnPropertyNames(Object.getPrototypeOf(raw) ?? {})));
-    console.log("COUNT:", raw.count, "AFFECTED:", raw.affectedRows, "CHANGED:", raw.changedRows);
-    console.log("EXECUTECOUNT:", await connection.executeCount(
-      `UPDATE people SET name = 'Y' WHERE id = ${connection.placeholder(0)}`,
-      [1],
-    ));
-
-    const person = await Person.find(1);
-    console.log("LOCK VERSION READ BACK:", person.lock_version, typeof person.lock_version);
-  });
-});

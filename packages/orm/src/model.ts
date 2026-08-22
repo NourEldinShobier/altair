@@ -1017,7 +1017,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     protected async insertRecord(klass: typeof BaseModel): Promise<void> {
       const connection = klass.connection;
       await klass.columnTypes();
-      const now = nowFor(connection);
+      const now = new Date();
 
       // Rails maintains these automatically when the columns exist.
       if (await klass.hasTimestamps()) {
@@ -1079,7 +1079,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = klass.connection;
       const changes = this.changedAttributes() as Record<string, unknown>;
 
-      if (await klass.hasTimestamps()) changes.updated_at = nowFor(connection);
+      if (await klass.hasTimestamps()) changes.updated_at = new Date();
       if (Object.keys(changes).length === 0) return;
 
       // Optimistic locking: the version the record was read at goes in the
@@ -1113,7 +1113,10 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         await connection.execute(sql, bindings);
       }
 
-      Object.assign(this[ATTRIBUTES], changes);
+      // Cast on the way back in: the binding went out in the adapter's own
+      // spelling, and an attribute has to hold what its type promises. A raw
+      // MySQL timestamp left in memory would not even sort against an ISO one.
+      Object.assign(this[ATTRIBUTES], klass.castRow(changes as Row));
       this[ORIGINAL] = { ...this[ATTRIBUTES] };
     }
 
@@ -1289,15 +1292,11 @@ async function adjustCounter(
 }
 
 /**
- * The moment a timestamp column is set to, in the adapter's own spelling.
+ * A timestamp in the adapter's own spelling.
  *
  * MySQL rejects ISO 8601 outright: it wants `2026-01-01 12:00:00`, not the
  * same instant with a T and a Z in it.
  */
-function nowFor(connection: Connection): string {
-  return formatTimestamp(connection, new Date());
-}
-
 function formatTimestamp(connection: Connection, date: Date): string {
   const iso = date.toISOString();
   return connection.adapter === "mysql" ? iso.slice(0, 23).replace("T", " ") : iso;
