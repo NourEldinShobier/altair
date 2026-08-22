@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,469** | 26,775    | 5.5% |
+| **Total** | **1,523** | 26,775    | 5.7% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -25,12 +25,12 @@ one that needs no server.
 | -------------------- | ----- | --------------------------------------------------------------------------- |
 | `@altair/support`    | 649   | Inflector, callbacks + decorators, cache, message signing/encryption        |
 | `@altair/orm`        | 284   | Connection, migrations, models, relations, associations, validations        |
-| `@altair/controller` | 132   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
+| `@altair/controller` | 137   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
 | `@altair/cli`        | 67    | Generators, db tasks, file loading                                          |
-| `@altair/router`     | 45    | Resourceful routing, typed path helpers                                     |
+| `@altair/router`     | 66    | Resourceful routing, typed path helpers                                     |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
 | `@altair/storage`    | 56    | Disk and S3 services, blobs, attachments, signed URLs                       |
-| `@altair/view`       | 80    | TSX rendering, layouts, Inertia protocol, form builders                     |
+| `@altair/view`       | 108   | TSX rendering, layouts, Inertia protocol, form builders                     |
 | `@altair/jobs`       | 34    | Jobs, queues, retries, worker                                               |
 | `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                    |
 | `@altair/core`       | 27    | Config, boot lifecycle, request handler                                     |
@@ -82,19 +82,19 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 
 Rails: 30,329 lines · 3,828 tests
 
-| Subsystem                 | Rails LOC | Status   | Notes                                        |
-| ------------------------- | --------- | -------- | -------------------------------------------- |
-| Routing DSL & recognition | 4,816     | **done** | resources, nesting, member/collection, scope |
-| Journey (route matcher)   | 2,190     | **done** | Compiled regex per route, verb-bucketed      |
-| Typed path helpers        | —         | **done** | New surface Rails cannot have                |
-| Controllers & filters     | 9,508     | **done** | only/except, halting, inheritance            |
-| Strong parameters         | —         | **done** | Plus schema validation via Standard Schema   |
-| Cookies & sessions        | —         | **done** | Plain/signed/encrypted jars, flash           |
-| CSRF protection           | —         | **done** | Masked tokens, constant-time compare         |
-| Request / Response        | 4,673     | **n/a**  | Web `Request`/`Response`                     |
-| Middleware stack          | 4,749     | **done** | Functions; cors, ssl, security headers, id   |
-| Content Security Policy   | 842       | todo     |                                              |
-| Rate limiting             | —         | todo     |                                              |
+| Subsystem                 | Rails LOC | Status   | Notes                                         |
+| ------------------------- | --------- | -------- | --------------------------------------------- |
+| Routing DSL & recognition | 4,816     | **done** | resources, nesting, member/collection, scope  |
+| Journey (route matcher)   | 2,190     | **done** | Compiled regex per route, verb-bucketed       |
+| Typed path helpers        | —         | **done** | Generated from the route table, arity and all |
+| Controllers & filters     | 9,508     | **done** | only/except, halting, inheritance             |
+| Strong parameters         | —         | **done** | Plus schema validation via Standard Schema    |
+| Cookies & sessions        | —         | **done** | Plain/signed/encrypted jars, flash            |
+| CSRF protection           | —         | **done** | Masked tokens, constant-time compare          |
+| Request / Response        | 4,673     | **n/a**  | Web `Request`/`Response`                      |
+| Middleware stack          | 4,749     | **done** | Functions; cors, ssl, security headers, id    |
+| Content Security Policy   | 842       | todo     |                                               |
+| Rate limiting             | —         | todo     |                                               |
 
 ## ActionView → `@altair/view`
 
@@ -105,7 +105,7 @@ Rails: 21,159 lines · 2,699 tests
 | Renderer                           | 1,178     | **done** | TSX → string, escaping, async components              |
 | Template resolution & layouts      | 2,356     | **done** | Layouts and partials are components                   |
 | Inertia protocol                   | —         | **done** | New surface; renderer-agnostic                        |
-| Helpers (form, tag, asset, number) | 13,926    | **n/a**  | TSX composes; these disappear                         |
+| Helpers (form, tag, asset, number) | 13,926    | **done** | Imports, not a mixin; Intl does the formatting        |
 | Form builders                      | —         | **done** | A component and a builder, not 3,000 lines of helpers |
 | Vite integration                   | —         | todo     | Asset manifest, dev server                            |
 

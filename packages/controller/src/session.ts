@@ -144,6 +144,12 @@ export class Flash {
     if (Object.hasOwn(this.#now, key)) this.#next[key] = this.#now[key];
   }
 
+  /**
+   * Every message this request should show.
+   *
+   * A view reads these rather than asking key by key, since it does not know
+   * which ones an action set.
+   */
   toObject(): Data {
     return { ...this.#now };
   }

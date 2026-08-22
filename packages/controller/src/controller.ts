@@ -26,7 +26,7 @@ import { Parameters } from "./parameters.js";
 import { CookieJar } from "./cookies.js";
 import { Flash, Session, type SessionOptions } from "./session.js";
 import { InvalidAuthenticityToken, isVerifiedRequest, maskedToken } from "./csrf.js";
-import type { Secrets } from "@altair/support";
+import { Current, type Secrets } from "@altair/support";
 import { renderDocument, renderInertia, type InertiaOptions, type Node } from "@altair/view";
 
 export type ActionName = string;
@@ -165,6 +165,7 @@ export class Controller extends Callbacks {
    */
   async processAction(name: ActionName): Promise<Response> {
     this.actionName = name;
+    this.publishToCurrent();
 
     const action = (this as unknown as Record<string, unknown>)[name];
     if (typeof action !== "function") {
@@ -182,6 +183,43 @@ export class Controller extends Callbacks {
 
     const response = this.#response ?? new Response(null, { status: 204 });
     return this.cookies.applyTo(response);
+  }
+
+  /**
+   * Puts what a view needs into the request scope.
+   *
+   * A CSRF token would otherwise have to be threaded through every layout and
+   * partial between the page and the form that needs it, and so would the
+   * flash. Both are true of the whole request, which is what the scope is for.
+   */
+  protected publishToCurrent(): void {
+    if (!Current.isActive) return;
+
+    // Lazily, as getters on the scope. A page with no form never needs a CSRF
+    // token, and producing one builds the session, which needs secrets an
+    // API-only application has no reason to configure. Computing both on
+    // every action would make that a crash rather than an unused feature.
+    const store = Current.attributes as Record<string, unknown>;
+
+    Object.defineProperty(store, "csrfToken", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        try {
+          return this.authenticityToken;
+        } catch {
+          // A view asking for a token it cannot have renders without one,
+          // rather than taking the page down.
+          return undefined;
+        }
+      },
+    });
+
+    Object.defineProperty(store, "flash", {
+      configurable: true,
+      enumerable: true,
+      get: () => this.flash.toObject(),
+    });
   }
 
   #setResponse(response: Response): Response {

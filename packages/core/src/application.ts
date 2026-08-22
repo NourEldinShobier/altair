@@ -9,7 +9,8 @@
  * bindings, then boot, then the app starts, then it terminates.
  */
 
-import { Secrets, currentAttributes } from "@altair/support";
+import { Secrets } from "@altair/support";
+import { Current } from "@altair/support";
 import { Router, type Mapper } from "@altair/router";
 import {
   MiddlewareStack,
@@ -45,21 +46,10 @@ export interface ApplicationOptions extends Partial<ApplicationConfig> {
 
 export type ErrorHandler = (error: unknown, request: Request) => Response | Promise<Response>;
 
-export interface CurrentState {
-  request?: Request;
-  /** Correlates every log line and query from one request. */
-  requestId?: string;
-  user?: unknown;
-  [key: string]: unknown;
-}
-
-/**
- * Per-request state, scoped by AsyncLocalStorage.
- *
- * Rails' `Current`. Every request gets its own, so a value set while handling
- * one cannot be read while handling another.
- */
-export const Current = currentAttributes<CurrentState>();
+// Current lives in @altair/support so a view can read the request without
+// depending on the layer that served it. Re-exported here, where Rails users
+// expect to find it.
+export { Current, type CurrentState } from "@altair/support";
 
 export class Application {
   readonly config: ApplicationConfig;

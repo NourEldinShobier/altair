@@ -103,3 +103,35 @@ export function currentAttributes<T extends object>(): CurrentClass<T> & Partial
     },
   }) as unknown as CurrentClass<T> & Partial<T>;
 }
+
+/**
+ * What the framework itself puts in the request scope.
+ *
+ * An application widens this by declaration merging, so `Current.user` is its
+ * own type rather than `unknown`:
+ *
+ *     declare module "@altair/support" {
+ *       interface CurrentState { user?: User }
+ *     }
+ */
+export interface CurrentState {
+  request?: Request;
+  /** Correlates every log line and query from one request. */
+  requestId?: string;
+  /** The token a form has to echo back. Views read it from here. */
+  csrfToken?: string;
+  /** Messages that survive one redirect, as the view sees them. */
+  flash?: Readonly<Record<string, unknown>>;
+  user?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * Per-request state. Rails' `Current`.
+ *
+ * This lives here, at the bottom of the dependency graph, so a view can read
+ * the request without depending on the layer that served it. It is the same
+ * mechanism Next.js's `headers()` and `cookies()` use, and the same one the
+ * ORM scopes a transaction with.
+ */
+export const Current = currentAttributes<CurrentState>();
