@@ -303,12 +303,28 @@ export function setConnection(connection: Connection | undefined): void {
   current = connection;
 }
 
+/**
+ * How a configured set of databases makes itself known here.
+ *
+ * Registered rather than imported, so this file stays the bottom of the
+ * dependency graph — multiple databases are built on connections, not the
+ * other way around.
+ */
+let resolver: (() => Connection | undefined) | undefined;
+
+export function setConnectionResolver(resolve: (() => Connection | undefined) | undefined): void {
+  resolver = resolve;
+}
+
 export function connection(): Connection {
   // A transaction in progress wins, so a model reached from inside a
   // transaction block joins it rather than taking a fresh connection from the
   // pool and writing outside it.
   const scoped = inTransaction.getStore();
   if (scoped) return scoped;
+
+  const selected = resolver?.();
+  if (selected) return selected;
 
   if (!current) {
     throw new Error("No database connection. Call connect(url) before using models.");

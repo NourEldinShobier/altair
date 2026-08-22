@@ -188,3 +188,112 @@ describe("polymorphic belongsTo", () => {
     await expect(comment.commentable()).rejects.toThrow('no class registered for type "Widget"');
   });
 });
+
+// The other half of a polymorphic pair. `belongsToPolymorphic` lets a comment
+// name whatever it is attached to; this lets the thing it is attached to ask
+// for its comments back.
+describe("hasMany as", () => {
+  class Article extends Model<PostAttributes>("posts") {
+    declare remarks: HasMany<Comment>;
+
+    static {
+      this.hasMany("remarks", () => Comment, { as: "commentable" });
+    }
+  }
+
+  class Writer extends Model<AuthorAttributes>("authors") {
+    declare remarks: HasMany<Comment>;
+
+    static {
+      this.hasMany("remarks", () => Comment, { as: "commentable" });
+    }
+  }
+
+  it("loads the children pointing back at it", async () => {
+    const article = await Article.create({ title: "One" });
+    await Comment.create({
+      body: "first",
+      commentable_id: article.id,
+      commentable_type: "Article",
+    });
+    await Comment.create({
+      body: "second",
+      commentable_id: article.id,
+      commentable_type: "Article",
+    });
+
+    const remarks = await article.remarks();
+    expect(remarks.map((remark) => remark.body).sort()).toEqual(["first", "second"]);
+  });
+
+  // Matching only the id would hand back another table's children whenever the
+  // ids happened to collide, which for two tables counting from 1 is always.
+  it("does not pick up another type's children with the same id", async () => {
+    const article = await Article.create({ title: "One" });
+    const writer = await Writer.create({ name: "Ada" });
+
+    await Comment.create({
+      body: "on the article",
+      commentable_id: article.id,
+      commentable_type: "Article",
+    });
+    await Comment.create({
+      body: "on the writer",
+      commentable_id: writer.id,
+      commentable_type: "Writer",
+    });
+
+    expect(article.id).toBe(writer.id);
+    expect((await article.remarks()).map((r) => r.body)).toEqual(["on the article"]);
+    expect((await writer.remarks()).map((r) => r.body)).toEqual(["on the writer"]);
+  });
+
+  it("returns nothing when there are none", async () => {
+    const article = await Article.create({ title: "Quiet" });
+    expect(await article.remarks()).toHaveLength(0);
+  });
+
+  it("stays chainable", async () => {
+    const article = await Article.create({ title: "One" });
+    await Comment.create({ body: "keep", commentable_id: article.id, commentable_type: "Article" });
+    await Comment.create({ body: "drop", commentable_id: article.id, commentable_type: "Article" });
+
+    const kept = await article.remarks().where({ body: "keep" });
+    expect(kept.map((remark) => remark.body)).toEqual(["keep"]);
+  });
+
+  it("preloads without a query per owner", async () => {
+    const first = await Article.create({ title: "One" });
+    const second = await Article.create({ title: "Two" });
+
+    await Comment.create({ body: "a", commentable_id: first.id, commentable_type: "Article" });
+    await Comment.create({ body: "b", commentable_id: first.id, commentable_type: "Article" });
+    await Comment.create({ body: "c", commentable_id: second.id, commentable_type: "Article" });
+
+    const articles = await Article.all().order("title").includes("remarks");
+
+    const counts: number[] = [];
+    for (const article of articles) counts.push((await article.remarks()).length);
+
+    expect(counts).toEqual([2, 1]);
+  });
+
+  it("keeps preloading scoped to the owner's type", async () => {
+    const article = await Article.create({ title: "One" });
+    const writer = await Writer.create({ name: "Ada" });
+
+    await Comment.create({
+      body: "on the article",
+      commentable_id: article.id,
+      commentable_type: "Article",
+    });
+    await Comment.create({
+      body: "on the writer",
+      commentable_id: writer.id,
+      commentable_type: "Writer",
+    });
+
+    const articles = await Article.all().includes("remarks");
+    expect((await articles[0]!.remarks()).map((r) => r.body)).toEqual(["on the article"]);
+  });
+});
