@@ -230,6 +230,16 @@ console.log(\`Listening on http://localhost:\${server.port}\`);
 `,
     },
     {
+      path: "config/console.ts",
+      contents: `// What \`altair console\` puts in scope. Add models as you write them.
+//
+//   import { Post } from "#models/post"
+//   export default { Post }
+
+export default {};
+`,
+    },
+    {
       path: ".env.example",
       contents: `# Signs and encrypts cookies and sessions. Required in production.
 # Generate one with: altair secret
@@ -285,7 +295,8 @@ export function helpText(): string {
     "  db:status                 Show which migrations have run",
     "  routes                    List the route table",
     "  routes:types              Generate typed path helpers into config/paths.ts",
+    "  server, s                 Run the application with reloading",
+    "  console, c                A prompt with the application booted",
     "  secret                    Print a new SECRET_KEY_BASE",
-    "  server                    Start the application",
   ].join("\n");
 }
