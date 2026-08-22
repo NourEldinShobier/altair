@@ -24,6 +24,12 @@ import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions } from "./relation.js";
 import {
+  runValidation,
+  type ValidationDeclaration,
+  type ValidationOptions,
+  type ValidationTarget,
+} from "./validations.js";
+import {
   cacheKey,
   preloadAssociation,
   relationFor,
@@ -147,6 +153,18 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     static connectionOverride: Connection | undefined = options.connection;
     static columnCache: string[] | undefined;
     static associations: Record<string, AssociationDefinition> = {};
+    static validations: ValidationDeclaration[] = [];
+
+    /**
+     * Declares validations for an attribute. Rails' `validates`.
+     *
+     *     this.validates("title", { presence: true, length: { minimum: 3 } })
+     */
+    static validates(attribute: string, options: ValidationOptions): void {
+      // Copy on write, so a subclass adding validations leaves the parent alone.
+      if (!Object.hasOwn(this, "validations")) this.validations = [...this.validations];
+      this.validations.push({ attribute, options });
+    }
 
     static {
       this.defineCallbacks(["save", "create", "update", "destroy", "validation"]);
@@ -389,8 +407,29 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return attribute ? this.changed().includes(attribute) : this.changed().length > 0;
     }
 
-    /** Override to add validations. Push onto `this.errors` to fail. */
-    async runValidations(): Promise<void> {}
+    /**
+     * Runs the declared validations. Override to add rules in code, calling
+     * `super.runValidations()` to keep the declared ones.
+     */
+    async runValidations(): Promise<void> {
+      const klass = this.constructor as typeof BaseModel;
+      if (klass.validations.length === 0) return;
+
+      const probe = {
+        isPersisted: this.isPersisted,
+        id: this[ATTRIBUTES][klass.primaryKey],
+        exists: async (conditions: Conditions, excludeId?: unknown) => {
+          let relation = klass.all().where(conditions);
+          if (excludeId !== undefined)
+            relation = relation.whereNot({ [klass.primaryKey]: excludeId });
+          return await relation.exists();
+        },
+      };
+
+      for (const declaration of klass.validations) {
+        await runValidation(this as unknown as ValidationTarget, declaration, probe);
+      }
+    }
 
     async validate(): Promise<boolean> {
       this.errors.clear();
@@ -636,6 +675,9 @@ export interface ModelClass<A extends object> {
   exists(conditions?: Conditions): Promise<boolean>;
   columnNames(): Promise<string[]>;
   hasTimestamps(): Promise<boolean>;
+
+  validations: ValidationDeclaration[];
+  validates(attribute: string, options: ValidationOptions): void;
 
   belongsTo(name: string, target: () => unknown, options?: AssociationOptions): void;
   hasMany(name: string, target: () => unknown, options?: AssociationOptions): void;

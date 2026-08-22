@@ -15,7 +15,7 @@ already provides it)
 
 |           | Tests ported | of Rails' |      |
 | --------- | ------------ | --------- | ---- |
-| **Total** | **756**      | 26,775    | 2.8% |
+| **Total** | **790**      | 26,775    | 2.9% |
 
 ---
 
@@ -39,18 +39,18 @@ Rails: 36,129 lines · 3,670 tests
 
 Rails: 71,873 lines · 10,602 tests — the largest single body of work
 
-| Subsystem                   | Rails LOC | Status   | Notes                                        |
-| --------------------------- | --------- | -------- | -------------------------------------------- |
-| Connection adapters         | 21,714    | **n/a**  | `Bun.sql` — Postgres, MySQL/MariaDB, SQLite  |
-| Attributes & dirty tracking | 1,144     | **done** | Typed via an attributes interface            |
-| Persistence                 | 1,006     | **done** | save, update, destroy, create, reload        |
+| Subsystem                   | Rails LOC | Status   | Notes                                                          |
+| --------------------------- | --------- | -------- | -------------------------------------------------------------- |
+| Connection adapters         | 21,714    | **n/a**  | `Bun.sql` — Postgres, MySQL/MariaDB, SQLite                    |
+| Attributes & dirty tracking | 1,144     | **done** | Typed via an attributes interface                              |
+| Persistence                 | 1,006     | **done** | save, update, destroy, create, reload                          |
 | Associations                | 6,031     | **wip**  | belongsTo/hasMany/hasOne + includes; through, polymorphic todo |
-| Relation / query interface  | 5,579     | **wip**  | where/order/limit/pluck/each; lazy thenable  |
-| Migrations                  | 2,705     | **done** | DSL, versions, rollback; type emission todo  |
-| Validations                 | —         | **wip**  | errors object, save/saveOrFail               |
-| Callbacks                   | —         | **done** | save/create/update/destroy/validation chains |
-| Encryption                  | 2,046     | todo     | Late phase                                   |
-| Fixtures                    | 860       | todo     | Needed early for testing other packages      |
+| Relation / query interface  | 5,579     | **wip**  | where/order/limit/pluck/each; lazy thenable                    |
+| Migrations                  | 2,705     | **done** | DSL, versions, rollback; type emission todo                    |
+| Validations                 | —         | **wip**  | errors object, save/saveOrFail                                 |
+| Callbacks                   | —         | **done** | save/create/update/destroy/validation chains                   |
+| Encryption                  | 2,046     | todo     | Late phase                                                     |
+| Fixtures                    | 860       | todo     | Needed early for testing other packages                        |
 
 ## ActionPack → `@altair/router`, `@altair/controller`
 
@@ -84,7 +84,7 @@ Rails: 21,159 lines · 2,699 tests
 | Component                        | Rails LOC | Rails tests | Target            | Status                              |
 | -------------------------------- | --------- | ----------- | ----------------- | ----------------------------------- |
 | Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`     | todo                                |
-| ActiveModel                      | 9,210     | 1,091       | —                 | **n/a** — Zod/VineJS                |
+| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`     | **wip** — validations done          |
 | ActiveJob                        | 4,965     | 515         | `@altair/jobs`    | todo                                |
 | ActionCable                      | 4,496     | 220         | `@altair/cable`   | todo — `Bun.serve` WebSockets       |
 | ActiveStorage                    | 4,110     | 626         | `@altair/storage` | todo — `Bun.S3Client` + `Bun.Image` |
