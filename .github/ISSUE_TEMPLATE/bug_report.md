@@ -14,9 +14,11 @@ labels: bug
 **Reproduction**
 
 ```ts
+
 ```
 
 **Environment**
+
 - Altair version:
 - Bun version:
 - OS:

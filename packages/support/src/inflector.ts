@@ -63,17 +63,12 @@ export function camelize(term: string, uppercaseFirstLetter = true): string {
   let string = String(term);
 
   if (!uppercaseFirstLetter) {
-    const camelizeRe = new RegExp(
-      `^(?:${inflect.acronymRegex.source}(?=\\b|[A-Z_])|\\w)`,
-    );
+    const camelizeRe = new RegExp(`^(?:${inflect.acronymRegex.source}(?=\\b|[A-Z_])|\\w)`);
     string = string.replace(camelizeRe, (m) => m.toLowerCase());
   } else if (/^[a-z\d]*$/.test(string)) {
     return inflect.acronyms[string] ?? rubyCapitalize(string);
   } else {
-    string = string.replace(
-      /^[a-z\d]*/,
-      (m) => inflect.acronyms[m] ?? rubyCapitalize(m),
-    );
+    string = string.replace(/^[a-z\d]*/, (m) => inflect.acronyms[m] ?? rubyCapitalize(m));
   }
 
   string = string.replace(
@@ -104,8 +99,7 @@ export function underscore(camelCasedWord: string): string {
   );
   word = word.replace(
     acronymUnderscoreRe,
-    (_m, prev: string | undefined, acr: string) =>
-      `${prev ? "_" : ""}${acr.toLowerCase()}`,
+    (_m, prev: string | undefined, acr: string) => `${prev ? "_" : ""}${acr.toLowerCase()}`,
   );
 
   word = word.replace(/(?<=[A-Z])(?=[A-Z][a-z])|(?<=[a-z\d])(?=[A-Z])/g, "_");

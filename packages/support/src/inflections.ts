@@ -38,10 +38,7 @@ export class Uncountables {
 
   uncountable(str: string): boolean {
     if (this.#members.length === 0) return false;
-    this.#pattern ??= new RegExp(
-      `\\b(?:${this.#members.map(escapeRegExp).join("|")})$`,
-      "i",
-    );
+    this.#pattern ??= new RegExp(`\\b(?:${this.#members.map(escapeRegExp).join("|")})$`, "i");
     return this.#pattern.test(str);
   }
 }
@@ -59,9 +56,7 @@ export class Inflections {
   get acronymRegex(): RegExp {
     if (this.#acronymRegex) return this.#acronymRegex;
     const keys = Object.keys(this.acronyms);
-    this.#acronymRegex = keys.length
-      ? new RegExp(keys.map(escapeRegExp).join("|"))
-      : /(?=a)b/;
+    this.#acronymRegex = keys.length ? new RegExp(keys.map(escapeRegExp).join("|")) : /(?=a)b/;
     return this.#acronymRegex;
   }
 
@@ -147,10 +142,7 @@ const registry = new Map<string, Inflections>();
 
 export function inflections(locale?: string): Inflections;
 export function inflections(locale: string, configure: (i: Inflections) => void): Inflections;
-export function inflections(
-  locale = "en",
-  configure?: (i: Inflections) => void,
-): Inflections {
+export function inflections(locale = "en", configure?: (i: Inflections) => void): Inflections {
   let entry = registry.get(locale);
   if (!entry) {
     entry = new Inflections();
@@ -203,10 +195,7 @@ function defaults(inflect: Inflections): void {
   inflect.singular(/(ss)$/i, "$1");
   inflect.singular(/(n)ews$/i, "$1ews");
   inflect.singular(/([ti])a$/i, "$1um");
-  inflect.singular(
-    /((a)naly|(b)a|(d)iagno|(p)arenthe|(p)rogno|(s)ynop|(t)he)(sis|ses)$/i,
-    "$1sis",
-  );
+  inflect.singular(/((a)naly|(b)a|(d)iagno|(p)arenthe|(p)rogno|(s)ynop|(t)he)(sis|ses)$/i, "$1sis");
   inflect.singular(/(^analy)(sis|ses)$/i, "$1sis");
   inflect.singular(/([^f])ves$/i, "$1fe");
   inflect.singular(/(hive)s$/i, "$1");

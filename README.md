@@ -30,15 +30,15 @@ runtime.
 
 ```ts
 // config/routes.ts
-router.resources("posts", (r) => r.resources("comments"))
+router.resources("posts", (r) => r.resources("comments"));
 
 // app/controllers/posts_controller.ts
 export default class PostsController {
   async show({ params, render }: Context) {
-    const post = await Post.find(params.id).includes("author")
+    const post = await Post.find(params.id).includes("author");
 
     // props are type-checked against app/pages/posts/show.tsx
-    return render("posts/show", { post, canEdit: Current.user?.owns(post) })
+    return render("posts/show", { post, canEdit: Current.user?.owns(post) });
   }
 }
 ```

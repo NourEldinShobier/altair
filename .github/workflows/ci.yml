@@ -61,11 +61,13 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # Pinned via devDependencies rather than @latest, so a tool release never
+      # turns an unrelated pull request red.
       - name: Lint
-        run: bunx oxlint@latest --deny-warnings
+        run: bunx oxlint --deny-warnings
 
       - name: Check formatting
-        run: bunx oxfmt@latest --check .
+        run: bunx oxfmt --check .
 
   coverage:
     name: coverage

@@ -2,5 +2,8 @@
   "name": "@altair/support",
   "version": "0.0.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./inflector": "./src/inflector.ts" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./inflector": "./src/inflector.ts"
+  }
 }

@@ -22,7 +22,7 @@ Concretely, for each subsystem we port:
    `"saves"` in Rails. It returns `"saves"` here. Parity is the contract; "fixing" Rails
    silently would break real applications being ported.
 
-Where Rails has *no* test — new surface that only exists here, like typed route helpers —
+Where Rails has _no_ test — new surface that only exists here, like typed route helpers —
 we write our own, and mark them as such.
 
 ## Running tests
@@ -50,9 +50,9 @@ one when porting a new subsystem or refreshing existing fixtures.
 
 ## Current coverage
 
-| Package | Tests | Ported from |
-| --- | --- | --- |
-| `@altair/support` — inflector | 544 | `activesupport/test/inflector_test.rb`, 246 fixture cases |
+| Package                       | Tests | Ported from                                               |
+| ----------------------------- | ----- | --------------------------------------------------------- |
+| `@altair/support` — inflector | 544   | `activesupport/test/inflector_test.rb`, 246 fixture cases |
 
 Run `bun test` for the live number. `PARITY.md` tracks what's been migrated and what
 hasn't.

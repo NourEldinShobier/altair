@@ -15,12 +15,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 const railsRoot = process.argv[2] ?? join(process.cwd(), "..", "research", "rails");
-const source = join(
-  railsRoot,
-  "activesupport",
-  "test",
-  "inflector_test_cases.rb",
-);
+const source = join(railsRoot, "activesupport", "test", "inflector_test_cases.rb");
 
 if (!existsSync(source)) {
   console.error(`Rails clone not found at ${railsRoot}`);
@@ -38,8 +33,9 @@ function hashBlocks(src: string): Map<string, [string, string][]> {
   for (const block of src.matchAll(/^\s*(\w+) = \{([\s\S]*?)^\s*\}/gm)) {
     const name = block[1]!;
     const body = block[2]!;
-    const pairs = [...body.matchAll(/"((?:[^"\\]|\\.)*)"\s*=>\s*"((?:[^"\\]|\\.)*)"/g)]
-      .map((m) => [unescapeRuby(m[1]!), unescapeRuby(m[2]!)] as [string, string]);
+    const pairs = [...body.matchAll(/"((?:[^"\\]|\\.)*)"\s*=>\s*"((?:[^"\\]|\\.)*)"/g)].map(
+      (m) => [unescapeRuby(m[1]!), unescapeRuby(m[2]!)] as [string, string],
+    );
     if (pairs.length > 0) out.set(name, pairs);
   }
   return out;
@@ -115,14 +111,7 @@ for (const name of wanted) {
 
 ts += `/** Total ported cases: ${total}. */\nexport const portedCaseCount = ${total};\n`;
 
-const dest = join(
-  process.cwd(),
-  "packages",
-  "support",
-  "test",
-  "fixtures",
-  "inflector-cases.ts",
-);
+const dest = join(process.cwd(), "packages", "support", "test", "fixtures", "inflector-cases.ts");
 writeFileSync(dest, ts);
 
 console.log(`ported ${total} cases across ${wanted.length - missing.length} fixture groups`);

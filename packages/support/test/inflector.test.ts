@@ -53,14 +53,22 @@ describe("pluralize", () => {
   });
 
   // Rails: test_uncountability_of_a_new_word / uncountable words
-  it.each(["equipment", "information", "rice", "money", "species", "series", "fish", "sheep", "jeans", "police"])(
-    "treats %p as uncountable",
-    (word) => {
-      expect(pluralize(word)).toBe(word);
-      expect(singularize(word)).toBe(word);
-      expect(pluralize(word)).toBe(singularize(word));
-    },
-  );
+  it.each([
+    "equipment",
+    "information",
+    "rice",
+    "money",
+    "species",
+    "series",
+    "fish",
+    "sheep",
+    "jeans",
+    "police",
+  ])("treats %p as uncountable", (word) => {
+    expect(pluralize(word)).toBe(word);
+    expect(singularize(word)).toBe(word);
+    expect(pluralize(word)).toBe(singularize(word));
+  });
 });
 
 describe("singularize", () => {
@@ -118,12 +126,9 @@ describe("underscore", () => {
 
   // Rails: test_underscore_to_lower_camel is covered above; this is the
   // module-path direction.
-  it.each(cases.camelWithModuleToUnderscoreWithSlash)(
-    "turns :: into / for %1$p",
-    (camel, path) => {
-      expect(underscore(camel)).toBe(path);
-    },
-  );
+  it.each(cases.camelWithModuleToUnderscoreWithSlash)("turns :: into / for %1$p", (camel, path) => {
+    expect(underscore(camel)).toBe(path);
+  });
 
   // Rails: test_underscore_acronym_sequence
   it("leaves an already-underscored string alone", () => {
@@ -200,12 +205,9 @@ describe("classify", () => {
 
 describe("foreignKey", () => {
   // Rails: test_foreign_key
-  it.each(cases.classNameToForeignKeyWithUnderscore)(
-    "maps %p to %p",
-    (className, key) => {
-      expect(foreignKey(className)).toBe(key);
-    },
-  );
+  it.each(cases.classNameToForeignKeyWithUnderscore)("maps %p to %p", (className, key) => {
+    expect(foreignKey(className)).toBe(key);
+  });
 
   // Rails: test_foreign_key_without_underscore
   it.each(cases.classNameToForeignKeyWithoutUnderscore)(
@@ -294,14 +296,11 @@ describe("upcaseFirst and downcaseFirst", () => {
 
 describe("custom inflections", () => {
   // Rails: test_irregularity_between_singular_and_plural
-  it.each(cases.irregularities)(
-    "registers %p / %p as an irregular pair",
-    (singular, plural) => {
-      inflections("en", (inflect) => inflect.irregular(singular, plural));
-      expect(singularize(plural)).toBe(singular);
-      expect(pluralize(singular)).toBe(plural);
-    },
-  );
+  it.each(cases.irregularities)("registers %p / %p as an irregular pair", (singular, plural) => {
+    inflections("en", (inflect) => inflect.irregular(singular, plural));
+    expect(singularize(plural)).toBe(singular);
+    expect(pluralize(singular)).toBe(plural);
+  });
 
   // Rails: test_pluralize_of_irregularity_with_same_lengths
   it("handles an irregular pair of the same length", () => {

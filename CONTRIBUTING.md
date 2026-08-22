@@ -61,8 +61,8 @@ bun test                  # full suite
 bun test --changed        # only what your branch touched
 bun run typecheck
 bun run port:fixtures     # needs the Rails clone
-bunx oxlint@latest        # lint
-bunx oxfmt@latest .       # format
+bunx oxlint        # lint
+bunx oxfmt .       # format
 ```
 
 ## Pull requests

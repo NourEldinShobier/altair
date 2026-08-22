@@ -13,9 +13,9 @@ already provides it)
 
 ## Progress
 
-| | Tests ported | of Rails' | |
-| --- | --- | --- | --- |
-| **Total** | **544** | 26,775 | 2.0% |
+|           | Tests ported | of Rails' |      |
+| --------- | ------------ | --------- | ---- |
+| **Total** | **544**      | 26,775    | 2.0% |
 
 ---
 
@@ -23,74 +23,74 @@ already provides it)
 
 Rails: 36,129 lines · 3,670 tests
 
-| Subsystem | Rails LOC | Rails tests | Status | Notes |
-| --- | --- | --- | --- | --- |
-| Inflector | 972 | ~120 | **done** | 544 tests, 246 fixture cases ported |
-| Callbacks | 1,048 | — | **next** | Needed by models and controllers |
-| Cache | 3,951 | — | todo | Stores over `Bun.RedisClient`, SQLite, memory |
-| Notifications | 769 | — | todo | Instrumentation bus |
-| CurrentAttributes | — | — | todo | `AsyncLocalStorage` |
-| Core extensions | 8,549 | — | **n/a** | JavaScript has these; port only what's load-bearing |
-| Duration / TimeWithZone | ~1,200 | — | todo | `Temporal` where possible |
-| MessageEncryptor / Verifier | 576 | — | todo | `node:crypto` |
-| XmlMini | 650 | — | **n/a** | `Bun.XML` |
+| Subsystem                   | Rails LOC | Rails tests | Status   | Notes                                               |
+| --------------------------- | --------- | ----------- | -------- | --------------------------------------------------- |
+| Inflector                   | 972       | ~120        | **done** | 544 tests, 246 fixture cases ported                 |
+| Callbacks                   | 1,048     | —           | **next** | Needed by models and controllers                    |
+| Cache                       | 3,951     | —           | todo     | Stores over `Bun.RedisClient`, SQLite, memory       |
+| Notifications               | 769       | —           | todo     | Instrumentation bus                                 |
+| CurrentAttributes           | —         | —           | todo     | `AsyncLocalStorage`                                 |
+| Core extensions             | 8,549     | —           | **n/a**  | JavaScript has these; port only what's load-bearing |
+| Duration / TimeWithZone     | ~1,200    | —           | todo     | `Temporal` where possible                           |
+| MessageEncryptor / Verifier | 576       | —           | todo     | `node:crypto`                                       |
+| XmlMini                     | 650       | —           | **n/a**  | `Bun.XML`                                           |
 
 ## ActiveRecord → `@altair/orm`
 
 Rails: 71,873 lines · 10,602 tests — the largest single body of work
 
-| Subsystem | Rails LOC | Status | Notes |
-| --- | --- | --- | --- |
-| Connection adapters | 21,714 | **n/a** | `Bun.sql` — Postgres, MySQL/MariaDB, SQLite |
-| Attributes & dirty tracking | 1,144 | todo | Types generated from the schema |
-| Persistence | 1,006 | todo | `save`, `update`, `destroy`, `create` |
-| Associations | 6,031 | todo | `belongsTo`, `hasMany`, through, polymorphic |
-| Relation / query interface | 5,579 | todo | Typed builder underneath, AR surface on top |
-| Migrations | 2,705 | todo | DSL, versions, schema dump, **type emission** |
-| Validations | — | todo | Delegates to Zod/VineJS |
-| Callbacks | — | todo | On `@altair/support` callbacks |
-| Encryption | 2,046 | todo | Late phase |
-| Fixtures | 860 | todo | Needed early for testing other packages |
+| Subsystem                   | Rails LOC | Status  | Notes                                         |
+| --------------------------- | --------- | ------- | --------------------------------------------- |
+| Connection adapters         | 21,714    | **n/a** | `Bun.sql` — Postgres, MySQL/MariaDB, SQLite   |
+| Attributes & dirty tracking | 1,144     | todo    | Types generated from the schema               |
+| Persistence                 | 1,006     | todo    | `save`, `update`, `destroy`, `create`         |
+| Associations                | 6,031     | todo    | `belongsTo`, `hasMany`, through, polymorphic  |
+| Relation / query interface  | 5,579     | todo    | Typed builder underneath, AR surface on top   |
+| Migrations                  | 2,705     | todo    | DSL, versions, schema dump, **type emission** |
+| Validations                 | —         | todo    | Delegates to Zod/VineJS                       |
+| Callbacks                   | —         | todo    | On `@altair/support` callbacks                |
+| Encryption                  | 2,046     | todo    | Late phase                                    |
+| Fixtures                    | 860       | todo    | Needed early for testing other packages       |
 
 ## ActionPack → `@altair/router`, `@altair/controller`
 
 Rails: 30,329 lines · 3,828 tests
 
-| Subsystem | Rails LOC | Rails tests | Status | Notes |
-| --- | --- | --- | --- | --- |
-| Routing DSL & recognition | 4,816 | 305 + 79 | **next** | `resources`, nesting, constraints |
-| Typed path helpers | — | — | **next** | New surface; better than Rails |
-| Journey (route matcher) | 2,190 | — | next | Compiled matcher |
-| Controllers | 9,508 | — | todo | Filters, strong params, rendering |
-| Middleware stack | 4,749 | — | todo | Plain functions over one context |
-| Request / Response | 4,673 | 1,733 | todo | Web `Request`/`Response` underneath |
-| CSRF protection | — | 2,029 | todo | Security-critical: full port, no shortcuts |
-| Cookies & sessions | — | 1,651 | todo | |
-| Content Security Policy | 842 | — | todo | |
+| Subsystem                 | Rails LOC | Rails tests | Status   | Notes                                      |
+| ------------------------- | --------- | ----------- | -------- | ------------------------------------------ |
+| Routing DSL & recognition | 4,816     | 305 + 79    | **next** | `resources`, nesting, constraints          |
+| Typed path helpers        | —         | —           | **next** | New surface; better than Rails             |
+| Journey (route matcher)   | 2,190     | —           | next     | Compiled matcher                           |
+| Controllers               | 9,508     | —           | todo     | Filters, strong params, rendering          |
+| Middleware stack          | 4,749     | —           | todo     | Plain functions over one context           |
+| Request / Response        | 4,673     | 1,733       | todo     | Web `Request`/`Response` underneath        |
+| CSRF protection           | —         | 2,029       | todo     | Security-critical: full port, no shortcuts |
+| Cookies & sessions        | —         | 1,651       | todo     |                                            |
+| Content Security Policy   | 842       | —           | todo     |                                            |
 
 ## ActionView → `@altair/view`
 
 Rails: 21,159 lines · 2,699 tests
 
-| Subsystem | Rails LOC | Status | Notes |
-| --- | --- | --- | --- |
-| Helpers (form, tag, asset, number) | 13,926 | **n/a** | TSX composes; these disappear |
-| Template resolution & layouts | 2,356 | todo | Layouts and partials are components |
-| Renderer | 1,178 | todo | TSX → string; Inertia protocol; JSON |
-| Number/date formatting | ~1,000 | todo | `Intl` |
+| Subsystem                          | Rails LOC | Status  | Notes                                |
+| ---------------------------------- | --------- | ------- | ------------------------------------ |
+| Helpers (form, tag, asset, number) | 13,926    | **n/a** | TSX composes; these disappear        |
+| Template resolution & layouts      | 2,356     | todo    | Layouts and partials are components  |
+| Renderer                           | 1,178     | todo    | TSX → string; Inertia protocol; JSON |
+| Number/date formatting             | ~1,000    | todo    | `Intl`                               |
 
 ## Everything else
 
-| Component | Rails LOC | Rails tests | Target | Status |
-| --- | --- | --- | --- | --- |
-| Railties (boot, generators, CLI) | 16,874 | 2,791 | `@altair/cli` | todo |
-| ActiveModel | 9,210 | 1,091 | — | **n/a** — Zod/VineJS |
-| ActiveJob | 4,965 | 515 | `@altair/jobs` | todo |
-| ActionCable | 4,496 | 220 | `@altair/cable` | todo — `Bun.serve` WebSockets |
-| ActiveStorage | 4,110 | 626 | `@altair/storage` | todo — `Bun.S3Client` + `Bun.Image` |
-| ActionMailer | 2,795 | 292 | `@altair/mailer` | todo |
-| ActionText | 2,617 | 318 | — | todo — late phase |
-| ActionMailbox | 750 | 123 | — | todo — late phase |
+| Component                        | Rails LOC | Rails tests | Target            | Status                              |
+| -------------------------------- | --------- | ----------- | ----------------- | ----------------------------------- |
+| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`     | todo                                |
+| ActiveModel                      | 9,210     | 1,091       | —                 | **n/a** — Zod/VineJS                |
+| ActiveJob                        | 4,965     | 515         | `@altair/jobs`    | todo                                |
+| ActionCable                      | 4,496     | 220         | `@altair/cable`   | todo — `Bun.serve` WebSockets       |
+| ActiveStorage                    | 4,110     | 626         | `@altair/storage` | todo — `Bun.S3Client` + `Bun.Image` |
+| ActionMailer                     | 2,795     | 292         | `@altair/mailer`  | todo                                |
+| ActionText                       | 2,617     | 318         | —                 | todo — late phase                   |
+| ActionMailbox                    | 750       | 123         | —                 | todo — late phase                   |
 
 ---
 
