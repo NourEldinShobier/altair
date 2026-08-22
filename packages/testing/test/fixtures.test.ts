@@ -9,7 +9,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Model, type SchemaDefinition } from "@altair/orm";
 import { TestDatabase, transactionalTests } from "../src/database.js";
+
 import { defineFactory, defineFixtures, FixtureNotFound } from "../src/fixtures.js";
+
+// Set by CI to run this suite against a real server, where a transaction
+// has to be pinned to one pooled connection to isolate anything.
+const url = process.env.ALTAIR_TEST_DATABASE_URL;
 
 const SCHEMA: SchemaDefinition = {
   version: null,
@@ -48,7 +53,7 @@ describe("factories", () => {
   let database: TestDatabase;
 
   beforeAll(async () => {
-    database = await TestDatabase.prepare(SCHEMA);
+    database = await TestDatabase.prepare(SCHEMA, { url });
   });
 
   afterAll(async () => {
@@ -107,7 +112,7 @@ describe("fixtures", () => {
   // Loaded once, before the per-test transaction opens, so every test starts
   // from the same rows. Loading inside the transaction would roll them back.
   beforeAll(async () => {
-    database = await TestDatabase.prepare(SCHEMA);
+    database = await TestDatabase.prepare(SCHEMA, { url });
     await posts.load();
   });
 
@@ -169,7 +174,7 @@ describe("fixtures", () => {
 
 describe("fixtures that were never loaded", () => {
   it("says so, rather than reporting the name as unknown", async () => {
-    const database = await TestDatabase.prepare(SCHEMA);
+    const database = await TestDatabase.prepare(SCHEMA, { url });
     const unloaded = defineFixtures(Post, { welcome: { title: "Welcome" } });
 
     expect(() => unloaded.get("welcome")).toThrow("have not been loaded");

@@ -8,13 +8,14 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, adapterFor } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 import { Migrator, SchemaStatements, type Migration } from "../src/schema.js";
 
 let connection: Connection;
 let schema: SchemaStatements;
 
-beforeEach(() => {
-  connection = new Connection("sqlite://:memory:");
+beforeEach(async () => {
+  connection = await testConnection();
   schema = new SchemaStatements(connection);
 });
 

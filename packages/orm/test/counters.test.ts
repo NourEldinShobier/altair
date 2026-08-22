@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 import { SchemaStatements } from "../src/schema.js";
 import { Model, type BelongsTo } from "../src/model.js";
 
@@ -46,7 +47,7 @@ class Review extends Model<CommentAttributes>("reviews") {
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   const schema = new SchemaStatements(connection);

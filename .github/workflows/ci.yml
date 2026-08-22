@@ -35,6 +35,65 @@ jobs:
       - name: Run tests
         run: bun test --parallel --shard=${{ matrix.shard }}/2
 
+  # Rails runs its suite against every adapter it supports, because an adapter
+  # branch that never executes is a branch nobody has checked. The SQLite legs
+  # above cover the whole framework; these cover the ORM against real servers.
+  adapters:
+    name: orm (${{ matrix.adapter }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: postgres
+            url: postgres://altair:altair@localhost:5432/altair_test
+          - adapter: mysql
+            url: mysql://altair:altair@localhost:3306/altair_test
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: altair
+          POSTGRES_PASSWORD: altair
+          POSTGRES_DB: altair_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      mysql:
+        image: mysql:9
+        env:
+          MYSQL_ROOT_PASSWORD: altair
+          MYSQL_USER: altair
+          MYSQL_PASSWORD: altair
+          MYSQL_DATABASE: altair_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ualtair -paltair"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - run: bun install --frozen-lockfile
+
+      # Not --parallel: these legs share one database, and a test file that
+      # drops another file's tables mid-run is a failure nobody can reproduce.
+      - name: Run the ORM suite
+        run: bun test packages/orm packages/testing
+        env:
+          ALTAIR_TEST_DATABASE_URL: ${{ matrix.url }}
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest

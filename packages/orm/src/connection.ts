@@ -13,6 +13,21 @@ import { notifications } from "@altair/support";
 
 export type Adapter = "sqlite" | "postgres" | "mysql";
 
+/**
+ * A connection held out of the pool for the life of a manual transaction.
+ *
+ * Bun types `reserve()` loosely, so the shape this code depends on is stated
+ * here rather than asserted at every call.
+ */
+interface ReservedConnection {
+  unsafe(sql: string, bindings?: unknown[]): Promise<unknown>;
+  release?(): Promise<void> | void;
+}
+
+interface PoolWithReserve {
+  reserve(): Promise<ReservedConnection>;
+}
+
 export type Row = Record<string, unknown>;
 
 /** Detects the adapter from a connection URL, as Rails does from `adapter:`. */
@@ -30,6 +45,18 @@ export class Connection {
   #closed = false;
   #inTransaction = false;
   #savepoints = 0;
+  #reserved: ReservedConnection | undefined;
+
+  /**
+   * The handle statements run on.
+   *
+   * A manual transaction reserves one connection out of the pool and runs
+   * everything on it, because BEGIN on a pool pins nothing: the next statement
+   * is free to land on a different connection, outside the transaction.
+   */
+  get #handle(): SQL {
+    return (this.#reserved ?? this.sql) as SQL;
+  }
 
   constructor(url: string, sql?: SQL) {
     this.url = url;
@@ -61,7 +88,7 @@ export class Connection {
    */
   async query<T = Row>(sql: string, bindings: readonly unknown[] = []): Promise<T[]> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      const result = await this.sql.unsafe(sql, bindings as unknown[]);
+      const result = await this.#handle.unsafe(sql, bindings as unknown[]);
       return (Array.isArray(result) ? result : []) as T[];
     });
   }
@@ -69,7 +96,7 @@ export class Connection {
   /** Runs a statement for its effect. */
   async execute(sql: string, bindings: readonly unknown[] = []): Promise<void> {
     await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      await this.sql.unsafe(sql, bindings as unknown[]);
+      await this.#handle.unsafe(sql, bindings as unknown[]);
     });
   }
 
@@ -82,7 +109,7 @@ export class Connection {
    */
   async executeCount(sql: string, bindings: readonly unknown[] = []): Promise<number> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      const result = await this.sql.unsafe(sql, bindings as unknown[]);
+      const result = await this.#handle.unsafe(sql, bindings as unknown[]);
       return Number((result as { count?: number }).count ?? 0);
     });
   }
@@ -131,22 +158,39 @@ export class Connection {
    * roll back in another, with the test body in between.
    */
   async beginTransaction(): Promise<void> {
+    // SQLite hands out a single connection, so it is pinned already and has
+    // nothing to reserve. Every pooled adapter does.
+    if (this.adapter !== "sqlite") {
+      this.#reserved = await (this.sql as unknown as PoolWithReserve).reserve();
+    }
+
     await this.execute("BEGIN");
     this.#inTransaction = true;
   }
 
   /** Discards everything since `beginTransaction`. */
   async rollbackTransaction(): Promise<void> {
-    await this.execute("ROLLBACK");
-    this.#inTransaction = false;
-    this.#savepoints = 0;
+    await this.#finishTransaction("ROLLBACK");
   }
 
   /** Keeps everything since `beginTransaction`. */
   async commitTransaction(): Promise<void> {
-    await this.execute("COMMIT");
-    this.#inTransaction = false;
-    this.#savepoints = 0;
+    await this.#finishTransaction("COMMIT");
+  }
+
+  async #finishTransaction(statement: string): Promise<void> {
+    try {
+      await this.execute(statement);
+    } finally {
+      // The connection goes back to the pool even if the statement failed;
+      // holding it would leak one connection per failed transaction.
+      this.#inTransaction = false;
+      this.#savepoints = 0;
+
+      const reserved = this.#reserved;
+      this.#reserved = undefined;
+      await reserved?.release?.();
+    }
   }
 
   get isInTransaction(): boolean {
@@ -166,6 +210,11 @@ export class Connection {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+
+    const reserved = this.#reserved;
+    this.#reserved = undefined;
+    await reserved?.release?.();
+
     await this.sql.close?.();
   }
 }

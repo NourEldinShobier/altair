@@ -7,6 +7,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 import { SchemaStatements } from "../src/schema.js";
 import {
   Model,
@@ -32,7 +33,7 @@ class Post extends Model<PostAttributes>("posts") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   const schema = new SchemaStatements(connection);

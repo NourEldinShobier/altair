@@ -66,6 +66,11 @@ export class TestDatabase {
     const database = new TestDatabase(connection, options.strategy ?? "transaction");
     database.#tables = schema.tables.map((table) => table.name);
 
+    // Prepared means empty. A server database keeps whatever the last run left
+    // in it, and a suite that starts from someone else's rows is a suite whose
+    // failures depend on what ran before.
+    await database.truncate();
+
     if (options.global !== false) setConnection(connection);
     return database;
   }
