@@ -1,0 +1,17 @@
+{
+  "name": "@altair/cli",
+  "version": "0.0.0",
+  "bin": {
+    "altair": "./src/bin.ts"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@altair/core": "workspace:*",
+    "@altair/orm": "workspace:*",
+    "@altair/router": "workspace:*",
+    "@altair/support": "workspace:*"
+  }
+}

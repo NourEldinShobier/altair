@@ -15,7 +15,7 @@ already provides it)
 
 |           | Tests ported | of Rails' |      |
 | --------- | ------------ | --------- | ---- |
-| **Total** | **894**      | 26,775    | 3.3% |
+| **Total** | **967**      | 26,775    | 3.6% |
 
 ---
 
@@ -83,7 +83,7 @@ Rails: 21,159 lines · 2,699 tests
 
 | Component                        | Rails LOC | Rails tests | Target            | Status                              |
 | -------------------------------- | --------- | ----------- | ----------------- | ----------------------------------- |
-| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`     | todo                                |
+| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — boot, config, generators, db tasks |
 | ActiveModel                      | 9,210     | 1,091       | `@altair/orm`     | **wip** — validations done          |
 | ActiveJob                        | 4,965     | 515         | `@altair/jobs`    | todo                                |
 | ActionCable                      | 4,496     | 220         | `@altair/cable`   | todo — `Bun.serve` WebSockets       |

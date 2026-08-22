@@ -24,6 +24,13 @@ export interface DispatcherOptions {
   notFound?: (request: Request) => Response | Promise<Response>;
   /** Called when an action throws. Defaults to rethrowing in development. */
   onError?: (error: unknown, request: Request) => Response | Promise<Response>;
+  /**
+   * Extra context every controller is built with.
+   *
+   * This is how the application's secrets reach controllers, and so how signed
+   * cookies and sessions work without per-controller setup.
+   */
+  context?: (request: Request) => Partial<ControllerContext>;
 }
 
 /** Raised when a route names a controller that was never registered. */
@@ -90,7 +97,7 @@ export async function parseBody(request: Request): Promise<Record<string, unknow
 export function createDispatcher(
   options: DispatcherOptions,
 ): (request: Request) => Promise<Response> {
-  const { router, controllers, notFound, onError } = options;
+  const { router, controllers, notFound, onError, context } = options;
 
   return async function dispatch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -105,6 +112,7 @@ export function createDispatcher(
 
     try {
       const controller = new ControllerClass({
+        ...context?.(request),
         request,
         params: await parseBody(request),
         routeParams: recognized.params,

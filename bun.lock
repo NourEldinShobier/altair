@@ -11,6 +11,19 @@
         "typescript": "^7.0.2",
       },
     },
+    "packages/cli": {
+      "name": "@altair/cli",
+      "version": "0.0.0",
+      "bin": {
+        "altair": "./src/bin.ts",
+      },
+      "dependencies": {
+        "@altair/core": "workspace:*",
+        "@altair/orm": "workspace:*",
+        "@altair/router": "workspace:*",
+        "@altair/support": "workspace:*",
+      },
+    },
     "packages/controller": {
       "name": "@altair/controller",
       "version": "0.0.0",
@@ -18,6 +31,16 @@
         "@altair/router": "workspace:*",
         "@altair/support": "workspace:*",
         "@altair/view": "workspace:*",
+      },
+    },
+    "packages/core": {
+      "name": "@altair/core",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/controller": "workspace:*",
+        "@altair/orm": "workspace:*",
+        "@altair/router": "workspace:*",
+        "@altair/support": "workspace:*",
       },
     },
     "packages/orm": {
@@ -47,7 +70,11 @@
     },
   },
   "packages": {
+    "@altair/cli": ["@altair/cli@workspace:packages/cli"],
+
     "@altair/controller": ["@altair/controller@workspace:packages/controller"],
+
+    "@altair/core": ["@altair/core@workspace:packages/core"],
 
     "@altair/orm": ["@altair/orm@workspace:packages/orm"],
 
