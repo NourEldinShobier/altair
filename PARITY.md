@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,428** | 26,775    | 5.3% |
+| **Total** | **1,469** | 26,775    | 5.5% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -30,7 +30,7 @@ one that needs no server.
 | `@altair/router`     | 45    | Resourceful routing, typed path helpers                                     |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
 | `@altair/storage`    | 56    | Disk and S3 services, blobs, attachments, signed URLs                       |
-| `@altair/view`       | 39    | TSX rendering, layouts, Inertia protocol                                    |
+| `@altair/view`       | 80    | TSX rendering, layouts, Inertia protocol, form builders                     |
 | `@altair/jobs`       | 34    | Jobs, queues, retries, worker                                               |
 | `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                    |
 | `@altair/core`       | 27    | Config, boot lifecycle, request handler                                     |
@@ -100,14 +100,14 @@ Rails: 30,329 lines · 3,828 tests
 
 Rails: 21,159 lines · 2,699 tests
 
-| Subsystem                          | Rails LOC | Status   | Notes                                    |
-| ---------------------------------- | --------- | -------- | ---------------------------------------- |
-| Renderer                           | 1,178     | **done** | TSX → string, escaping, async components |
-| Template resolution & layouts      | 2,356     | **done** | Layouts and partials are components      |
-| Inertia protocol                   | —         | **done** | New surface; renderer-agnostic           |
-| Helpers (form, tag, asset, number) | 13,926    | **n/a**  | TSX composes; these disappear            |
-| Form builders                      | —         | todo     | A component, not 3,000 lines of helpers  |
-| Vite integration                   | —         | todo     | Asset manifest, dev server               |
+| Subsystem                          | Rails LOC | Status   | Notes                                                 |
+| ---------------------------------- | --------- | -------- | ----------------------------------------------------- |
+| Renderer                           | 1,178     | **done** | TSX → string, escaping, async components              |
+| Template resolution & layouts      | 2,356     | **done** | Layouts and partials are components                   |
+| Inertia protocol                   | —         | **done** | New surface; renderer-agnostic                        |
+| Helpers (form, tag, asset, number) | 13,926    | **n/a**  | TSX composes; these disappear                         |
+| Form builders                      | —         | **done** | A component and a builder, not 3,000 lines of helpers |
+| Vite integration                   | —         | todo     | Asset manifest, dev server                            |
 
 ## Everything else
 
@@ -127,7 +127,7 @@ Rails: 21,159 lines · 2,699 tests
 ## What is left, in short
 
 The framework's shape is complete: every Rails component has an Altair
-counterpart that runs. What remains is depth. Next up: form builders, Vite
+counterpart that runs. What remains is depth. Next up: Vite
 integration and the dev server, then ActiveSupport's time handling and number
 formatting, content security policy and rate limiting. ActionText and
 ActionMailbox are deliberately last, being the two components most
