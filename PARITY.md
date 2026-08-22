@@ -15,7 +15,7 @@ already provides it)
 
 |           | Tests ported | of Rails' |      |
 | --------- | ------------ | --------- | ---- |
-| **Total** | **578**      | 26,775    | 2.2% |
+| **Total** | **622**      | 26,775    | 2.3% |
 
 ---
 
@@ -27,7 +27,7 @@ Rails: 36,129 lines · 3,670 tests
 | --------------------------- | --------- | ----------- | -------- | --------------------------------------------------- |
 | Inflector                   | 972       | ~120        | **done** | 544 tests, 246 fixture cases ported                 |
 | Callbacks                   | 1,048     | 59          | **done** | 34 tests; async chains, halting, inheritance        |
-| Cache                       | 3,951     | —           | **next** | Stores over `Bun.RedisClient`, SQLite, memory       |
+| Cache                       | 3,951     | —           | todo     | Stores over `Bun.RedisClient`, SQLite, memory       |
 | Notifications               | 769       | —           | todo     | Instrumentation bus                                 |
 | CurrentAttributes           | —         | —           | todo     | `AsyncLocalStorage`                                 |
 | Core extensions             | 8,549     | —           | **n/a**  | JavaScript has these; port only what's load-bearing |
@@ -56,17 +56,17 @@ Rails: 71,873 lines · 10,602 tests — the largest single body of work
 
 Rails: 30,329 lines · 3,828 tests
 
-| Subsystem                 | Rails LOC | Rails tests | Status   | Notes                                      |
-| ------------------------- | --------- | ----------- | -------- | ------------------------------------------ |
-| Routing DSL & recognition | 4,816     | 305 + 79    | **next** | `resources`, nesting, constraints          |
-| Typed path helpers        | —         | —           | **next** | New surface; better than Rails             |
-| Journey (route matcher)   | 2,190     | —           | next     | Compiled matcher                           |
-| Controllers               | 9,508     | —           | todo     | Filters, strong params, rendering          |
-| Middleware stack          | 4,749     | —           | todo     | Plain functions over one context           |
-| Request / Response        | 4,673     | 1,733       | todo     | Web `Request`/`Response` underneath        |
-| CSRF protection           | —         | 2,029       | todo     | Security-critical: full port, no shortcuts |
-| Cookies & sessions        | —         | 1,651       | todo     |                                            |
-| Content Security Policy   | 842       | —           | todo     |                                            |
+| Subsystem                 | Rails LOC | Rails tests | Status   | Notes                                                  |
+| ------------------------- | --------- | ----------- | -------- | ------------------------------------------------------ |
+| Routing DSL & recognition | 4,816     | 305 + 79    | **done** | 44 tests; resources, nesting, member/collection, scope |
+| Typed path helpers        | —         | —           | **done** | New surface; generated per named route                 |
+| Journey (route matcher)   | 2,190     | —           | **done** | Compiled regex per route, verb-bucketed                |
+| Controllers               | 9,508     | —           | **next** | Filters, strong params, rendering                      |
+| Middleware stack          | 4,749     | —           | todo     | Plain functions over one context                       |
+| Request / Response        | 4,673     | 1,733       | todo     | Web `Request`/`Response` underneath                    |
+| CSRF protection           | —         | 2,029       | todo     | Security-critical: full port, no shortcuts             |
+| Cookies & sessions        | —         | 1,651       | todo     |                                                        |
+| Content Security Policy   | 842       | —           | todo     |                                                        |
 
 ## ActionView → `@altair/view`
 

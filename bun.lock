@@ -11,12 +11,21 @@
         "typescript": "^7.0.2",
       },
     },
+    "packages/router": {
+      "name": "@altair/router",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/support": "workspace:*",
+      },
+    },
     "packages/support": {
       "name": "@altair/support",
       "version": "0.0.0",
     },
   },
   "packages": {
+    "@altair/router": ["@altair/router@workspace:packages/router"],
+
     "@altair/support": ["@altair/support@workspace:packages/support"],
 
     "@oxfmt/binding-android-arm-eabi": ["@oxfmt/binding-android-arm-eabi@0.64.0", "", { "os": "android", "cpu": "arm" }, "sha512-o6uzh/jTOQeAY5TdkAeXdqv7MBRcPxiRA08zrcBtkKj5cSu/FMu0Hl7Q6Fi1KCKyCWZ6lJVjBzdsJvsKltUsGQ=="],
