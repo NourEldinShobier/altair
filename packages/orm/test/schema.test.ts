@@ -8,7 +8,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, adapterFor } from "../src/connection.js";
-import { testConnection } from "./support/database.js";
+import { columnNamesOf, indexNamesOf, testConnection } from "./support/database.js";
 import { Migrator, SchemaStatements, type Migration } from "../src/schema.js";
 
 let connection: Connection;
@@ -75,8 +75,7 @@ describe("createTable", () => {
   it("creates a table without an id when asked", async () => {
     await schema.createTable("joins", (t) => t.integer("left_id"), { id: false });
 
-    const rows = await connection.query("PRAGMA table_info(joins)");
-    expect(rows).toHaveLength(1);
+    expect(await columnNamesOf(connection, "joins")).toEqual(["left_id"]);
   });
 
   // Rails: t.references adds <name>_id and indexes it.
@@ -87,21 +86,15 @@ describe("createTable", () => {
       t.references("post");
     });
 
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(comments)");
-    expect(columns.map((c) => c.name)).toContain("post_id");
-
-    const indexes = await connection.query<{ name: string }>("PRAGMA index_list(comments)");
-    expect(indexes.map((i) => i.name)).toContain("index_comments_on_post_id");
+    expect(await columnNamesOf(connection, "comments")).toContain("post_id");
+    expect(await indexNamesOf(connection, "comments")).toContain("index_comments_on_post_id");
   });
 
   // Rails: t.timestamps adds both columns, NOT NULL.
   it("adds timestamps", async () => {
     await schema.createTable("posts", (t) => t.timestamps());
 
-    const columns = await connection.query<{ name: string; notnull: number }>(
-      "PRAGMA table_info(posts)",
-    );
-    const names = columns.map((c) => c.name);
+    const names = await columnNamesOf(connection, "posts");
     expect(names).toContain("created_at");
     expect(names).toContain("updated_at");
   });
@@ -129,15 +122,13 @@ describe("altering", () => {
 
   it("adds a column", async () => {
     await schema.addColumn("posts", "slug", "string");
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(posts)");
-    expect(columns.map((c) => c.name)).toContain("slug");
+    expect(await columnNamesOf(connection, "posts")).toContain("slug");
   });
 
   it("removes a column", async () => {
     await schema.addColumn("posts", "slug", "string");
     await schema.removeColumn("posts", "slug");
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(posts)");
-    expect(columns.map((c) => c.name)).not.toContain("slug");
+    expect(await columnNamesOf(connection, "posts")).not.toContain("slug");
   });
 
   it("renames a table", async () => {
@@ -153,12 +144,10 @@ describe("altering", () => {
 
   it("adds and removes an index", async () => {
     await schema.addIndex("posts", ["title"], { unique: true });
-    let indexes = await connection.query<{ name: string }>("PRAGMA index_list(posts)");
-    expect(indexes.map((i) => i.name)).toContain("index_posts_on_title");
+    expect(await indexNamesOf(connection, "posts")).toContain("index_posts_on_title");
 
     await schema.removeIndex("posts", { name: "index_posts_on_title" });
-    indexes = await connection.query<{ name: string }>("PRAGMA index_list(posts)");
-    expect(indexes.map((i) => i.name)).not.toContain("index_posts_on_title");
+    expect(await indexNamesOf(connection, "posts")).not.toContain("index_posts_on_title");
   });
 
   it("lists tables, ignoring sqlite internals", async () => {
@@ -192,8 +181,7 @@ describe("migrator", () => {
 
     expect(ran.map((m) => m.version)).toEqual([createPosts.version, addSlug.version]);
 
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(posts)");
-    expect(columns.map((c) => c.name)).toContain("slug");
+    expect(await columnNamesOf(connection, "posts")).toContain("slug");
   });
 
   // Rails: a migration runs once, and is recorded in schema_migrations.

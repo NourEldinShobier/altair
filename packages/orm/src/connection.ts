@@ -37,6 +37,13 @@ export function adapterFor(url: string): Adapter {
   return "postgres";
 }
 
+/** PostgreSQL's complaint that a prepared statement outlived its table's shape. */
+function isStalePlan(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("cached plan must not change result type")
+  );
+}
+
 export class Connection {
   readonly adapter: Adapter;
   readonly url: string;
@@ -88,7 +95,7 @@ export class Connection {
    */
   async query<T = Row>(sql: string, bindings: readonly unknown[] = []): Promise<T[]> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      const result = await this.#handle.unsafe(sql, bindings as unknown[]);
+      const result = await this.#run(sql, bindings);
       return (Array.isArray(result) ? result : []) as T[];
     });
   }
@@ -96,8 +103,26 @@ export class Connection {
   /** Runs a statement for its effect. */
   async execute(sql: string, bindings: readonly unknown[] = []): Promise<void> {
     await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      await this.#handle.unsafe(sql, bindings as unknown[]);
+      await this.#run(sql, bindings);
     });
+  }
+
+  /**
+   * Sends a statement, retrying once if a cached plan went stale.
+   *
+   * PostgreSQL caches the plan for a prepared statement and refuses to run it
+   * when the table's shape has changed underneath — which is what a migration
+   * does to a process that is already serving. The retry re-prepares against
+   * the new shape, which is what the PostgreSQL documentation recommends and
+   * what saves an application from having to restart after every migration.
+   */
+  async #run(sql: string, bindings: readonly unknown[]): Promise<unknown> {
+    try {
+      return await this.#handle.unsafe(sql, bindings as unknown[]);
+    } catch (error) {
+      if (!isStalePlan(error)) throw error;
+      return await this.#handle.unsafe(sql, bindings as unknown[]);
+    }
   }
 
   /**
@@ -109,7 +134,7 @@ export class Connection {
    */
   async executeCount(sql: string, bindings: readonly unknown[] = []): Promise<number> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      const result = await this.#handle.unsafe(sql, bindings as unknown[]);
+      const result = await this.#run(sql, bindings);
       return Number((result as { count?: number }).count ?? 0);
     });
   }

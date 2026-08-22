@@ -64,16 +64,21 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # MariaDB rather than MySQL 9. MySQL 8 and later default to
+      # caching_sha2_password, which needs either TLS or a client that will
+      # fetch the server's public key over an insecure connection. Weakening
+      # the client to test it is the wrong trade; MariaDB is a first-class
+      # target for the same adapter.
       mysql:
-        image: mysql:9
+        image: mariadb:11
         env:
-          MYSQL_ROOT_PASSWORD: altair
-          MYSQL_USER: altair
-          MYSQL_PASSWORD: altair
-          MYSQL_DATABASE: altair_test
+          MARIADB_ROOT_PASSWORD: altair
+          MARIADB_USER: altair
+          MARIADB_PASSWORD: altair
+          MARIADB_DATABASE: altair_test
         ports: ["3306:3306"]
         options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -ualtair -paltair"
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10

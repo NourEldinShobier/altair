@@ -8,7 +8,7 @@
  */
 
 import { Connection, adapterFor } from "../../src/connection.js";
-import { tableNames } from "../../src/introspect.js";
+import { introspect, tableNames } from "../../src/introspect.js";
 
 export const TEST_DATABASE_URL = process.env.ALTAIR_TEST_DATABASE_URL ?? "sqlite://:memory:";
 export const TEST_ADAPTER = adapterFor(TEST_DATABASE_URL);
@@ -53,4 +53,21 @@ export async function dropAllTables(connection: Connection): Promise<void> {
   }
 
   if (connection.adapter === "mysql") await connection.execute("SET FOREIGN_KEY_CHECKS = 1");
+}
+
+/**
+ * A table's column names, asked of whichever database is running.
+ *
+ * The suite used PRAGMA directly, which meant every schema assertion was also
+ * an assertion that the database was SQLite.
+ */
+export async function columnNamesOf(connection: Connection, table: string): Promise<string[]> {
+  const schema = await introspect(connection);
+  return schema.tables.find((entry) => entry.name === table)?.columns.map((c) => c.name) ?? [];
+}
+
+/** A table's index names, primary key aside. */
+export async function indexNamesOf(connection: Connection, table: string): Promise<string[]> {
+  const schema = await introspect(connection);
+  return schema.tables.find((entry) => entry.name === table)?.indexes.map((i) => i.name) ?? [];
 }

@@ -162,7 +162,8 @@ export class SchemaStatements {
       let clause = `${this.connection.quote(column.name)} ${sqlType(this.connection, column)}`;
       if (column.null === false) clause += " NOT NULL";
       if (column.unique) clause += " UNIQUE";
-      if (column.default !== undefined) clause += ` DEFAULT ${literal(column.default)}`;
+      if (column.default !== undefined)
+        clause += ` DEFAULT ${literal(this.connection, column.default)}`;
       parts.push(clause);
     }
 
@@ -190,7 +191,8 @@ export class SchemaStatements {
     const column: Column = { name, type, ...options };
     let clause = `${this.connection.quote(name)} ${sqlType(this.connection, column)}`;
     if (column.null === false) clause += " NOT NULL";
-    if (column.default !== undefined) clause += ` DEFAULT ${literal(column.default)}`;
+    if (column.default !== undefined)
+      clause += ` DEFAULT ${literal(this.connection, column.default)}`;
 
     await this.connection.execute(
       `ALTER TABLE ${this.connection.quote(table)} ADD COLUMN ${clause}`,
@@ -267,10 +269,17 @@ export class SchemaStatements {
  * user input, so there is no injection surface. Values from a request are
  * always bound, never interpolated.
  */
-function literal(value: unknown): string {
+function literal(connection: Connection, value: unknown): string {
   if (value === null) return "NULL";
   if (typeof value === "number") return String(value);
-  if (typeof value === "boolean") return value ? "1" : "0";
+
+  if (typeof value === "boolean") {
+    // Postgres has a real boolean type and refuses an integer default for it.
+    // SQLite and MySQL store booleans as 0 and 1.
+    if (connection.adapter === "postgres") return value ? "TRUE" : "FALSE";
+    return value ? "1" : "0";
+  }
+
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
