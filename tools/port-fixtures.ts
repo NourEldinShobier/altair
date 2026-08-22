@@ -36,9 +36,10 @@ const ruby = readFileSync(source, "utf8");
 function hashBlocks(src: string): Map<string, [string, string][]> {
   const out = new Map<string, [string, string][]>();
   for (const block of src.matchAll(/^\s*(\w+) = \{([\s\S]*?)^\s*\}/gm)) {
-    const [, name, body] = block;
+    const name = block[1]!;
+    const body = block[2]!;
     const pairs = [...body.matchAll(/"((?:[^"\\]|\\.)*)"\s*=>\s*"((?:[^"\\]|\\.)*)"/g)]
-      .map(([, a, b]) => [unescapeRuby(a), unescapeRuby(b)] as [string, string]);
+      .map((m) => [unescapeRuby(m[1]!), unescapeRuby(m[2]!)] as [string, string]);
     if (pairs.length > 0) out.set(name, pairs);
   }
   return out;

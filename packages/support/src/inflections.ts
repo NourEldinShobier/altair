@@ -145,7 +145,7 @@ export function escapeRegExp(s: string): string {
 /** Locale-keyed registries, mirroring `Inflector.inflections(:en)`. */
 const registry = new Map<string, Inflections>();
 
-export function inflections(locale = "en"): Inflections;
+export function inflections(locale?: string): Inflections;
 export function inflections(locale: string, configure: (i: Inflections) => void): Inflections;
 export function inflections(
   locale = "en",
