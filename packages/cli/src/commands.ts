@@ -181,6 +181,7 @@ export function newApplication(name: string): GeneratedFile[] {
           imports: {
             "#models/*": "./app/models/*.ts",
             "#controllers/*": "./app/controllers/*.ts",
+            "#db/*": "./db/*.ts",
           },
           dependencies: {
             "@altair/core": "workspace:*",

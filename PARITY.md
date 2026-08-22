@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,208** | 26,775    | 4.5% |
+| **Total** | **1,233** | 26,775    | 4.6% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -20,7 +20,7 @@ language already provides it)
 | Package              | Tests | Covers                                                                      |
 | -------------------- | ----- | --------------------------------------------------------------------------- |
 | `@altair/support`    | 648   | Inflector, callbacks + decorators, cache, message signing/encryption        |
-| `@altair/orm`        | 151   | Connection, migrations, models, relations, associations, validations        |
+| `@altair/orm`        | 176   | Connection, migrations, models, relations, associations, validations        |
 | `@altair/controller` | 130   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
 | `@altair/cli`        | 66    | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 44    | Resourceful routing, typed path helpers                                     |
@@ -63,8 +63,8 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Validations                   | —         | **done** | presence, length, format, uniqueness, and the rest       |
 | Associations                  | 6,031     | **wip**  | belongsTo/hasMany/hasOne/through/polymorphic, `includes` |
 | Relation / query interface    | 5,579     | **wip**  | where/order/group/aggregates/scopes/bulk writes          |
-| Fixtures & test helpers       | 860       | **next** | Transactional tests, factories                           |
-| Schema dump & type emission   | —         | todo     | The codegen half of the architecture                     |
+| Fixtures & test helpers       | 860       | **next** | Transactional tests, factories; schema:load ready        |
+| Schema dump & type emission   | —         | **done** | Types generated from the database itself                 |
 | Nested attributes             | —         | todo     |                                                          |
 | Single-table inheritance      | —         | todo     |                                                          |
 | Counter cache                 | —         | todo     |                                                          |

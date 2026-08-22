@@ -21,7 +21,7 @@ import {
   type GeneratedFile,
 } from "./commands.js";
 import { loadMigrations } from "./loader.js";
-import { Connection } from "@altair/orm";
+import { Connection, dumpSchema, dumpTypes, introspect, loadSchema } from "@altair/orm";
 
 /**
  * The database this command should talk to.
@@ -46,6 +46,26 @@ async function connect(): Promise<Connection> {
 }
 
 const MIGRATIONS_DIR = join(process.cwd(), "db", "migrate");
+const SCHEMA_FILE = join(process.cwd(), "db", "schema.ts");
+const TYPES_FILE = join(process.cwd(), "db", "types.ts");
+
+/**
+ * Writes the schema and the generated attribute types.
+ *
+ * Run after every migration, so the types the compiler reads always describe
+ * the database that exists. A column added in a migration and forgotten in an
+ * interface is otherwise a silent lie.
+ */
+async function dump(connection: Connection): Promise<void> {
+  const schema = await introspect(connection);
+
+  await mkdir(dirname(SCHEMA_FILE), { recursive: true });
+  await writeFile(SCHEMA_FILE, dumpSchema(schema));
+  await writeFile(TYPES_FILE, dumpTypes(schema));
+
+  console.log("      dumped  db/schema.ts");
+  console.log("      dumped  db/types.ts");
+}
 
 async function write(files: GeneratedFile[], root: string): Promise<void> {
   for (const file of files) {
@@ -83,8 +103,10 @@ switch (command) {
 
   case "db:migrate": {
     const connection = await connect();
-    const { output } = await migrate(connection, await loadMigrations(MIGRATIONS_DIR));
+    const { output, applied } = await migrate(connection, await loadMigrations(MIGRATIONS_DIR));
     console.log(output);
+
+    if (applied.length > 0) await dump(connection);
     await connection.close();
     break;
   }
@@ -92,8 +114,41 @@ switch (command) {
   case "db:rollback": {
     const connection = await connect();
     const steps = Number(args[0] ?? 1);
-    const { output } = await rollback(connection, await loadMigrations(MIGRATIONS_DIR), steps);
+    const { output, applied } = await rollback(
+      connection,
+      await loadMigrations(MIGRATIONS_DIR),
+      steps,
+    );
     console.log(output);
+
+    if (applied.length > 0) await dump(connection);
+    await connection.close();
+    break;
+  }
+
+  case "db:schema:dump": {
+    const connection = await connect();
+    await dump(connection);
+    await connection.close();
+    break;
+  }
+
+  case "db:schema:load": {
+    // Rails prepares a test database this way rather than replaying every
+    // migration, which is the difference between a suite that starts in
+    // milliseconds and one that starts in seconds.
+    const connection = await connect();
+    const loaded = (await import(pathToFileURL(SCHEMA_FILE).href)) as {
+      default?: Parameters<typeof loadSchema>[1];
+    };
+
+    if (!loaded.default) {
+      console.error("db/schema.ts does not export a schema. Run `altair db:migrate` first.");
+      process.exit(1);
+    }
+
+    await loadSchema(connection, loaded.default);
+    console.log(`      loaded  db/schema.ts`);
     await connection.close();
     break;
   }

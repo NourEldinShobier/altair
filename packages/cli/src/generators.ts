@@ -136,25 +136,19 @@ export default migration;
   };
 }
 
-/** `altair generate model Post title:string` */
+/**
+ * `altair generate model Post title:string`
+ *
+ * The attributes come from `db/types.ts`, which `db:migrate` generates from the
+ * database itself. Hand-writing them means a column added in a migration and
+ * forgotten here makes the compiler confidently report a shape the database
+ * does not have.
+ */
 export function generateModel(name: string, fields: FieldSpec[]): GeneratedFile {
   const className = classify(name);
   const table = tableize(name);
 
-  const attributes = [
-    "  id: number;",
-    ...fields.map((field) => {
-      const column =
-        field.type === "references"
-          ? `${underscore(singularize(field.name))}_id`
-          : underscore(field.name);
-      const optional = field.type === "references" ? " | null" : "";
-      return `  ${column}: ${tsTypeFor(field.type)}${optional};`;
-    }),
-    "  created_at: string;",
-    "  updated_at: string;",
-  ].join("\n");
-
+  const rowType = `${className}Row`;
   const references = fields.filter((field) => field.type === "references");
 
   const associationDeclarations = references
@@ -171,14 +165,19 @@ export function generateModel(name: string, fields: FieldSpec[]): GeneratedFile 
     )
     .join("\n");
 
-  const imports = references.length
-    ? `import { Model, type BelongsTo } from "@altair/orm";\n${references
-        .map(
-          (field) =>
-            `import { ${classify(field.name)} } from "./${underscore(singularize(field.name))}.js";`,
-        )
-        .join("\n")}`
-    : `import { Model } from "@altair/orm";`;
+  const imports = [
+    references.length
+      ? `import { Model, type BelongsTo } from "@altair/orm";`
+      : `import { Model } from "@altair/orm";`,
+    // The attributes come from db/types.ts, which db:migrate generates from
+    // the database itself, so a column added in a migration cannot go missing
+    // here without the compiler noticing.
+    `import type { ${rowType} } from "#db/types";`,
+    ...references.map(
+      (field) =>
+        `import { ${classify(field.name)} } from "./${underscore(singularize(field.name))}.js";`,
+    ),
+  ].join("\n");
 
   const body = references.length
     ? `${associationDeclarations}\n\n  static {\n${associationRegistrations}\n  }\n`
@@ -188,11 +187,7 @@ export function generateModel(name: string, fields: FieldSpec[]): GeneratedFile 
     path: `app/models/${underscore(singularize(name))}.ts`,
     contents: `${imports}
 
-export interface ${className}Attributes {
-${attributes}
-}
-
-export class ${className} extends Model<${className}Attributes>(${JSON.stringify(table)}) ${
+export class ${className} extends Model<${rowType}>(${JSON.stringify(table)}) ${
       body
         ? `{
 ${body}}`

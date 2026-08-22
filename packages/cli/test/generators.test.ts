@@ -103,29 +103,30 @@ describe("generate model", () => {
     const file = generateModel("Post", parseFields(["title:string"]));
 
     expect(file.path).toBe("app/models/post.ts");
-    expect(file.contents).toContain('export class Post extends Model<PostAttributes>("posts")');
+    expect(file.contents).toContain('export class Post extends Model<PostRow>("posts")');
   });
 
   it("singularizes and underscores a multi-word name", () => {
     const file = generateModel("LineItems", []);
 
     expect(file.path).toBe("app/models/line_item.ts");
-    expect(file.contents).toContain('Model<LineItemAttributes>("line_items")');
+    expect(file.contents).toContain('Model<LineItemRow>("line_items")');
   });
 
-  it("types the attributes from the fields", () => {
+  // Attributes come from db/types.ts, which db:migrate generates from the
+  // database. Hand-writing them means a column added in a migration and
+  // forgotten here makes the compiler report a shape the database lacks.
+  it("takes its attributes from the generated types", () => {
     const file = generateModel("Post", parseFields(["title:string", "views:integer"]));
 
-    expect(file.contents).toContain("  id: number;");
-    expect(file.contents).toContain("  title: string;");
-    expect(file.contents).toContain("  views: number;");
-    expect(file.contents).toContain("  created_at: string;");
+    expect(file.contents).toContain('import type { PostRow } from "#db/types";');
+    expect(file.contents).toContain('Model<PostRow>("posts")');
+    expect(file.contents).not.toContain("interface PostAttributes");
   });
 
   it("declares and registers a belongsTo for a reference", () => {
     const file = generateModel("Comment", parseFields(["post:references", "body:text"]));
 
-    expect(file.contents).toContain("  post_id: number | null;");
     expect(file.contents).toContain("declare post: BelongsTo<Post>;");
     expect(file.contents).toContain('this.belongsTo("post", () => Post);');
     expect(file.contents).toContain('import { Post } from "./post.js";');
@@ -204,7 +205,7 @@ describe("generate scaffold", () => {
 
   it("agrees on the table across all three", () => {
     expect(files[0]!.contents).toContain('createTable("posts"');
-    expect(files[1]!.contents).toContain('Model<PostAttributes>("posts")');
+    expect(files[1]!.contents).toContain('Model<PostRow>("posts")');
     expect(files[2]!.contents).toContain("Post.find");
   });
 });
@@ -227,7 +228,7 @@ describe("generated code shape", () => {
   it("leaves no empty class body", () => {
     const file = generateModel("Post", parseFields(["title:string"]));
 
-    expect(file.contents).toContain('Model<PostAttributes>("posts") {}');
+    expect(file.contents).toContain('Model<PostRow>("posts") {}');
     expect(file.contents).not.toContain("{\n}");
   });
 
