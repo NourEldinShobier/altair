@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,372** | 26,775    | 5.1% |
+| **Total** | **1,428** | 26,775    | 5.3% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -29,6 +29,7 @@ one that needs no server.
 | `@altair/cli`        | 67    | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 45    | Resourceful routing, typed path helpers                                     |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
+| `@altair/storage`    | 56    | Disk and S3 services, blobs, attachments, signed URLs                       |
 | `@altair/view`       | 39    | TSX rendering, layouts, Inertia protocol                                    |
 | `@altair/jobs`       | 34    | Jobs, queues, retries, worker                                               |
 | `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                    |
@@ -110,27 +111,36 @@ Rails: 21,159 lines · 2,699 tests
 
 ## Everything else
 
-| Component                        | Rails LOC | Rails tests | Target                        | Status                                  |
-| -------------------------------- | --------- | ----------- | ----------------------------- | --------------------------------------- |
-| ActionCable                      | 4,496     | 220         | `@altair/cable`               | **done**                                |
-| ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | **wip** — previews, attachments todo    |
-| ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | **wip** — cron and more adapters todo   |
-| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — dev server, console todo      |
-| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations done              |
-| ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **next** — `Bun.S3Client` + `Bun.Image` |
-| ActionText                       | 2,617     | 318         | —                             | todo — late phase                       |
-| ActionMailbox                    | 750       | 123         | —                             | todo — late phase                       |
+| Component                        | Rails LOC | Rails tests | Target                        | Status                                |
+| -------------------------------- | --------- | ----------- | ----------------------------- | ------------------------------------- |
+| ActionCable                      | 4,496     | 220         | `@altair/cable`               | **done**                              |
+| ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | **wip** — previews, attachments todo  |
+| ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | **wip** — cron and more adapters todo |
+| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — dev server, console todo    |
+| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations done            |
+| ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **wip** — no variants (see below)     |
+| ActionText                       | 2,617     | 318         | —                             | todo — late phase                     |
+| ActionMailbox                    | 750       | 123         | —                             | todo — late phase                     |
 
 ---
 
 ## What is left, in short
 
 The framework's shape is complete: every Rails component has an Altair
-counterpart that runs. What remains is depth, and most of it is in ActiveRecord
-— multiple databases and pinning a transaction to one pooled connection. After that: ActiveStorage,
-the middleware stack, ActiveSupport's instrumentation and time handling, form
-builders, and the dev server. ActionText and ActionMailbox are deliberately
-last, being the two components most applications never touch.
+counterpart that runs. What remains is depth. Next up: form builders, Vite
+integration and the dev server, then ActiveSupport's time handling and number
+formatting, content security policy and rate limiting. ActionText and
+ActionMailbox are deliberately last, being the two components most
+applications never touch.
+
+**Image variants are not built.** Early research recorded a `Bun.Image` API;
+it does not exist in Bun 1.4, which was checked rather than assumed the second
+time. Variants need an image library, so they wait until it is worth taking
+that dependency. Everything else ActiveStorage does — services, blobs,
+attachments, signed URLs, purging — is here.
+
+Horizontal sharding is also not built, and direct uploads from the browser
+have no endpoint yet.
 
 ## How to update this file
 

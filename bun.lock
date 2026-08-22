@@ -82,6 +82,14 @@
         "@altair/support": "workspace:*",
       },
     },
+    "packages/storage": {
+      "name": "@altair/storage",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/orm": "workspace:*",
+        "@altair/support": "workspace:*",
+      },
+    },
     "packages/support": {
       "name": "@altair/support",
       "version": "0.0.0",
@@ -117,6 +125,8 @@
     "@altair/orm": ["@altair/orm@workspace:packages/orm"],
 
     "@altair/router": ["@altair/router@workspace:packages/router"],
+
+    "@altair/storage": ["@altair/storage@workspace:packages/storage"],
 
     "@altair/support": ["@altair/support@workspace:packages/support"],
 

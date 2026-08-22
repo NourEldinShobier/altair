@@ -1,0 +1,12 @@
+{
+  "name": "@altair/storage",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@altair/orm": "workspace:*",
+    "@altair/support": "workspace:*"
+  }
+}
