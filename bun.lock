@@ -53,6 +53,14 @@
         "@altair/support": "workspace:*",
       },
     },
+    "packages/mailer": {
+      "name": "@altair/mailer",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/support": "workspace:*",
+        "@altair/view": "workspace:*",
+      },
+    },
     "packages/orm": {
       "name": "@altair/orm",
       "version": "0.0.0",
@@ -87,6 +95,8 @@
     "@altair/core": ["@altair/core@workspace:packages/core"],
 
     "@altair/jobs": ["@altair/jobs@workspace:packages/jobs"],
+
+    "@altair/mailer": ["@altair/mailer@workspace:packages/mailer"],
 
     "@altair/orm": ["@altair/orm@workspace:packages/orm"],
 

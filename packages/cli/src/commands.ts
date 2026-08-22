@@ -9,6 +9,7 @@
 import { Migrator, type Connection, type Migration } from "@altair/orm";
 import type { Router } from "@altair/router";
 import { secureToken } from "@altair/support";
+import { tableize } from "@altair/support";
 import {
   generateController,
   generateMigration,
@@ -136,7 +137,10 @@ export function generate(
 
   switch (kind) {
     case "model":
-      return [generateMigration(`create_${name}`, fields, now), generateModel(name, fields)];
+      return [
+        generateMigration(`create_${tableize(name)}`, fields, now),
+        generateModel(name, fields),
+      ];
     case "controller":
       return [generateController(name, fieldArgs)];
     case "migration":
@@ -233,6 +237,10 @@ SECRET_KEY_BASE=
 # Defaults to a local SQLite file.
 # DATABASE_URL=postgres://localhost/${appName}_development
 `,
+    },
+    {
+      path: "db/.gitkeep",
+      contents: "",
     },
     {
       path: ".gitignore",

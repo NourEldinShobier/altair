@@ -136,7 +136,7 @@ describe("generate", () => {
     const files = generate("model", "Post", ["title:string"], { now: NOW });
 
     expect(files.map((file) => file.path)).toEqual([
-      "db/migrate/20260822143005_create_post.ts",
+      "db/migrate/20260822143005_create_posts.ts",
       "app/models/post.ts",
     ]);
   });
@@ -177,6 +177,7 @@ describe("new", () => {
       "app/controllers/home_controller.ts",
       "bin/server.ts",
       "config/routes.ts",
+      "db/.gitkeep",
       "package.json",
       "tsconfig.json",
     ]);

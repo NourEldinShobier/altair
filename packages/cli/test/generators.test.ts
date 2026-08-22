@@ -85,6 +85,13 @@ describe("generate migration", () => {
     expect(file.contents).not.toContain("createTable");
   });
 
+  // classify() singularizes, which is right for a table-to-model name and
+  // wrong here: Rails calls this migration CreateProducts, not CreateProduct.
+  it("keeps the migration name plural", () => {
+    const file = generateMigration("create_products", [], NOW);
+    expect(file.contents).toContain('name: "CreateProducts"');
+  });
+
   it("declares the version inside the file too", () => {
     const file = generateMigration("create_posts", [], NOW);
     expect(file.contents).toContain('version: "20260822143005"');

@@ -126,7 +126,7 @@ ${fields.map(columnLine).join("\n")}${fields.length > 0 ? "\n" : ""}      t.time
 
 const migration: Migration = {
   version: ${JSON.stringify(version)},
-  name: ${JSON.stringify(classify(name))},
+  name: ${JSON.stringify(camelize(underscore(name)))},
 
 ${body}
 };
