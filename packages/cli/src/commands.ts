@@ -284,6 +284,7 @@ export function helpText(): string {
     "  db:rollback [STEPS]       Roll back the last migration",
     "  db:status                 Show which migrations have run",
     "  routes                    List the route table",
+    "  routes:types              Generate typed path helpers into config/paths.ts",
     "  secret                    Print a new SECRET_KEY_BASE",
     "  server                    Start the application",
   ].join("\n");

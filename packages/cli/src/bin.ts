@@ -177,6 +177,28 @@ switch (command) {
     break;
   }
 
+  case "routes:types": {
+    // The same bargain as db:schema:dump — read the real thing and emit types
+    // from it, so a helper's name and its arity are both checked.
+    const path = join(process.cwd(), "config", "routes.ts");
+    const { Router, dumpRouteHelpers } = await import("@altair/router");
+    const loaded = (await import(pathToFileURL(path).href)) as {
+      default?: (r: never) => void;
+    };
+
+    if (!loaded.default) {
+      console.error("config/routes.ts must default-export a function that draws routes.");
+      process.exit(1);
+    }
+
+    const router = new Router().draw(loaded.default as never);
+    const target = join(process.cwd(), "config", "paths.ts");
+
+    await Bun.write(target, dumpRouteHelpers(router, { routesModule: "./routes.js" }));
+    console.log(`Wrote ${router.routeNames.length} path helpers to config/paths.ts`);
+    break;
+  }
+
   case "secret":
     console.log(generateSecret());
     break;
