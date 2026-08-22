@@ -657,15 +657,12 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * connection is swapped for the duration.
      */
     static async transaction<R>(body: () => Promise<R>): Promise<R> {
-      const outer = this.connectionOverride;
-      return await this.connection.transaction(async (tx) => {
-        this.connectionOverride = tx;
-        try {
-          return await body();
-        } finally {
-          this.connectionOverride = outer;
-        }
-      });
+      // No swapping of `connectionOverride`: that is a static, so two requests
+      // in a transaction at once would overwrite each other's. The connection
+      // is scoped to the async call chain instead, which is per-request by
+      // construction and reaches every model the block touches, not just this
+      // one.
+      return await this.connection.transaction(async () => await body());
     }
 
     /** Deletes every matching row, running callbacks for each. Rails' `destroy_all`. */
@@ -1020,7 +1017,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     protected async insertRecord(klass: typeof BaseModel): Promise<void> {
       const connection = klass.connection;
       await klass.columnTypes();
-      const now = new Date().toISOString();
+      const now = nowFor(connection);
 
       // Rails maintains these automatically when the columns exist.
       if (await klass.hasTimestamps()) {
@@ -1042,7 +1039,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const table = connection.quote(klass.table);
       const columns = entries.map(([key]) => connection.quote(key)).join(", ");
       const placeholders = entries.map((_, index) => connection.placeholder(index)).join(", ");
-      const bindings = entries.map(([, value]) => serialize(value));
+      const bindings = entries.map(([, value]) => serialize(value, connection));
 
       if (entries.length === 0) {
         await connection.execute(`INSERT INTO ${table} DEFAULT VALUES`);
@@ -1071,7 +1068,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = klass.connection;
       const changes = this.changedAttributes() as Record<string, unknown>;
 
-      if (await klass.hasTimestamps()) changes.updated_at = new Date().toISOString();
+      if (await klass.hasTimestamps()) changes.updated_at = nowFor(connection);
       if (Object.keys(changes).length === 0) return;
 
       // Optimistic locking: the version the record was read at goes in the
@@ -1085,7 +1082,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const assignments = entries
         .map(([key], index) => `${connection.quote(key)} = ${connection.placeholder(index)}`)
         .join(", ");
-      const bindings = entries.map(([, value]) => serialize(value));
+      const bindings = entries.map(([, value]) => serialize(value, connection));
       bindings.push(this[ATTRIBUTES][klass.primaryKey]);
 
       let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`;
@@ -1280,9 +1277,26 @@ async function adjustCounter(
   );
 }
 
+/**
+ * The moment a timestamp column is set to, in the adapter's own spelling.
+ *
+ * MySQL rejects ISO 8601 outright: it wants `2026-01-01 12:00:00`, not the
+ * same instant with a T and a Z in it.
+ */
+function nowFor(connection: Connection): string {
+  return formatTimestamp(connection, new Date());
+}
+
+function formatTimestamp(connection: Connection, date: Date): string {
+  const iso = date.toISOString();
+  return connection.adapter === "mysql" ? iso.slice(0, 23).replace("T", " ") : iso;
+}
+
 /** Values the database cannot store directly are serialized on the way in. */
-function serialize(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString();
+function serialize(value: unknown, connection?: Connection): unknown {
+  if (value instanceof Date) {
+    return connection ? formatTimestamp(connection, value) : value.toISOString();
+  }
   if (typeof value === "boolean") return value ? 1 : 0;
   if (value !== null && typeof value === "object") return JSON.stringify(value);
   return value;

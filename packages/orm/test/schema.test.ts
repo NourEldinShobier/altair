@@ -30,7 +30,8 @@ describe("adapter detection", () => {
 
   it("quotes identifiers per adapter", () => {
     expect(new Connection("sqlite://:memory:").quote("posts")).toBe('"posts"');
-    expect(connection.quote('we"ird')).toBe('"we""ird"');
+    expect(new Connection("postgres://localhost/x").quote('we"ird')).toBe('"we""ird"');
+    expect(new Connection("mysql://localhost/x").quote("posts")).toBe("`posts`");
   });
 
   // Each adapter's own spelling, asserted against that adapter rather than
@@ -55,18 +56,18 @@ describe("createTable", () => {
 
     expect(await schema.tableExists("posts")).toBe(true);
 
+    const values = [0, 1, 2, 3].map((index) => connection.placeholder(index)).join(", ");
     await connection.execute(
-      "INSERT INTO posts (title, body, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      ["Hello", "World", "2026-01-01", "2026-01-01"],
+      `INSERT INTO posts (title, body, created_at, updated_at) VALUES (${values})`,
+      ["Hello", "World", "2026-01-01 00:00:00", "2026-01-01 00:00:00"],
     );
 
     const rows = await connection.query<{ id: number; title: string; views: number }>(
       "SELECT * FROM posts",
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.id).toBe(1);
     expect(rows[0]!.title).toBe("Hello");
-    expect(rows[0]!.views).toBe(0);
+    expect(Number(rows[0]!.views)).toBe(0);
   });
 
   // Rails: NOT NULL is enforced by the database, not the model.

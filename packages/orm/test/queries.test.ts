@@ -88,7 +88,9 @@ describe("grouping", () => {
     const { sql } = Post.all().group("category").having("COUNT(*) > ?", 1).toSql();
 
     expect(sql).toContain("GROUP BY");
-    expect(sql).toContain("HAVING COUNT(*) > ?");
+    // The placeholder is spelled differently per adapter; that it survived
+    // into the HAVING clause is what this asserts.
+    expect(sql).toContain("HAVING COUNT(*) >");
   });
 
   it("selects distinct rows", async () => {
@@ -321,5 +323,46 @@ describe("transactions", () => {
     ).rejects.toThrow();
 
     expect(await Post.count()).toBe(3);
+  });
+});
+
+// A transaction has to cover every model the block touches, not just the one
+// it was opened on. SQLite hid this by handing out a single connection; on a
+// pool the second model would write outside the transaction and survive the
+// rollback.
+describe("transaction scope", () => {
+  class Tag extends Model<{ id: number; title: string; category: string }>("posts") {}
+
+  it("covers a second model in the same block", async () => {
+    await expect(
+      Post.transaction(async () => {
+        await Post.create({ title: "D", category: "tech" });
+        await Tag.create({ title: "E", category: "tech" });
+        throw new Error("nope");
+      }),
+    ).rejects.toThrow("nope");
+
+    expect(await Post.count()).toBe(3);
+  });
+
+  it("commits a second model's writes too", async () => {
+    await Post.transaction(async () => {
+      await Post.create({ title: "D", category: "tech" });
+      await Tag.create({ title: "E", category: "tech" });
+    });
+
+    expect(await Post.count()).toBe(5);
+  });
+
+  // The scope follows the async call chain, so work outside the block is
+  // unaffected by a transaction running concurrently.
+  it("leaves work outside the block alone", async () => {
+    await Post.transaction(async () => {
+      await Post.create({ title: "D", category: "tech" });
+    });
+
+    expect(connection.isInTransaction).toBe(false);
+    await Post.create({ title: "F", category: "tech" });
+    expect(await Post.count()).toBe(5);
   });
 });

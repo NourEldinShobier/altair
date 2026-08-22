@@ -102,18 +102,38 @@ export class TestDatabase {
 
   /** Empties every table the schema declared. The truncation strategy. */
   async truncate(): Promise<void> {
+    const connection = this.connection;
+
+    // Emptying a table is not the same as resetting the counter that hands out
+    // its ids, and every database spells the combination differently. A test
+    // asserting on id 1 should not depend on which tests ran before it.
+    if (connection.adapter === "postgres" && this.#tables.length > 0) {
+      const tables = this.#tables.map((table) => connection.quote(table)).join(", ");
+      await connection.execute(`TRUNCATE TABLE ${tables} RESTART IDENTITY CASCADE`);
+      return;
+    }
+
+    if (connection.adapter === "mysql") {
+      await connection.execute("SET FOREIGN_KEY_CHECKS = 0");
+      for (const table of this.#tables) {
+        await connection.execute(`TRUNCATE TABLE ${connection.quote(table)}`);
+      }
+      await connection.execute("SET FOREIGN_KEY_CHECKS = 1");
+      return;
+    }
+
     for (const table of this.#tables) {
-      await this.connection.execute(`DELETE FROM ${this.connection.quote(table)}`);
+      await connection.execute(`DELETE FROM ${connection.quote(table)}`);
     }
 
     // SQLite remembers the highest rowid per table, so ids keep climbing
     // across tests unless the counter is reset too. A test asserting on id 1
     // should not depend on which tests ran before it.
-    if (this.connection.adapter === "sqlite") {
-      const exists = await this.connection.query<Row>(
+    if (connection.adapter === "sqlite") {
+      const exists = await connection.query<Row>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'",
       );
-      if (exists.length > 0) await this.connection.execute("DELETE FROM sqlite_sequence");
+      if (exists.length > 0) await connection.execute("DELETE FROM sqlite_sequence");
     }
   }
 

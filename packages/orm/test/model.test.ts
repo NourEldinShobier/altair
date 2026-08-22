@@ -251,7 +251,10 @@ describe("updating", () => {
 
   it("reloads from the database", async () => {
     const post = await Post.create({ title: "Original" });
-    await connection.execute("UPDATE posts SET title = 'Elsewhere' WHERE id = ?", [post.id]);
+    await connection.execute(
+      `UPDATE posts SET title = 'Elsewhere' WHERE id = ${connection.placeholder(0)}`,
+      [post.id],
+    );
 
     await post.reload();
     expect(post.title).toBe("Elsewhere");

@@ -8,6 +8,7 @@
  * placeholders are numbered, and how an inserted row's id comes back.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
 
@@ -159,7 +160,14 @@ export class Connection {
     return (await this.sql.begin(async (tx: SQL) => {
       const scoped = new Connection(this.url, tx);
       scoped.#inTransaction = true;
-      return await body(scoped);
+
+      // Everything the block reaches, not just the caller, has to run on the
+      // transaction's connection. On SQLite the pool is one connection so it
+      // happened anyway; on a pooled adapter the second model in a block would
+      // quietly write outside the transaction, and its writes would survive a
+      // rollback. The scope follows the async call chain, so concurrent
+      // requests each see their own.
+      return await inTransaction.run(scoped, async () => await body(scoped));
     })) as T;
   }
 
@@ -262,6 +270,15 @@ export class Connection {
 }
 
 /**
+ * The transaction a piece of work is running inside, if any.
+ *
+ * Rails hands each unit of work its own connection and puts the transaction on
+ * that; `AsyncLocalStorage` is the same idea, following the async call chain
+ * rather than a thread.
+ */
+const inTransaction = new AsyncLocalStorage<Connection>();
+
+/**
  * The connection the models use when none is given.
  *
  * Rails keeps this on ActiveRecord::Base and hands it down the class hierarchy;
@@ -279,6 +296,12 @@ export function setConnection(connection: Connection | undefined): void {
 }
 
 export function connection(): Connection {
+  // A transaction in progress wins, so a model reached from inside a
+  // transaction block joins it rather than taking a fresh connection from the
+  // pool and writing outside it.
+  const scoped = inTransaction.getStore();
+  if (scoped) return scoped;
+
   if (!current) {
     throw new Error("No database connection. Call connect(url) before using models.");
   }
