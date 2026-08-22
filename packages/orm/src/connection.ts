@@ -9,6 +9,7 @@
  */
 
 import { SQL } from "bun";
+import { notifications } from "@altair/support";
 
 export type Adapter = "sqlite" | "postgres" | "mysql";
 
@@ -49,15 +50,25 @@ export class Connection {
     return this.adapter === "postgres" ? `$${index + 1}` : "?";
   }
 
-  /** Runs a statement built by the query builder and returns its rows. */
+  /**
+   * Runs a statement built by the query builder and returns its rows.
+   *
+   * Every statement is reported on the instrumentation bus, which is how an
+   * application sees its own slow queries without the ORM knowing what a log
+   * is.
+   */
   async query<T = Row>(sql: string, bindings: readonly unknown[] = []): Promise<T[]> {
-    const result = await this.sql.unsafe(sql, bindings as unknown[]);
-    return (Array.isArray(result) ? result : []) as T[];
+    return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
+      const result = await this.sql.unsafe(sql, bindings as unknown[]);
+      return (Array.isArray(result) ? result : []) as T[];
+    });
   }
 
   /** Runs a statement for its effect. */
   async execute(sql: string, bindings: readonly unknown[] = []): Promise<void> {
-    await this.sql.unsafe(sql, bindings as unknown[]);
+    await notifications.instrument("sql.altair", { sql, bindings }, async () => {
+      await this.sql.unsafe(sql, bindings as unknown[]);
+    });
   }
 
   /**

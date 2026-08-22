@@ -9,12 +9,16 @@
  * bindings, then boot, then the app starts, then it terminates.
  */
 
-import { Secrets } from "@altair/support";
+import { Secrets, currentAttributes } from "@altair/support";
 import { Router, type Mapper } from "@altair/router";
 import {
+  MiddlewareStack,
   createDispatcher,
-  type ControllerRegistry,
+  forceSsl,
+  requestId,
+  securityHeaders,
   type ControllerContext,
+  type ControllerRegistry,
 } from "@altair/controller";
 import { connect, type Connection } from "@altair/orm";
 import { buildConfig, type ApplicationConfig } from "./config.js";
@@ -35,9 +39,27 @@ export interface ApplicationOptions extends Partial<ApplicationConfig> {
   routes?: (r: Mapper) => void;
   controllers?: ControllerRegistry;
   providers?: Provider[];
+  /** Replaces the default stack entirely. Rails' `config.middleware`. */
+  middleware?: (stack: MiddlewareStack) => void;
 }
 
 export type ErrorHandler = (error: unknown, request: Request) => Response | Promise<Response>;
+
+export interface CurrentState {
+  request?: Request;
+  /** Correlates every log line and query from one request. */
+  requestId?: string;
+  user?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * Per-request state, scoped by AsyncLocalStorage.
+ *
+ * Rails' `Current`. Every request gets its own, so a value set while handling
+ * one cannot be read while handling another.
+ */
+export const Current = currentAttributes<CurrentState>();
 
 export class Application {
   readonly config: ApplicationConfig;
@@ -46,6 +68,7 @@ export class Application {
 
   controllers: ControllerRegistry = {};
   providers: Provider[] = [];
+  readonly middleware = new MiddlewareStack();
 
   #connection: Connection | undefined;
   #booted = false;
@@ -53,14 +76,30 @@ export class Application {
   #onError: ErrorHandler | undefined;
 
   constructor(options: ApplicationOptions = {}) {
-    const { routes, controllers, providers, ...config } = options;
+    const { routes, controllers, providers, middleware, ...config } = options;
 
     this.config = buildConfig(config);
     this.secrets = new Secrets(this.config.secretKeyBase);
     this.controllers = controllers ?? {};
     this.providers = providers ?? [];
 
+    this.#defaultMiddleware();
+    middleware?.(this.middleware);
+
     if (routes) this.router.draw(routes);
+  }
+
+  /**
+   * The stack every application starts with.
+   *
+   * Rails ships a default stack for the same reason: the headers and redirects
+   * here are ones an application should not have to remember to add, and the
+   * ones it forgets are the ones that matter.
+   */
+  #defaultMiddleware(): void {
+    if (this.config.forceSsl) this.middleware.use("ssl", forceSsl());
+    this.middleware.use("requestId", requestId());
+    this.middleware.use("securityHeaders", securityHeaders());
   }
 
   get connection(): Connection {
@@ -124,12 +163,23 @@ export class Application {
       onError: (error, request) => this.#handleError(error, request),
     });
 
-    return async (request: Request) => {
+    // Built once: the closures are the same every request, and rebuilding them
+    // per request is work for nothing.
+    const stack = this.middleware.build(async (request) => {
       try {
         return await dispatch(request);
       } catch (error) {
         return await this.#handleError(error, request);
       }
+    });
+
+    return async (request: Request) => {
+      // Every request runs inside its own Current scope, so anything it sets
+      // is invisible to the requests running beside it.
+      return await Current.run(
+        { request, requestId: request.headers.get("x-request-id") ?? crypto.randomUUID() },
+        async () => await stack(request),
+      );
     };
   }
 

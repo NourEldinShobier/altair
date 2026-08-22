@@ -207,11 +207,15 @@ describe("errors", () => {
   });
 
   // A stack trace in a production response is an information leak.
+  //
+  // Requested over https, because production also turns on the forceSsl
+  // middleware and a plaintext request would be redirected before it ever
+  // reached an action to fail in.
   it("hides the detail in production", async () => {
     const application = await app({ env: "production", secretKeyBase: SECRET }).boot();
     running = application;
 
-    const response = await application.handler()(new Request("http://test.host/boom"));
+    const response = await application.handler()(new Request("https://test.host/boom"));
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Internal Server Error");
@@ -252,5 +256,71 @@ describe("composition", () => {
     const response = await fetch(`http://localhost:${server.port}/`);
 
     expect(await response.json()).toEqual({ ok: true });
+  });
+});
+
+describe("middleware", () => {
+  it("ships a default stack", () => {
+    expect(app().middleware.names).toContain("requestId");
+    expect(app().middleware.names).toContain("securityHeaders");
+  });
+
+  // Only in production, where the redirect is correct and useful.
+  it("adds ssl only when forceSsl is on", () => {
+    expect(app().middleware.has("ssl")).toBe(false);
+    expect(app({ forceSsl: true }).middleware.has("ssl")).toBe(true);
+  });
+
+  it("runs the stack around every request", async () => {
+    const application = await app().boot();
+    running = application;
+
+    const response = await application.handler()(new Request("http://test.host/"));
+
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-request-id")).toBeTruthy();
+  });
+
+  it("takes an application's own middleware", async () => {
+    const seen: string[] = [];
+    const application = await app({
+      middleware: (stack) =>
+        stack.use("audit", async (request, next) => {
+          seen.push(new URL(request.url).pathname);
+          return await next(request);
+        }),
+    }).boot();
+    running = application;
+
+    await application.handler()(new Request("http://test.host/"));
+    expect(seen).toEqual(["/"]);
+  });
+
+  it("lets a middleware answer before the router", async () => {
+    const application = await app({
+      middleware: (stack) =>
+        stack.unshift("maintenance", async () => new Response("down", { status: 503 })),
+    }).boot();
+    running = application;
+
+    const response = await application.handler()(new Request("http://test.host/"));
+    expect(response.status).toBe(503);
+  });
+});
+
+describe("current", () => {
+  // Two requests in flight must not see each other's state.
+  it("gives every request its own scope", async () => {
+    const application = await app().boot();
+    running = application;
+    const handler = application.handler();
+
+    const [first, second] = await Promise.all([
+      handler(new Request("http://test.host/", { headers: { "x-request-id": "one" } })),
+      handler(new Request("http://test.host/", { headers: { "x-request-id": "two" } })),
+    ]);
+
+    expect(first.headers.get("x-request-id")).toBe("one");
+    expect(second.headers.get("x-request-id")).toBe("two");
   });
 });
