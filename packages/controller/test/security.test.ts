@@ -79,7 +79,7 @@ describe("message verifier", () => {
   it("binds a message to its purpose", () => {
     const message = verifier.generate("value", "login");
 
-    expect(verifier.verified(message, "login")).toBe("value");
+    expect(verifier.verified<string>(message, "login")).toBe("value");
     expect(verifier.verified(message, "password-reset")).toBeNull();
     expect(verifier.verified(message)).toBeNull();
   });
@@ -99,7 +99,7 @@ describe("message encryptor", () => {
   const encryptor = new MessageEncryptor(key);
 
   it("round-trips a value", () => {
-    expect(encryptor.decrypt(encryptor.encrypt({ id: 7 }))).toEqual({ id: 7 });
+    expect(encryptor.decrypt<{ id: number }>(encryptor.encrypt({ id: 7 }))).toEqual({ id: 7 });
   });
 
   // The point of encrypting rather than signing: the client cannot read it.
@@ -124,7 +124,7 @@ describe("message encryptor", () => {
 
   it("binds to a purpose", () => {
     const message = encryptor.encrypt("value", "session");
-    expect(encryptor.decrypt(message, "session")).toBe("value");
+    expect(encryptor.decrypt<string>(message, "session")).toBe("value");
     expect(encryptor.decrypt(message, "other")).toBeNull();
   });
 
@@ -242,7 +242,7 @@ describe("signed and encrypted cookies", () => {
     const value = jar.toHeaders()[0]!.split("=")[1]!.split(";")[0]!;
     const next = jarFor(`user_id=${value}`);
 
-    expect(next.signed.get("user_id")).toBe(7);
+    expect(next.signed.get<number>("user_id")).toBe(7);
   });
 
   // A signed cookie is readable — that is the difference from encrypted.
@@ -267,7 +267,7 @@ describe("signed and encrypted cookies", () => {
     const value = jar.toHeaders()[0]!.split("=")[1]!.split(";")[0]!;
     const next = jarFor(`secret=${decodeURIComponent(value)}`);
 
-    expect(next.encrypted.get("secret")).toEqual({ role: "admin" });
+    expect(next.encrypted.get<{ role: string }>("secret")).toEqual({ role: "admin" });
   });
 
   it("hides an encrypted value", () => {

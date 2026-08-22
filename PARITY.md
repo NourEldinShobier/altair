@@ -32,7 +32,7 @@ Rails: 36,129 lines · 3,670 tests
 | CurrentAttributes           | —         | —           | todo     | `AsyncLocalStorage`                                 |
 | Core extensions             | 8,549     | —           | **n/a**  | JavaScript has these; port only what's load-bearing |
 | Duration / TimeWithZone     | ~1,200    | —           | todo     | `Temporal` where possible                           |
-| MessageEncryptor / Verifier | 576       | —           | **done** | AES-256-GCM, HMAC, PBKDF2 key derivation           |
+| MessageEncryptor / Verifier | 576       | —           | **done** | AES-256-GCM, HMAC, PBKDF2 key derivation            |
 | XmlMini                     | 650       | —           | **n/a**  | `Bun.XML`                                           |
 
 ## ActiveRecord → `@altair/orm`
