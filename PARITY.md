@@ -15,7 +15,7 @@ already provides it)
 
 |           | Tests ported | of Rails' |      |
 | --------- | ------------ | --------- | ---- |
-| **Total** | **544**      | 26,775    | 2.0% |
+| **Total** | **578**      | 26,775    | 2.2% |
 
 ---
 
@@ -26,8 +26,8 @@ Rails: 36,129 lines · 3,670 tests
 | Subsystem                   | Rails LOC | Rails tests | Status   | Notes                                               |
 | --------------------------- | --------- | ----------- | -------- | --------------------------------------------------- |
 | Inflector                   | 972       | ~120        | **done** | 544 tests, 246 fixture cases ported                 |
-| Callbacks                   | 1,048     | —           | **next** | Needed by models and controllers                    |
-| Cache                       | 3,951     | —           | todo     | Stores over `Bun.RedisClient`, SQLite, memory       |
+| Callbacks                   | 1,048     | 59          | **done** | 34 tests; async chains, halting, inheritance        |
+| Cache                       | 3,951     | —           | **next** | Stores over `Bun.RedisClient`, SQLite, memory       |
 | Notifications               | 769       | —           | todo     | Instrumentation bus                                 |
 | CurrentAttributes           | —         | —           | todo     | `AsyncLocalStorage`                                 |
 | Core extensions             | 8,549     | —           | **n/a**  | JavaScript has these; port only what's load-bearing |
