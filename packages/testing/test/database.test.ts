@@ -1,0 +1,184 @@
+/**
+ * Transactional tests and test databases.
+ *
+ * Mirrors activerecord/test/cases/transactional_tests_test.rb and the setup
+ * half of fixtures_test.rb. The load-bearing case is the pair of tests that
+ * write the same row: if isolation is broken they pass in isolation and fail
+ * together, which is the worst failure a test helper can have.
+ */
+
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { Model, connection, type SchemaDefinition } from "@altair/orm";
+import { TestDatabase, transactionalTests } from "../src/database.js";
+
+const SCHEMA: SchemaDefinition = {
+  version: "20260101000001",
+  tables: [
+    {
+      name: "posts",
+      columns: [
+        { name: "id", type: "INTEGER", nullable: false, default: null, primaryKey: true },
+        { name: "title", type: "VARCHAR(255)", nullable: false, default: null, primaryKey: false },
+        { name: "views", type: "INTEGER", nullable: true, default: "0", primaryKey: false },
+      ],
+      indexes: [],
+    },
+  ],
+};
+
+interface PostRow {
+  id: number;
+  title: string;
+  views: number | null;
+}
+
+class Post extends Model<PostRow>("posts") {}
+
+describe("preparing a test database", () => {
+  it("creates every table in the schema", async () => {
+    const database = await TestDatabase.prepare(SCHEMA);
+
+    expect(database.tables).toEqual(["posts"]);
+    expect(await database.count("posts")).toBe(0);
+
+    await database.close();
+  });
+
+  // The point of preparing from a dump rather than replaying migrations.
+  it("records the schema version", async () => {
+    const database = await TestDatabase.prepare(SCHEMA);
+
+    const rows = await database.connection.query<{ version: string }>(
+      "SELECT version FROM schema_migrations",
+    );
+    expect(rows[0]?.version).toBe("20260101000001");
+
+    await database.close();
+  });
+
+  it("becomes the connection models use", async () => {
+    const database = await TestDatabase.prepare(SCHEMA);
+
+    expect(connection()).toBe(database.connection);
+
+    await database.close();
+  });
+
+  it("leaves the global connection alone when asked to", async () => {
+    const before = connection();
+    const database = await TestDatabase.prepare(SCHEMA, { global: false });
+
+    expect(connection()).toBe(before);
+
+    await database.close();
+  });
+});
+
+describe("transactional tests", () => {
+  let database: TestDatabase;
+
+  beforeAll(async () => {
+    database = await TestDatabase.prepare(SCHEMA);
+  });
+
+  afterAll(async () => {
+    await database.close();
+  });
+
+  const { setup, teardown } = transactionalTests(() => database);
+  beforeEach(setup);
+  afterEach(teardown);
+
+  // These two are a pair. Either both pass, or isolation does not work.
+  it("writes a record", async () => {
+    await Post.create({ title: "First" });
+    expect(await Post.count()).toBe(1);
+  });
+
+  it("does not see what the previous test wrote", async () => {
+    expect(await Post.count()).toBe(0);
+  });
+
+  it("rolls back a record created in a helper too", async () => {
+    await Post.create({ title: "From a helper" });
+    await Post.create({ title: "And another" });
+    expect(await Post.count()).toBe(2);
+  });
+
+  it("still starts empty", async () => {
+    expect(await Post.count()).toBe(0);
+  });
+
+  // A test that opens its own transaction nests inside the test's, rather than
+  // committing through it — which would leak past the rollback.
+  it("allows a transaction inside a test", async () => {
+    await Post.transaction(async () => {
+      await Post.create({ title: "Inside" });
+    });
+
+    expect(await Post.count()).toBe(1);
+  });
+
+  it("rolls back a nested transaction that committed", async () => {
+    expect(await Post.count()).toBe(0);
+  });
+});
+
+describe("transaction bookkeeping", () => {
+  it("refuses to open a second transaction", async () => {
+    const database = await TestDatabase.prepare(SCHEMA, { global: false });
+    await database.begin();
+
+    await expect(database.begin()).rejects.toThrow("already open");
+
+    await database.close();
+  });
+
+  it("tolerates a rollback with nothing open", async () => {
+    const database = await TestDatabase.prepare(SCHEMA, { global: false });
+
+    await database.rollback();
+
+    await database.close();
+  });
+
+  it("rolls back on close", async () => {
+    const database = await TestDatabase.prepare(SCHEMA);
+    await database.begin();
+    await Post.create({ title: "Never committed" });
+
+    await database.close();
+  });
+});
+
+describe("the truncation strategy", () => {
+  let database: TestDatabase;
+
+  beforeAll(async () => {
+    database = await TestDatabase.prepare(SCHEMA, { strategy: "truncation" });
+  });
+
+  afterAll(async () => {
+    await database.close();
+  });
+
+  const { setup, teardown } = transactionalTests(() => database);
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it("writes a record", async () => {
+    await Post.create({ title: "First" });
+    expect(await Post.count()).toBe(1);
+  });
+
+  it("starts from an empty table", async () => {
+    expect(await Post.count()).toBe(0);
+  });
+
+  // Ids climbing across tests would make an assertion about id 1 depend on
+  // which tests ran before it.
+  it("restarts the primary key", async () => {
+    const post = await Post.create({ title: "First again" });
+    expect(post.id).toBe(1);
+  });
+});

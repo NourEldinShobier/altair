@@ -28,6 +28,8 @@ export class Connection {
   readonly sql: SQL;
 
   #closed = false;
+  #inTransaction = false;
+  #savepoints = 0;
 
   constructor(url: string, sql?: SQL) {
     this.url = url;
@@ -76,12 +78,65 @@ export class Connection {
    *
    * The callback receives a Connection bound to the transaction, so anything
    * it touches joins the same transaction rather than the pool.
+   *
+   * Nesting is a savepoint, as it is in Rails: an inner block that throws
+   * undoes only its own work, and the outer transaction carries on. A database
+   * has no nested BEGIN — Bun says as much — so without this a model method
+   * that opens a transaction could not be called from another one.
    */
   async transaction<T>(body: (connection: Connection) => Promise<T>): Promise<T> {
+    if (this.#inTransaction) return await this.#withSavepoint(body);
+
     return (await this.sql.begin(async (tx: SQL) => {
       const scoped = new Connection(this.url, tx);
+      scoped.#inTransaction = true;
       return await body(scoped);
     })) as T;
+  }
+
+  async #withSavepoint<T>(body: (connection: Connection) => Promise<T>): Promise<T> {
+    this.#savepoints += 1;
+    const name = `altair_savepoint_${this.#savepoints}`;
+
+    await this.execute(`SAVEPOINT ${name}`);
+    try {
+      const result = await body(this);
+      await this.execute(`RELEASE SAVEPOINT ${name}`);
+      return result;
+    } catch (error) {
+      await this.execute(`ROLLBACK TO SAVEPOINT ${name}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Opens a transaction that outlives this call.
+   *
+   * `transaction()` covers everything an application needs, because a block
+   * has an end. A test does not: the transaction has to open in one hook and
+   * roll back in another, with the test body in between.
+   */
+  async beginTransaction(): Promise<void> {
+    await this.execute("BEGIN");
+    this.#inTransaction = true;
+  }
+
+  /** Discards everything since `beginTransaction`. */
+  async rollbackTransaction(): Promise<void> {
+    await this.execute("ROLLBACK");
+    this.#inTransaction = false;
+    this.#savepoints = 0;
+  }
+
+  /** Keeps everything since `beginTransaction`. */
+  async commitTransaction(): Promise<void> {
+    await this.execute("COMMIT");
+    this.#inTransaction = false;
+    this.#savepoints = 0;
+  }
+
+  get isInTransaction(): boolean {
+    return this.#inTransaction;
   }
 
   /**

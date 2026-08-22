@@ -219,6 +219,97 @@ describe("transactions", () => {
     expect(await Post.transaction(async () => "done")).toBe("done");
   });
 
+  // A database has no nested BEGIN, so without savepoints a model method that
+  // opens a transaction could not be called from another one — which is not a
+  // rule anyone could follow.
+  it("nests", async () => {
+    await Post.transaction(async () => {
+      await Post.create({ title: "D", category: "tech" });
+      await Post.transaction(async () => {
+        await Post.create({ title: "E", category: "tech" });
+      });
+    });
+
+    expect(await Post.count()).toBe(5);
+  });
+
+  it("undoes only the inner block when it throws", async () => {
+    await Post.transaction(async () => {
+      await Post.create({ title: "D", category: "tech" });
+
+      await expect(
+        Post.transaction(async () => {
+          await Post.create({ title: "E", category: "tech" });
+          throw new Error("nope");
+        }),
+      ).rejects.toThrow("nope");
+    });
+
+    expect(await Post.count()).toBe(4);
+    expect(await Post.exists({ title: "D" })).toBe(true);
+    expect(await Post.exists({ title: "E" })).toBe(false);
+  });
+
+  it("undoes the inner block too when the outer one throws", async () => {
+    await expect(
+      Post.transaction(async () => {
+        await Post.transaction(async () => {
+          await Post.create({ title: "D", category: "tech" });
+        });
+        throw new Error("nope");
+      }),
+    ).rejects.toThrow("nope");
+
+    expect(await Post.count()).toBe(3);
+  });
+
+  it("nests more than one level", async () => {
+    await Post.transaction(async () => {
+      await Post.transaction(async () => {
+        await Post.transaction(async () => {
+          await Post.create({ title: "D", category: "tech" });
+        });
+      });
+    });
+
+    expect(await Post.count()).toBe(4);
+  });
+
+  // The transaction has to open in one place and close in another for a test
+  // helper to wrap a test body in it.
+  it("can be opened and rolled back by hand", async () => {
+    await connection.beginTransaction();
+    expect(connection.isInTransaction).toBe(true);
+
+    await Post.create({ title: "D", category: "tech" });
+    expect(await Post.count()).toBe(4);
+
+    await connection.rollbackTransaction();
+
+    expect(connection.isInTransaction).toBe(false);
+    expect(await Post.count()).toBe(3);
+  });
+
+  it("nests inside a transaction opened by hand", async () => {
+    await connection.beginTransaction();
+
+    await Post.transaction(async () => {
+      await Post.create({ title: "D", category: "tech" });
+    });
+    expect(await Post.count()).toBe(4);
+
+    await connection.rollbackTransaction();
+    expect(await Post.count()).toBe(3);
+  });
+
+  it("commits one opened by hand", async () => {
+    await connection.beginTransaction();
+    await Post.create({ title: "D", category: "tech" });
+    await connection.commitTransaction();
+
+    expect(await Post.count()).toBe(4);
+  });
+
   // The connection is swapped for the duration, so it has to be restored even
   // when the block throws.
   it("restores the connection afterwards", async () => {

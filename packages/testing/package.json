@@ -1,0 +1,11 @@
+{
+  "name": "@altair/testing",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@altair/orm": "workspace:*"
+  }
+}
