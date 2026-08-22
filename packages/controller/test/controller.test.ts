@@ -429,3 +429,69 @@ describe("validate", () => {
     await expect(params.validate(postSchema)).rejects.toThrow("title is required");
   });
 });
+
+describe("view rendering", () => {
+  // The hypermedia path: TSX straight to a document, no client framework.
+  it("renders TSX to a document", async () => {
+    class PagesController extends Controller {
+      async show(): Promise<void> {
+        await this.render.view({
+          type: "html",
+          props: { lang: "en", children: { type: "h1", props: { children: "Hello" } } },
+        });
+      }
+    }
+
+    const response = await new PagesController({ request: get() }).processAction("show");
+
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(await response.text()).toBe('<!DOCTYPE html><html lang="en"><h1>Hello</h1></html>');
+  });
+
+  it("renders an Inertia page as JSON for a visit", async () => {
+    class PostsController extends Controller {
+      async index(): Promise<void> {
+        await this.render.inertia("Posts/Index", { total: 2 });
+      }
+    }
+
+    const request = new Request("http://test.host/posts", { headers: { "x-inertia": "true" } });
+    const response = await new PostsController({ request }).processAction("index");
+
+    expect(await response.json()).toMatchObject({
+      component: "Posts/Index",
+      props: { total: 2 },
+    });
+  });
+
+  it("renders an Inertia page as HTML on first load", async () => {
+    class PostsController extends Controller {
+      async index(): Promise<void> {
+        await this.render.inertia("Posts/Index", { total: 2 });
+      }
+    }
+
+    const response = await new PostsController({ request: get() }).processAction("index");
+    expect(await response.text()).toContain('id="app"');
+  });
+
+  // Rendering a view still counts as responding, so filters halt on it.
+  it("halts the filter chain when a filter renders a view", async () => {
+    const order: string[] = [];
+
+    class GuardedController extends Controller {
+      @beforeAction
+      async gate(): Promise<void> {
+        order.push("filter");
+        await this.render.view({ type: "p", props: { children: "denied" } });
+      }
+
+      index(): void {
+        order.push("action");
+      }
+    }
+
+    await new GuardedController({ request: get() }).processAction("index");
+    expect(order).toEqual(["filter"]);
+  });
+});

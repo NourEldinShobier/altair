@@ -23,6 +23,7 @@ import {
   skipCallback,
 } from "@altair/support";
 import { Parameters } from "./parameters.js";
+import { renderDocument, renderInertia, type InertiaOptions, type Node } from "@altair/view";
 
 export type ActionName = string;
 
@@ -165,6 +166,30 @@ export class Controller extends Callbacks {
           headers: { "content-type": "text/html; charset=utf-8", ...init.headers },
         }),
       ),
+
+    /**
+     * Renders TSX to a full HTML document. The hypermedia path: no client
+     * framework, no hydration payload.
+     */
+    view: async (node: Node, init: ResponseInit = {}): Promise<Response> =>
+      this.#setResponse(
+        new Response(await renderDocument(node), {
+          status: 200,
+          ...init,
+          headers: { "content-type": "text/html; charset=utf-8", ...init.headers },
+        }),
+      ),
+
+    /**
+     * Renders an Inertia page: typed props to the client framework, with the
+     * first load served as HTML and later visits as JSON.
+     */
+    inertia: async (
+      component: string,
+      props: Record<string, unknown> = {},
+      options: InertiaOptions = {},
+    ): Promise<Response> =>
+      this.#setResponse(await renderInertia(this.request, component, props, options)),
   };
 
   /** Rails' `redirect_to`. Defaults to 302, as Rails does. */

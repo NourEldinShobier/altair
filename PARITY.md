@@ -15,7 +15,7 @@ already provides it)
 
 |           | Tests ported | of Rails' |      |
 | --------- | ------------ | --------- | ---- |
-| **Total** | **790**      | 26,775    | 2.9% |
+| **Total** | **833**      | 26,775    | 3.1% |
 
 ---
 
@@ -75,8 +75,8 @@ Rails: 21,159 lines · 2,699 tests
 | Subsystem                          | Rails LOC | Status  | Notes                                |
 | ---------------------------------- | --------- | ------- | ------------------------------------ |
 | Helpers (form, tag, asset, number) | 13,926    | **n/a** | TSX composes; these disappear        |
-| Template resolution & layouts      | 2,356     | todo    | Layouts and partials are components  |
-| Renderer                           | 1,178     | todo    | TSX → string; Inertia protocol; JSON |
+| Template resolution & layouts      | 2,356     | **done** | Layouts and partials are components |
+| Renderer                           | 1,178     | **done** | TSX → string; Inertia protocol; JSON |
 | Number/date formatting             | ~1,000    | todo    | `Intl`                               |
 
 ## Everything else

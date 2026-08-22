@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "@altair/router": "workspace:*",
-    "@altair/support": "workspace:*"
+    "@altair/support": "workspace:*",
+    "@altair/view": "workspace:*"
   }
 }

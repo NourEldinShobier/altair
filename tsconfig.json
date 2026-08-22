@@ -11,7 +11,9 @@
     "noImplicitOverride": true,
     "skipLibCheck": true,
     "lib": ["ESNext"],
-    "types": ["bun"]
+    "types": ["bun"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "@altair/view"
   },
   "include": ["packages/**/*.ts", "tools/**/*.ts"]
 }
