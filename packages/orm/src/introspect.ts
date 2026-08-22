@@ -70,7 +70,8 @@ export async function currentVersion(connection: Connection): Promise<string | n
   }
 }
 
-async function tableNames(connection: Connection): Promise<string[]> {
+/** Every table in the database, framework-owned ones included. */
+export async function tableNames(connection: Connection): Promise<string[]> {
   switch (connection.adapter) {
     case "sqlite": {
       const rows = await connection.query<Row>(
@@ -128,22 +129,22 @@ async function columnsOf(connection: Connection, table: string): Promise<ColumnS
 }
 
 async function primaryKeysOf(connection: Connection, table: string): Promise<string[]> {
+  // The parentheses are load-bearing. Without them the OR binds looser than
+  // the AND, and MySQL — which names every table's primary key constraint
+  // PRIMARY — reports the primary key of every table in the database.
   const rows = await connection.query<Row>(
     `SELECT column_name AS name
      FROM information_schema.key_column_usage
-     WHERE table_name = ${connection.placeholder(0)} AND constraint_name LIKE '%pkey%' OR constraint_name = 'PRIMARY'`,
+     WHERE table_name = ${connection.placeholder(0)}
+       AND (constraint_name LIKE '%pkey%' OR constraint_name = 'PRIMARY')`,
     [table],
   );
   return rows.map((row) => String(row.name));
 }
 
 async function indexesOf(connection: Connection, table: string): Promise<IndexSchema[]> {
-  if (connection.adapter !== "sqlite") {
-    // ponytail: indexes are dumped for SQLite only. Postgres and MySQL each
-    // need their own catalog query, and the dump is still correct without
-    // them — it just does not recreate indexes on those adapters yet.
-    return [];
-  }
+  if (connection.adapter === "postgres") return await postgresIndexes(connection, table);
+  if (connection.adapter === "mysql") return await mysqlIndexes(connection, table);
 
   const list = await connection.query<Row>(`PRAGMA index_list(${connection.quote(table)})`);
   const indexes: IndexSchema[] = [];
@@ -163,4 +164,57 @@ async function indexesOf(connection: Connection, table: string): Promise<IndexSc
   }
 
   return indexes.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Groups catalog rows, one per index column, into indexes.
+ *
+ * Both server catalogs report an index as one row per column, already in
+ * position order, so the grouping is the same for either.
+ */
+function groupIndexColumns(rows: readonly Row[]): IndexSchema[] {
+  const indexes = new Map<string, IndexSchema>();
+
+  for (const row of rows) {
+    const name = String(row.name);
+    const existing = indexes.get(name);
+
+    if (existing) existing.columns.push(String(row.column));
+    else indexes.set(name, { name, columns: [String(row.column)], unique: Boolean(row.unique) });
+  }
+
+  return [...indexes.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function postgresIndexes(connection: Connection, table: string): Promise<IndexSchema[]> {
+  // unnest WITH ORDINALITY keeps the columns in the order the index declares
+  // them, which a plain join against pg_attribute would lose — and a two-column
+  // index dumped in the wrong order is a different index.
+  const rows = await connection.query<Row>(
+    `SELECT i.relname AS name, ix.indisunique AS unique, a.attname AS column
+     FROM pg_class t
+     JOIN pg_index ix ON t.oid = ix.indrelid
+     JOIN pg_class i ON i.oid = ix.indexrelid
+     JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+     JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+     WHERE t.relname = ${connection.placeholder(0)} AND NOT ix.indisprimary
+     ORDER BY i.relname, k.ord`,
+    [table],
+  );
+
+  return groupIndexColumns(rows);
+}
+
+async function mysqlIndexes(connection: Connection, table: string): Promise<IndexSchema[]> {
+  const rows = await connection.query<Row>(
+    `SELECT index_name AS name, (non_unique = 0) AS \`unique\`, column_name AS \`column\`
+     FROM information_schema.statistics
+     WHERE table_schema = DATABASE()
+       AND table_name = ${connection.placeholder(0)}
+       AND index_name <> 'PRIMARY'
+     ORDER BY index_name, seq_in_index`,
+    [table],
+  );
+
+  return groupIndexColumns(rows);
 }

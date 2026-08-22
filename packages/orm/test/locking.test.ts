@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 import { SchemaStatements } from "../src/schema.js";
 import { Model, StaleObjectError } from "../src/model.js";
 
@@ -31,7 +32,7 @@ class Note extends Model<NoteAttributes>("notes") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Person.columnCache = undefined;
   Note.columnCache = undefined;

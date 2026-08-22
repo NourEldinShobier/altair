@@ -35,6 +35,70 @@ jobs:
       - name: Run tests
         run: bun test --parallel --shard=${{ matrix.shard }}/2
 
+  # Rails runs its suite against every adapter it supports, because an adapter
+  # branch that never executes is a branch nobody has checked. The SQLite legs
+  # above cover the whole framework; these cover the ORM against real servers.
+  adapters:
+    name: orm (${{ matrix.adapter }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: postgres
+            url: postgres://altair:altair@localhost:5432/altair_test
+          - adapter: mysql
+            url: mysql://altair:altair@localhost:3306/altair_test
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: altair
+          POSTGRES_PASSWORD: altair
+          POSTGRES_DB: altair_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      # MariaDB rather than MySQL 9. MySQL 8 and later default to
+      # caching_sha2_password, which needs either TLS or a client that will
+      # fetch the server's public key over an insecure connection. Weakening
+      # the client to test it is the wrong trade; MariaDB is a first-class
+      # target for the same adapter.
+      mysql:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: altair
+          MARIADB_USER: altair
+          MARIADB_PASSWORD: altair
+          MARIADB_DATABASE: altair_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - run: bun install --frozen-lockfile
+
+      # Not --parallel: these legs share one database, and a test file that
+      # drops another file's tables mid-run is a failure nobody can reproduce.
+      - name: Run the ORM suite
+        run: bun test packages/orm packages/testing
+        env:
+          ALTAIR_TEST_DATABASE_URL: ${{ matrix.url }}
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest

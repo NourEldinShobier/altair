@@ -11,6 +11,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { Model, connection, type SchemaDefinition } from "@altair/orm";
 import { TestDatabase, transactionalTests } from "../src/database.js";
 
+// Set by CI to run this suite against a real server, where a transaction
+// has to be pinned to one pooled connection to isolate anything.
+const url = process.env.ALTAIR_TEST_DATABASE_URL;
+
 const SCHEMA: SchemaDefinition = {
   version: "20260101000001",
   tables: [
@@ -36,7 +40,7 @@ class Post extends Model<PostRow>("posts") {}
 
 describe("preparing a test database", () => {
   it("creates every table in the schema", async () => {
-    const database = await TestDatabase.prepare(SCHEMA);
+    const database = await TestDatabase.prepare(SCHEMA, { url });
 
     expect(database.tables).toEqual(["posts"]);
     expect(await database.count("posts")).toBe(0);
@@ -46,7 +50,7 @@ describe("preparing a test database", () => {
 
   // The point of preparing from a dump rather than replaying migrations.
   it("records the schema version", async () => {
-    const database = await TestDatabase.prepare(SCHEMA);
+    const database = await TestDatabase.prepare(SCHEMA, { url });
 
     const rows = await database.connection.query<{ version: string }>(
       "SELECT version FROM schema_migrations",
@@ -57,7 +61,7 @@ describe("preparing a test database", () => {
   });
 
   it("becomes the connection models use", async () => {
-    const database = await TestDatabase.prepare(SCHEMA);
+    const database = await TestDatabase.prepare(SCHEMA, { url });
 
     expect(connection()).toBe(database.connection);
 
@@ -66,7 +70,7 @@ describe("preparing a test database", () => {
 
   it("leaves the global connection alone when asked to", async () => {
     const before = connection();
-    const database = await TestDatabase.prepare(SCHEMA, { global: false });
+    const database = await TestDatabase.prepare(SCHEMA, { url, global: false });
 
     expect(connection()).toBe(before);
 
@@ -78,7 +82,7 @@ describe("transactional tests", () => {
   let database: TestDatabase;
 
   beforeAll(async () => {
-    database = await TestDatabase.prepare(SCHEMA);
+    database = await TestDatabase.prepare(SCHEMA, { url });
   });
 
   afterAll(async () => {
@@ -126,7 +130,7 @@ describe("transactional tests", () => {
 
 describe("transaction bookkeeping", () => {
   it("refuses to open a second transaction", async () => {
-    const database = await TestDatabase.prepare(SCHEMA, { global: false });
+    const database = await TestDatabase.prepare(SCHEMA, { url, global: false });
     await database.begin();
 
     await expect(database.begin()).rejects.toThrow("already open");
@@ -135,7 +139,7 @@ describe("transaction bookkeeping", () => {
   });
 
   it("tolerates a rollback with nothing open", async () => {
-    const database = await TestDatabase.prepare(SCHEMA, { global: false });
+    const database = await TestDatabase.prepare(SCHEMA, { url, global: false });
 
     await database.rollback();
 
@@ -143,7 +147,7 @@ describe("transaction bookkeeping", () => {
   });
 
   it("rolls back on close", async () => {
-    const database = await TestDatabase.prepare(SCHEMA);
+    const database = await TestDatabase.prepare(SCHEMA, { url });
     await database.begin();
     await Post.create({ title: "Never committed" });
 
@@ -155,7 +159,7 @@ describe("the truncation strategy", () => {
   let database: TestDatabase;
 
   beforeAll(async () => {
-    database = await TestDatabase.prepare(SCHEMA, { strategy: "truncation" });
+    database = await TestDatabase.prepare(SCHEMA, { url, strategy: "truncation" });
   });
 
   afterAll(async () => {

@@ -23,6 +23,8 @@ import { tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions } from "./relation.js";
+import { columnTypeFor } from "./dump.js";
+import type { ColumnType } from "./schema.js";
 import {
   runValidation,
   type ValidationDeclaration,
@@ -216,6 +218,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     static primaryKey = options.primaryKey ?? "id";
     static connectionOverride: Connection | undefined = options.connection;
     static columnCache: string[] | undefined;
+    static columnTypeCache: Record<string, ColumnType> | undefined;
     static associations: Record<string, AssociationDefinition> = {};
     static validations: ValidationDeclaration[] = [];
 
@@ -252,6 +255,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // this single-table inheritance rather than two tables.
       this.tableName = root.table;
       this.columnCache = undefined;
+      this.columnTypeCache = undefined;
 
       // Copy on write, so a hierarchy under one root cannot see another's.
       if (!Object.hasOwn(root, "descendants")) root.descendants = { ...root.descendants };
@@ -373,6 +377,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         tableName: this.table,
         primaryKey: this.primaryKey,
         instantiate: (row: Row) => this.instantiate(row) as InstanceType<M>,
+        // Column types have to be known before a row can be cast, and reading
+        // them is asynchronous while instantiate is not.
+        prepare: async () => {
+          await this.columnTypes();
+        },
         preload: async (records, names) => {
           for (const name of names) {
             const definition = this.associationFor(name);
@@ -648,15 +657,12 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * connection is swapped for the duration.
      */
     static async transaction<R>(body: () => Promise<R>): Promise<R> {
-      const outer = this.connectionOverride;
-      return await this.connection.transaction(async (tx) => {
-        this.connectionOverride = tx;
-        try {
-          return await body();
-        } finally {
-          this.connectionOverride = outer;
-        }
-      });
+      // No swapping of `connectionOverride`: that is a static, so two requests
+      // in a transaction at once would overwrite each other's. The connection
+      // is scoped to the async call chain instead, which is per-request by
+      // construction and reaches every model the block touches, not just this
+      // one.
+      return await this.connection.transaction(async () => await body());
     }
 
     /** Deletes every matching row, running callbacks for each. Rails' `destroy_all`. */
@@ -705,6 +711,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * STI worth having rather than a column people check by hand.
      */
     static instantiate<M extends typeof BaseModel>(this: M, row: Row): InstanceType<M> {
+      row = this.castRow(row);
       const declared = row[this.inheritanceColumn];
 
       if (typeof declared === "string" && declared !== this.name) {
@@ -1009,7 +1016,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     protected async insertRecord(klass: typeof BaseModel): Promise<void> {
       const connection = klass.connection;
-      const now = new Date().toISOString();
+      await klass.columnTypes();
+      const now = new Date();
 
       // Rails maintains these automatically when the columns exist.
       if (await klass.hasTimestamps()) {
@@ -1031,25 +1039,36 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const table = connection.quote(klass.table);
       const columns = entries.map(([key]) => connection.quote(key)).join(", ");
       const placeholders = entries.map((_, index) => connection.placeholder(index)).join(", ");
-      const bindings = entries.map(([, value]) => serialize(value));
+      const bindings = entries.map(([, value]) => serialize(value, connection));
 
       if (entries.length === 0) {
-        await connection.execute(`INSERT INTO ${table} DEFAULT VALUES`);
+        // MySQL has no DEFAULT VALUES; an empty column list means the same.
+        const empty =
+          connection.adapter === "mysql"
+            ? `INSERT INTO ${table} () VALUES ()`
+            : `INSERT INTO ${table} DEFAULT VALUES`;
+        await connection.execute(empty);
       } else if (connection.supportsReturning) {
         const rows = await connection.query<Row>(
           `INSERT INTO ${table} (${columns}) VALUES (${placeholders}) RETURNING *`,
           bindings,
         );
-        if (rows[0]) this[ATTRIBUTES] = { ...rows[0] };
+        if (rows[0]) this[ATTRIBUTES] = klass.castRow(rows[0]);
       } else {
-        await connection.execute(
-          `INSERT INTO ${table} (${columns}) VALUES (${placeholders})`,
-          bindings,
-        );
-        const rows = await connection.query<Row>(
-          `SELECT * FROM ${table} WHERE ${connection.quote(klass.primaryKey)} = LAST_INSERT_ID()`,
-        );
-        if (rows[0]) this[ATTRIBUTES] = { ...rows[0] };
+        // LAST_INSERT_ID() answers for the connection that ran the INSERT, and
+        // a pool is free to hand the follow-up read a different one. The
+        // transaction pins both to the same connection; inside an open
+        // transaction it costs only a savepoint.
+        await connection.transaction(async (scoped) => {
+          await scoped.execute(
+            `INSERT INTO ${table} (${columns}) VALUES (${placeholders})`,
+            bindings,
+          );
+          const rows = await scoped.query<Row>(
+            `SELECT * FROM ${table} WHERE ${connection.quote(klass.primaryKey)} = LAST_INSERT_ID()`,
+          );
+          if (rows[0]) this[ATTRIBUTES] = klass.castRow(rows[0]);
+        });
       }
 
       this[PERSISTED] = true;
@@ -1060,7 +1079,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = klass.connection;
       const changes = this.changedAttributes() as Record<string, unknown>;
 
-      if (await klass.hasTimestamps()) changes.updated_at = new Date().toISOString();
+      if (await klass.hasTimestamps()) changes.updated_at = new Date();
       if (Object.keys(changes).length === 0) return;
 
       // Optimistic locking: the version the record was read at goes in the
@@ -1074,7 +1093,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const assignments = entries
         .map(([key], index) => `${connection.quote(key)} = ${connection.placeholder(index)}`)
         .join(", ");
-      const bindings = entries.map(([, value]) => serialize(value));
+      const bindings = entries.map(([, value]) => serialize(value, connection));
       bindings.push(this[ATTRIBUTES][klass.primaryKey]);
 
       let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`;
@@ -1094,7 +1113,10 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         await connection.execute(sql, bindings);
       }
 
-      Object.assign(this[ATTRIBUTES], changes);
+      // Cast on the way back in: the binding went out in the adapter's own
+      // spelling, and an attribute has to hold what its type promises. A raw
+      // MySQL timestamp left in memory would not even sort against an ISO one.
+      Object.assign(this[ATTRIBUTES], klass.castRow(changes as Row));
       this[ORIGINAL] = { ...this[ATTRIBUTES] };
     }
 
@@ -1118,14 +1140,16 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     async reload(): Promise<void> {
       const klass = this.constructor as typeof BaseModel;
       const connection = klass.connection;
+      await klass.columnTypes();
       const rows = await connection.query<Row>(
         `SELECT * FROM ${connection.quote(klass.table)} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(0)}`,
         [this[ATTRIBUTES][klass.primaryKey]],
       );
       if (!rows[0]) throw new RecordNotFound(`${klass.name} no longer exists`);
 
-      this[ATTRIBUTES] = { ...rows[0] };
-      this[ORIGINAL] = { ...rows[0] };
+      const row = klass.castRow(rows[0]);
+      this[ATTRIBUTES] = row;
+      this[ORIGINAL] = { ...row };
       this[PERSISTED] = true;
     }
 
@@ -1137,30 +1161,61 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      */
     static async columnNames(): Promise<string[]> {
       if (this.columnCache) return this.columnCache;
-      const connection = this.connection;
-      const probe = await connection.query<Row>(
-        `SELECT * FROM ${connection.quote(this.table)} LIMIT 0`,
-      );
-      void probe;
       this.columnCache = await this.readColumns();
       return this.columnCache;
     }
 
     static async readColumns(): Promise<string[]> {
+      return Object.keys(await this.columnTypes());
+    }
+
+    /**
+     * Each column's logical type, read once per class.
+     *
+     * Needed because a driver's idea of a value is not the same on every
+     * database: PostgreSQL hands back a bigint as a string, because one can be
+     * larger than a JavaScript number holds, and a timestamp as a Date.
+     */
+    static async columnTypes(): Promise<Record<string, ColumnType>> {
+      if (this.columnTypeCache) return this.columnTypeCache;
+
       const connection = this.connection;
-      switch (connection.adapter) {
-        case "sqlite": {
-          const rows = await connection.query<Row>(`PRAGMA table_info(${this.table})`);
-          return rows.map((row) => String(row.name));
-        }
-        default: {
-          const rows = await connection.query<Row>(
-            "SELECT column_name AS name FROM information_schema.columns WHERE table_name = $1",
-            [this.table],
-          );
-          return rows.map((row) => String(row.name));
-        }
+      const rows =
+        connection.adapter === "sqlite"
+          ? await connection.query<Row>(`PRAGMA table_info(${connection.quote(this.table)})`)
+          : await connection.query<Row>(
+              `SELECT column_name AS name, data_type AS type
+               FROM information_schema.columns
+               WHERE table_name = ${connection.placeholder(0)}
+               ORDER BY ordinal_position`,
+              [this.table],
+            );
+
+      const types: Record<string, ColumnType> = {};
+      for (const row of rows) types[String(row.name)] = columnTypeFor(String(row.type));
+
+      this.columnTypeCache = types;
+      return types;
+    }
+
+    /**
+     * Turns a driver's row into the shape the attribute types promise.
+     *
+     * The generated types say a bigint column is a number and a timestamp is a
+     * string. Without this that is true on SQLite and false on PostgreSQL,
+     * which is the kind of difference that only shows up in production.
+     */
+    static castRow(row: Row): Row {
+      const types = this.columnTypeCache;
+      if (!types) return row;
+
+      const cast: Row = {};
+
+      for (const [key, value] of Object.entries(row)) {
+        cast[key] = castValue(value, types[key]);
       }
+
+      return cast;
     }
 
     static async hasTimestamps(): Promise<boolean> {
@@ -1170,6 +1225,39 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
   }
 
   return BaseModel as unknown as ModelClass<A>;
+}
+
+/**
+ * Casts one value to what its column's type promises.
+ *
+ * Only the differences a driver introduces are corrected. A column whose type
+ * is unknown is left exactly as it arrived.
+ */
+function castValue(value: unknown, type: ColumnType | undefined): unknown {
+  if (value === null || value === undefined || type === undefined) return value;
+
+  switch (type) {
+    case "integer":
+    case "bigint":
+    case "float":
+    case "decimal": {
+      // PostgreSQL returns a bigint as a string, because one can be larger
+      // than a JavaScript number holds. Anything that would lose precision
+      // keeps the string it arrived as rather than being quietly rounded.
+      if (typeof value !== "string") return value;
+      const numeric = Number(value);
+      return Number.isSafeInteger(numeric) || (type === "float" && Number.isFinite(numeric))
+        ? numeric
+        : value;
+    }
+
+    case "datetime":
+    case "date":
+      return value instanceof Date ? value.toISOString() : value;
+
+    default:
+      return value;
+  }
 }
 
 /** Moves a parent's counter cache by one when a child is created or destroyed. */
@@ -1203,9 +1291,22 @@ async function adjustCounter(
   );
 }
 
+/**
+ * A timestamp in the adapter's own spelling.
+ *
+ * MySQL rejects ISO 8601 outright: it wants `2026-01-01 12:00:00`, not the
+ * same instant with a T and a Z in it.
+ */
+function formatTimestamp(connection: Connection, date: Date): string {
+  const iso = date.toISOString();
+  return connection.adapter === "mysql" ? iso.slice(0, 23).replace("T", " ") : iso;
+}
+
 /** Values the database cannot store directly are serialized on the way in. */
-function serialize(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString();
+function serialize(value: unknown, connection?: Connection): unknown {
+  if (value instanceof Date) {
+    return connection ? formatTimestamp(connection, value) : value.toISOString();
+  }
   if (typeof value === "boolean") return value ? 1 : 0;
   if (value !== null && typeof value === "object") return JSON.stringify(value);
   return value;
@@ -1247,6 +1348,9 @@ export interface ModelClass<A extends object> {
   primaryKey: string;
   connectionOverride: Connection | undefined;
   columnCache: string[] | undefined;
+  columnTypeCache: Record<string, ColumnType> | undefined;
+  columnTypes(): Promise<Record<string, ColumnType>>;
+  castRow(row: Row): Row;
   associations: Record<string, AssociationDefinition>;
   readonly table: string;
   readonly connection: Connection;

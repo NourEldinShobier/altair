@@ -183,6 +183,12 @@ export async function loadSchema(connection: Connection, schema: SchemaDefinitio
   );
 
   if (schema.version) {
+    // Loading a schema into a database that already holds it is a no-op, not a
+    // duplicate key. A test suite prepares the same database repeatedly.
+    await connection.execute(
+      `DELETE FROM ${connection.quote("schema_migrations")} WHERE ${connection.quote("version")} = ${connection.placeholder(0)}`,
+      [schema.version],
+    );
     await connection.execute(
       `INSERT INTO ${connection.quote("schema_migrations")} (${connection.quote("version")}) VALUES (${connection.placeholder(0)})`,
       [schema.version],

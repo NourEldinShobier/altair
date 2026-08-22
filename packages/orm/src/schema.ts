@@ -6,6 +6,7 @@
  * `schema_migrations` so a migration runs once.
  */
 
+import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
 
 export type ColumnType =
@@ -29,6 +30,48 @@ export interface ColumnOptions {
   unique?: boolean;
 }
 
+/** What the database does to a child row when its parent is deleted. */
+export type ForeignKeyAction = "cascade" | "nullify" | "restrict";
+
+export interface ForeignKeyOptions {
+  /** The table referenced. Inferred from the reference's name when omitted. */
+  to?: string;
+  /** The referenced column. Rails assumes the primary key. */
+  primaryKey?: string;
+  name?: string;
+  onDelete?: ForeignKeyAction;
+  onUpdate?: ForeignKeyAction;
+}
+
+export interface ForeignKeyDefinition extends ForeignKeyOptions {
+  column: string;
+  to: string;
+}
+
+/** Rails names these `fk_rails_<hash>`; a readable name says as much. */
+export function foreignKeyName(table: string, column: string): string {
+  return `fk_${table}_${column}`;
+}
+
+function referentialAction(action: ForeignKeyAction): string {
+  switch (action) {
+    case "cascade":
+      return "CASCADE";
+    case "nullify":
+      return "SET NULL";
+    case "restrict":
+      return "RESTRICT";
+  }
+}
+
+/** The `REFERENCES ...` half of a constraint, shared by both ways of adding one. */
+function referencesClause(connection: Connection, key: ForeignKeyDefinition): string {
+  let clause = `REFERENCES ${connection.quote(key.to)} (${connection.quote(key.primaryKey ?? "id")})`;
+  if (key.onDelete) clause += ` ON DELETE ${referentialAction(key.onDelete)}`;
+  if (key.onUpdate) clause += ` ON UPDATE ${referentialAction(key.onUpdate)}`;
+  return clause;
+}
+
 export interface Column extends ColumnOptions {
   name: string;
   type: ColumnType;
@@ -38,6 +81,7 @@ export interface Column extends ColumnOptions {
 export class TableDefinition {
   readonly columns: Column[] = [];
   readonly indexes: { columns: string[]; unique: boolean }[] = [];
+  readonly foreignKeys: ForeignKeyDefinition[] = [];
 
   constructor(readonly name: string) {}
 
@@ -80,10 +124,32 @@ export class TableDefinition {
     return this.column(name, "binary", options);
   }
 
-  /** Rails' `t.references :post` — a foreign key column plus its index. */
-  references(name: string, options: ColumnOptions & { index?: boolean } = {}): this {
-    this.column(`${name}_id`, "bigint", options);
-    if (options.index !== false) this.index([`${name}_id`]);
+  /**
+   * Rails' `t.references :post` — a key column plus its index.
+   *
+   * The database constraint is opt-in, as it is in Rails: an association is an
+   * application-level fact by default, and `foreignKey` is what makes the
+   * database enforce it too.
+   */
+  references(
+    name: string,
+    options: ColumnOptions & { index?: boolean; foreignKey?: true | ForeignKeyOptions } = {},
+  ): this {
+    const column = `${name}_id`;
+    this.column(column, "bigint", options);
+    if (options.index !== false) this.index([column]);
+
+    if (options.foreignKey) {
+      const given = options.foreignKey === true ? {} : options.foreignKey;
+      this.foreignKeys.push({ ...given, column, to: given.to ?? pluralize(name) });
+    }
+
+    return this;
+  }
+
+  /** Rails' `t.foreign_key :posts, column: :post_id`. */
+  foreignKey(to: string, options: ForeignKeyOptions & { column: string }): this {
+    this.foreignKeys.push({ ...options, to });
     return this;
   }
 
@@ -122,7 +188,10 @@ function sqlType(connection: Connection, column: Column): string {
     case "boolean":
       return pg ? "BOOLEAN" : mysql ? "TINYINT(1)" : "INTEGER";
     case "datetime":
-      return pg ? "TIMESTAMP" : "DATETIME";
+      // DATETIME without a precision truncates to whole seconds, which makes
+      // two saves in the same second indistinguishable — and `updated_at` is
+      // meant to distinguish them.
+      return pg ? "TIMESTAMP" : mysql ? "DATETIME(6)" : "DATETIME";
     case "date":
       return "DATE";
     case "json":
@@ -162,8 +231,18 @@ export class SchemaStatements {
       let clause = `${this.connection.quote(column.name)} ${sqlType(this.connection, column)}`;
       if (column.null === false) clause += " NOT NULL";
       if (column.unique) clause += " UNIQUE";
-      if (column.default !== undefined) clause += ` DEFAULT ${literal(column.default)}`;
+      if (column.default !== undefined)
+        clause += ` DEFAULT ${literal(this.connection, column.default)}`;
       parts.push(clause);
+    }
+
+    for (const key of table.foreignKeys) {
+      // Inline rather than a follow-up ALTER, because SQLite cannot add a
+      // constraint to a table that already exists.
+      parts.push(
+        `CONSTRAINT ${this.connection.quote(key.name ?? foreignKeyName(name, key.column))} ` +
+          `FOREIGN KEY (${this.connection.quote(key.column)}) ${referencesClause(this.connection, key)}`,
+      );
     }
 
     const exists = options.ifNotExists ? "IF NOT EXISTS " : "";
@@ -190,7 +269,8 @@ export class SchemaStatements {
     const column: Column = { name, type, ...options };
     let clause = `${this.connection.quote(name)} ${sqlType(this.connection, column)}`;
     if (column.null === false) clause += " NOT NULL";
-    if (column.default !== undefined) clause += ` DEFAULT ${literal(column.default)}`;
+    if (column.default !== undefined)
+      clause += ` DEFAULT ${literal(this.connection, column.default)}`;
 
     await this.connection.execute(
       `ALTER TABLE ${this.connection.quote(table)} ADD COLUMN ${clause}`,
@@ -231,6 +311,56 @@ export class SchemaStatements {
     await this.connection.execute(drop);
   }
 
+  /**
+   * Rails' `add_foreign_key`.
+   *
+   * SQLite cannot add a constraint to a table that already exists, so this
+   * says so rather than failing with a syntax error — the constraint belongs
+   * in `createTable` there.
+   */
+  async addForeignKey(
+    table: string,
+    to: string,
+    options: ForeignKeyOptions & { column?: string } = {},
+  ): Promise<void> {
+    if (this.connection.adapter === "sqlite") {
+      throw new Error(
+        `SQLite cannot add a foreign key to an existing table. Declare it in createTable("${table}") instead.`,
+      );
+    }
+
+    const column = options.column ?? `${singularize(to)}_id`;
+    const name = options.name ?? foreignKeyName(table, column);
+    const key: ForeignKeyDefinition = { ...options, column, to };
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} ADD CONSTRAINT ${this.connection.quote(name)} ` +
+        `FOREIGN KEY (${this.connection.quote(column)}) ${referencesClause(this.connection, key)}`,
+    );
+  }
+
+  /** Rails' `remove_foreign_key`. */
+  async removeForeignKey(
+    table: string,
+    options: { column?: string; to?: string; name?: string } = {},
+  ): Promise<void> {
+    if (this.connection.adapter === "sqlite") {
+      throw new Error(`SQLite cannot drop a foreign key from an existing table.`);
+    }
+
+    const column = options.column ?? (options.to ? `${singularize(options.to)}_id` : undefined);
+    if (!column && !options.name) {
+      throw new Error("removeForeignKey needs a column, a referenced table, or a constraint name.");
+    }
+
+    const name = options.name ?? foreignKeyName(table, column!);
+    const keyword = this.connection.adapter === "mysql" ? "FOREIGN KEY" : "CONSTRAINT";
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} DROP ${keyword} ${this.connection.quote(name)}`,
+    );
+  }
+
   /** The table names in this database, which the schema dumper reads. */
   async tables(): Promise<string[]> {
     switch (this.connection.adapter) {
@@ -267,10 +397,17 @@ export class SchemaStatements {
  * user input, so there is no injection surface. Values from a request are
  * always bound, never interpolated.
  */
-function literal(value: unknown): string {
+function literal(connection: Connection, value: unknown): string {
   if (value === null) return "NULL";
   if (typeof value === "number") return String(value);
-  if (typeof value === "boolean") return value ? "1" : "0";
+
+  if (typeof value === "boolean") {
+    // Postgres has a real boolean type and refuses an integer default for it.
+    // SQLite and MySQL store booleans as 0 and 1.
+    if (connection.adapter === "postgres") return value ? "TRUE" : "FALSE";
+    return value ? "1" : "0";
+  }
+
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 

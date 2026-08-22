@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 import { SchemaStatements } from "../src/schema.js";
 import { Model } from "../src/model.js";
 
@@ -50,7 +51,7 @@ class PickupTruck extends Truck {
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   await new SchemaStatements(connection).createTable("vehicles", (t) => {

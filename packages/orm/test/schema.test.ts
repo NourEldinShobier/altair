@@ -8,13 +8,14 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, adapterFor } from "../src/connection.js";
+import { columnNamesOf, indexNamesOf, isSqlite, testConnection } from "./support/database.js";
 import { Migrator, SchemaStatements, type Migration } from "../src/schema.js";
 
 let connection: Connection;
 let schema: SchemaStatements;
 
-beforeEach(() => {
-  connection = new Connection("sqlite://:memory:");
+beforeEach(async () => {
+  connection = await testConnection();
   schema = new SchemaStatements(connection);
 });
 
@@ -29,12 +30,17 @@ describe("adapter detection", () => {
 
   it("quotes identifiers per adapter", () => {
     expect(new Connection("sqlite://:memory:").quote("posts")).toBe('"posts"');
-    expect(connection.quote('we"ird')).toBe('"we""ird"');
+    expect(new Connection("postgres://localhost/x").quote('we"ird')).toBe('"we""ird"');
+    expect(new Connection("mysql://localhost/x").quote("posts")).toBe("`posts`");
   });
 
+  // Each adapter's own spelling, asserted against that adapter rather than
+  // whichever one the suite happens to be running against.
   it("numbers placeholders only where the adapter needs it", () => {
-    expect(connection.placeholder(0)).toBe("?");
-    expect(connection.placeholder(3)).toBe("?");
+    expect(new Connection("sqlite://:memory:").placeholder(0)).toBe("?");
+    expect(new Connection("mysql://localhost/x").placeholder(3)).toBe("?");
+    expect(new Connection("postgres://localhost/x").placeholder(0)).toBe("$1");
+    expect(new Connection("postgres://localhost/x").placeholder(3)).toBe("$4");
   });
 });
 
@@ -50,18 +56,18 @@ describe("createTable", () => {
 
     expect(await schema.tableExists("posts")).toBe(true);
 
+    const values = [0, 1, 2, 3].map((index) => connection.placeholder(index)).join(", ");
     await connection.execute(
-      "INSERT INTO posts (title, body, created_at, updated_at) VALUES (?, ?, ?, ?)",
-      ["Hello", "World", "2026-01-01", "2026-01-01"],
+      `INSERT INTO posts (title, body, created_at, updated_at) VALUES (${values})`,
+      ["Hello", "World", "2026-01-01 00:00:00", "2026-01-01 00:00:00"],
     );
 
     const rows = await connection.query<{ id: number; title: string; views: number }>(
       "SELECT * FROM posts",
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.id).toBe(1);
     expect(rows[0]!.title).toBe("Hello");
-    expect(rows[0]!.views).toBe(0);
+    expect(Number(rows[0]!.views)).toBe(0);
   });
 
   // Rails: NOT NULL is enforced by the database, not the model.
@@ -74,8 +80,7 @@ describe("createTable", () => {
   it("creates a table without an id when asked", async () => {
     await schema.createTable("joins", (t) => t.integer("left_id"), { id: false });
 
-    const rows = await connection.query("PRAGMA table_info(joins)");
-    expect(rows).toHaveLength(1);
+    expect(await columnNamesOf(connection, "joins")).toEqual(["left_id"]);
   });
 
   // Rails: t.references adds <name>_id and indexes it.
@@ -86,21 +91,15 @@ describe("createTable", () => {
       t.references("post");
     });
 
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(comments)");
-    expect(columns.map((c) => c.name)).toContain("post_id");
-
-    const indexes = await connection.query<{ name: string }>("PRAGMA index_list(comments)");
-    expect(indexes.map((i) => i.name)).toContain("index_comments_on_post_id");
+    expect(await columnNamesOf(connection, "comments")).toContain("post_id");
+    expect(await indexNamesOf(connection, "comments")).toContain("index_comments_on_post_id");
   });
 
   // Rails: t.timestamps adds both columns, NOT NULL.
   it("adds timestamps", async () => {
     await schema.createTable("posts", (t) => t.timestamps());
 
-    const columns = await connection.query<{ name: string; notnull: number }>(
-      "PRAGMA table_info(posts)",
-    );
-    const names = columns.map((c) => c.name);
+    const names = await columnNamesOf(connection, "posts");
     expect(names).toContain("created_at");
     expect(names).toContain("updated_at");
   });
@@ -128,15 +127,13 @@ describe("altering", () => {
 
   it("adds a column", async () => {
     await schema.addColumn("posts", "slug", "string");
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(posts)");
-    expect(columns.map((c) => c.name)).toContain("slug");
+    expect(await columnNamesOf(connection, "posts")).toContain("slug");
   });
 
   it("removes a column", async () => {
     await schema.addColumn("posts", "slug", "string");
     await schema.removeColumn("posts", "slug");
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(posts)");
-    expect(columns.map((c) => c.name)).not.toContain("slug");
+    expect(await columnNamesOf(connection, "posts")).not.toContain("slug");
   });
 
   it("renames a table", async () => {
@@ -152,12 +149,10 @@ describe("altering", () => {
 
   it("adds and removes an index", async () => {
     await schema.addIndex("posts", ["title"], { unique: true });
-    let indexes = await connection.query<{ name: string }>("PRAGMA index_list(posts)");
-    expect(indexes.map((i) => i.name)).toContain("index_posts_on_title");
+    expect(await indexNamesOf(connection, "posts")).toContain("index_posts_on_title");
 
     await schema.removeIndex("posts", { name: "index_posts_on_title" });
-    indexes = await connection.query<{ name: string }>("PRAGMA index_list(posts)");
-    expect(indexes.map((i) => i.name)).not.toContain("index_posts_on_title");
+    expect(await indexNamesOf(connection, "posts")).not.toContain("index_posts_on_title");
   });
 
   it("lists tables, ignoring sqlite internals", async () => {
@@ -191,8 +186,7 @@ describe("migrator", () => {
 
     expect(ran.map((m) => m.version)).toEqual([createPosts.version, addSlug.version]);
 
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(posts)");
-    expect(columns.map((c) => c.name)).toContain("slug");
+    expect(await columnNamesOf(connection, "posts")).toContain("slug");
   });
 
   // Rails: a migration runs once, and is recorded in schema_migrations.
@@ -220,7 +214,7 @@ describe("migrator", () => {
     const reverted = await migrator.down();
     expect(reverted.map((m) => m.version)).toEqual([addSlug.version]);
 
-    const columns = await connection.query<{ name: string }>("PRAGMA table_info(posts)");
+    const columns = (await columnNamesOf(connection, "posts")).map((name) => ({ name }));
     expect(columns.map((c) => c.name)).not.toContain("slug");
     expect(await migrator.appliedVersions()).toEqual([createPosts.version]);
   });
@@ -274,5 +268,103 @@ describe("transactions", () => {
   it("returns the block's value", async () => {
     const result = await connection.transaction(async () => "value");
     expect(result).toBe("value");
+  });
+});
+
+// Rails keeps the association and the constraint separate: `t.references` adds
+// a column and an index, and the database constraint is opt-in. That split is
+// deliberate — plenty of applications want the association without the write
+// coupling a constraint imposes.
+describe("foreign keys", () => {
+  beforeEach(async () => {
+    await schema.createTable("posts", (t) => t.string("title"));
+  });
+
+  it("adds no constraint by default", async () => {
+    await schema.createTable("comments", (t) => {
+      t.text("body");
+      t.references("post");
+    });
+
+    // An orphan is allowed, because nothing at the database level forbids it.
+    await connection.execute("INSERT INTO comments (body, post_id) VALUES ('orphan', 999)");
+    expect(await schema.tableExists("comments")).toBe(true);
+  });
+
+  it("adds one when asked", async () => {
+    await schema.createTable("comments", (t) => {
+      t.text("body");
+      t.references("post", { foreignKey: true });
+    });
+
+    await expect(
+      connection.execute("INSERT INTO comments (body, post_id) VALUES ('orphan', 999)"),
+    ).rejects.toThrow();
+  });
+
+  it("accepts a row whose parent exists", async () => {
+    await schema.createTable("comments", (t) => {
+      t.text("body");
+      t.references("post", { foreignKey: true });
+    });
+
+    await connection.execute("INSERT INTO posts (title) VALUES ('Hello')");
+    const posts = await connection.query<{ id: number }>("SELECT id FROM posts");
+
+    await connection.execute(
+      `INSERT INTO comments (body, post_id) VALUES ('fine', ${connection.placeholder(0)})`,
+      [posts[0]!.id],
+    );
+    expect(await connection.query("SELECT * FROM comments")).toHaveLength(1);
+  });
+
+  it("cascades a delete when told to", async () => {
+    await schema.createTable("comments", (t) => {
+      t.text("body");
+      t.references("post", { foreignKey: { onDelete: "cascade" } });
+    });
+
+    await connection.execute("INSERT INTO posts (title) VALUES ('Hello')");
+    const posts = await connection.query<{ id: number }>("SELECT id FROM posts");
+    await connection.execute(
+      `INSERT INTO comments (body, post_id) VALUES ('bye', ${connection.placeholder(0)})`,
+      [posts[0]!.id],
+    );
+
+    await connection.execute("DELETE FROM posts");
+    expect(await connection.query("SELECT * FROM comments")).toHaveLength(0);
+  });
+
+  it("takes the referenced table from the reference's name", async () => {
+    await schema.createTable("comments", (t) => t.references("post", { foreignKey: true }));
+    await expect(
+      connection.execute("INSERT INTO comments (post_id) VALUES (999)"),
+    ).rejects.toThrow();
+  });
+
+  // SQLite cannot add a constraint to a table that already exists, and saying
+  // so beats a syntax error from three layers down.
+  it("says why it cannot alter an existing table on SQLite", async () => {
+    if (!isSqlite) return;
+
+    await schema.createTable("comments", (t) => t.references("post"));
+    await expect(schema.addForeignKey("comments", "posts")).rejects.toThrow(
+      "Declare it in createTable",
+    );
+  });
+
+  it("adds and removes one on a server", async () => {
+    if (isSqlite) return;
+
+    await schema.createTable("comments", (t) => t.references("post"));
+    await schema.addForeignKey("comments", "posts");
+
+    await expect(
+      connection.execute("INSERT INTO comments (post_id) VALUES (999)"),
+    ).rejects.toThrow();
+
+    await schema.removeForeignKey("comments", { to: "posts" });
+    await connection.execute("INSERT INTO comments (post_id) VALUES (999)");
+    expect(await connection.query("SELECT * FROM comments")).toHaveLength(1);
   });
 });

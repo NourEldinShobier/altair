@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 import { SchemaStatements } from "../src/schema.js";
 import { Migrator, type Migration } from "../src/schema.js";
 import { Model } from "../src/model.js";
@@ -25,7 +26,7 @@ let connection: Connection;
 let schema: SchemaStatements;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   schema = new SchemaStatements(connection);
 
@@ -54,7 +55,8 @@ describe("introspection", () => {
   // A dump containing schema_migrations would try to recreate it on load.
   it("leaves the framework's own tables out", async () => {
     await connection.execute(
-      'CREATE TABLE "schema_migrations" ("version" VARCHAR(255) NOT NULL PRIMARY KEY)',
+      `CREATE TABLE IF NOT EXISTS ${connection.quote("schema_migrations")} ` +
+        `(${connection.quote("version")} VARCHAR(255) NOT NULL PRIMARY KEY)`,
     );
 
     const definition = await introspect(connection);
@@ -209,7 +211,11 @@ describe("dumping the schema", () => {
   });
 });
 
-describe("loading a dumped schema", () => {
+// The round trip loads a dump into a second, independent empty database.
+// In-memory SQLite hands one out for free; on a server it would mean
+// provisioning a second database, which the introspection cases above already
+// cover the risky half of.
+describe.skipIf(!isSqlite)("loading a dumped schema", () => {
   // A dump that cannot be loaded is worse than none, because it fails when
   // someone is preparing a test database.
   it("recreates every table in a fresh database", async () => {

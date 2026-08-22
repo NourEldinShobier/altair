@@ -8,10 +8,26 @@
  * placeholders are numbered, and how an inserted row's id comes back.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
 
 export type Adapter = "sqlite" | "postgres" | "mysql";
+
+/**
+ * A connection held out of the pool for the life of a manual transaction.
+ *
+ * Bun types `reserve()` loosely, so the shape this code depends on is stated
+ * here rather than asserted at every call.
+ */
+interface ReservedConnection {
+  unsafe(sql: string, bindings?: unknown[]): Promise<unknown>;
+  release?(): Promise<void> | void;
+}
+
+interface PoolWithReserve {
+  reserve(): Promise<ReservedConnection>;
+}
 
 export type Row = Record<string, unknown>;
 
@@ -22,6 +38,13 @@ export function adapterFor(url: string): Adapter {
   return "postgres";
 }
 
+/** PostgreSQL's complaint that a prepared statement outlived its table's shape. */
+function isStalePlan(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("cached plan must not change result type")
+  );
+}
+
 export class Connection {
   readonly adapter: Adapter;
   readonly url: string;
@@ -30,6 +53,19 @@ export class Connection {
   #closed = false;
   #inTransaction = false;
   #savepoints = 0;
+  #reserved: ReservedConnection | undefined;
+  #prepared = false;
+
+  /**
+   * The handle statements run on.
+   *
+   * A manual transaction reserves one connection out of the pool and runs
+   * everything on it, because BEGIN on a pool pins nothing: the next statement
+   * is free to land on a different connection, outside the transaction.
+   */
+  get #handle(): SQL {
+    return (this.#reserved ?? this.sql) as SQL;
+  }
 
   constructor(url: string, sql?: SQL) {
     this.url = url;
@@ -61,7 +97,7 @@ export class Connection {
    */
   async query<T = Row>(sql: string, bindings: readonly unknown[] = []): Promise<T[]> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      const result = await this.sql.unsafe(sql, bindings as unknown[]);
+      const result = await this.#run(sql, bindings);
       return (Array.isArray(result) ? result : []) as T[];
     });
   }
@@ -69,8 +105,28 @@ export class Connection {
   /** Runs a statement for its effect. */
   async execute(sql: string, bindings: readonly unknown[] = []): Promise<void> {
     await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      await this.sql.unsafe(sql, bindings as unknown[]);
+      await this.#run(sql, bindings);
     });
+  }
+
+  /**
+   * Sends a statement, retrying once if a cached plan went stale.
+   *
+   * PostgreSQL caches the plan for a prepared statement and refuses to run it
+   * when the table's shape has changed underneath — which is what a migration
+   * does to a process that is already serving. The retry re-prepares against
+   * the new shape, which is what the PostgreSQL documentation recommends and
+   * what saves an application from having to restart after every migration.
+   */
+  async #run(sql: string, bindings: readonly unknown[]): Promise<unknown> {
+    await this.#prepareSession();
+
+    try {
+      return await this.#handle.unsafe(sql, bindings as unknown[]);
+    } catch (error) {
+      if (!isStalePlan(error)) throw error;
+      return await this.#handle.unsafe(sql, bindings as unknown[]);
+    }
   }
 
   /**
@@ -82,8 +138,16 @@ export class Connection {
    */
   async executeCount(sql: string, bindings: readonly unknown[] = []): Promise<number> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      const result = await this.sql.unsafe(sql, bindings as unknown[]);
-      return Number((result as { count?: number }).count ?? 0);
+      const result = await this.#run(sql, bindings);
+      // Drivers disagree, and not only in naming: MySQL sets `count` to 0 and
+      // reports the real number in `affectedRows`, so preferring one field
+      // over another reads a legitimate update as having changed nothing.
+      const reported = result as { count?: number; affectedRows?: number; rowsAffected?: number };
+      return Math.max(
+        Number(reported.count ?? 0),
+        Number(reported.affectedRows ?? 0),
+        Number(reported.rowsAffected ?? 0),
+      );
     });
   }
 
@@ -104,7 +168,14 @@ export class Connection {
     return (await this.sql.begin(async (tx: SQL) => {
       const scoped = new Connection(this.url, tx);
       scoped.#inTransaction = true;
-      return await body(scoped);
+
+      // Everything the block reaches, not just the caller, has to run on the
+      // transaction's connection. On SQLite the pool is one connection so it
+      // happened anyway; on a pooled adapter the second model in a block would
+      // quietly write outside the transaction, and its writes would survive a
+      // rollback. The scope follows the async call chain, so concurrent
+      // requests each see their own.
+      return await inTransaction.run(scoped, async () => await body(scoped));
     })) as T;
   }
 
@@ -131,22 +202,53 @@ export class Connection {
    * roll back in another, with the test body in between.
    */
   async beginTransaction(): Promise<void> {
+    // SQLite hands out a single connection, so it is pinned already and has
+    // nothing to reserve. Every pooled adapter does.
+    if (this.adapter !== "sqlite") {
+      this.#reserved = await (this.sql as unknown as PoolWithReserve).reserve();
+    }
+
     await this.execute("BEGIN");
     this.#inTransaction = true;
   }
 
   /** Discards everything since `beginTransaction`. */
   async rollbackTransaction(): Promise<void> {
-    await this.execute("ROLLBACK");
-    this.#inTransaction = false;
-    this.#savepoints = 0;
+    await this.#finishTransaction("ROLLBACK");
   }
 
   /** Keeps everything since `beginTransaction`. */
   async commitTransaction(): Promise<void> {
-    await this.execute("COMMIT");
-    this.#inTransaction = false;
-    this.#savepoints = 0;
+    await this.#finishTransaction("COMMIT");
+  }
+
+  async #finishTransaction(statement: string): Promise<void> {
+    try {
+      await this.execute(statement);
+    } finally {
+      // The connection goes back to the pool even if the statement failed;
+      // holding it would leak one connection per failed transaction.
+      this.#inTransaction = false;
+      this.#savepoints = 0;
+
+      const reserved = this.#reserved;
+      this.#reserved = undefined;
+      await reserved?.release?.();
+    }
+  }
+
+  /**
+   * Settings a connection needs before its first statement.
+   *
+   * SQLite enforces foreign keys only when a connection asks it to, and the
+   * default is off — a declared constraint that is never enforced is worse
+   * than no constraint, because it reads as protection.
+   */
+  async #prepareSession(): Promise<void> {
+    if (this.#prepared) return;
+    this.#prepared = true;
+
+    if (this.adapter === "sqlite") await this.sql.unsafe("PRAGMA foreign_keys = ON");
   }
 
   get isInTransaction(): boolean {
@@ -166,9 +268,23 @@ export class Connection {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+
+    const reserved = this.#reserved;
+    this.#reserved = undefined;
+    await reserved?.release?.();
+
     await this.sql.close?.();
   }
 }
+
+/**
+ * The transaction a piece of work is running inside, if any.
+ *
+ * Rails hands each unit of work its own connection and puts the transaction on
+ * that; `AsyncLocalStorage` is the same idea, following the async call chain
+ * rather than a thread.
+ */
+const inTransaction = new AsyncLocalStorage<Connection>();
 
 /**
  * The connection the models use when none is given.
@@ -188,6 +304,12 @@ export function setConnection(connection: Connection | undefined): void {
 }
 
 export function connection(): Connection {
+  // A transaction in progress wins, so a model reached from inside a
+  // transaction block joins it rather than taking a fresh connection from the
+  // pool and writing outside it.
+  const scoped = inTransaction.getStore();
+  if (scoped) return scoped;
+
   if (!current) {
     throw new Error("No database connection. Call connect(url) before using models.");
   }

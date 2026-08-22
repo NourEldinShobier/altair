@@ -7,6 +7,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 import { SchemaStatements } from "../src/schema.js";
 import {
   Model,
@@ -32,7 +33,7 @@ class Post extends Model<PostAttributes>("posts") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   const schema = new SchemaStatements(connection);
@@ -204,8 +205,14 @@ describe("relations", () => {
     );
   });
 
+  // The generated text is adapter-specific, so it is asserted against one
+  // adapter rather than whichever the suite is running against.
   it("builds readable SQL", () => {
-    const { sql, bindings } = Post.where({ published: 1 }).order("title").limit(5).toSql();
+    class Article extends Model<PostAttributes>("posts", {
+      connection: new Connection("sqlite://:memory:"),
+    }) {}
+
+    const { sql, bindings } = Article.where({ published: 1 }).order("title").limit(5).toSql();
 
     expect(sql).toBe(
       'SELECT "posts".* FROM "posts" WHERE "posts"."published" = ? ORDER BY "posts"."title" ASC LIMIT 5',
@@ -244,7 +251,10 @@ describe("updating", () => {
 
   it("reloads from the database", async () => {
     const post = await Post.create({ title: "Original" });
-    await connection.execute("UPDATE posts SET title = 'Elsewhere' WHERE id = ?", [post.id]);
+    await connection.execute(
+      `UPDATE posts SET title = 'Elsewhere' WHERE id = ${connection.placeholder(0)}`,
+      [post.id],
+    );
 
     await post.reload();
     expect(post.title).toBe("Elsewhere");
