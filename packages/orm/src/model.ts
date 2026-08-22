@@ -70,6 +70,23 @@ interface NestedRecord {
 /** Thrown to unwind the nested-save transaction when the owner is invalid. */
 const NESTED_ROLLBACK = Symbol("altair.model.nestedRollback");
 
+/** Any model class, for constraining a declaration to the class it is on. */
+type AnyModel = abstract new (...args: never[]) => object;
+
+/**
+ * An association's name, checked against the properties the model declares.
+ *
+ * Rails matches `belongs_to :author` to `post.author` at run time and never
+ * tells you when they disagree — a typo produces an association nobody can
+ * reach. Requiring the name to be a declared property is why AdonisJS and
+ * TypeORM reach for decorators, which carry the property name for free. That
+ * is not available here: a standard decorator on a `declare` field
+ * materializes a real field, which shadows the prototype accessor the
+ * association installs and throws on construction. A type is enough, and it
+ * keeps the declaration in Rails' shape.
+ */
+type AssociationName<M extends AnyModel> = keyof InstanceType<M> & string;
+
 const { before: beforeSave, around: aroundSave, after: afterSave } = callbackDecorators("save");
 const { before: beforeCreate, after: afterCreate } = callbackDecorators("create");
 const { before: beforeUpdate, after: afterUpdate } = callbackDecorators("update");
@@ -1246,7 +1263,11 @@ export interface ModelClass<A extends object> {
   usesInheritance(): Promise<boolean>;
 
   nestedAttributes: Record<string, NestedAttributesOptions>;
-  acceptsNestedAttributesFor(name: string, options?: NestedAttributesOptions): void;
+  acceptsNestedAttributesFor<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
+    options?: NestedAttributesOptions,
+  ): void;
 
   all<T>(this: ModelConstructor<A, T>): Relation<T>;
   unscoped<T>(this: ModelConstructor<A, T>): Relation<T>;
@@ -1282,16 +1303,33 @@ export interface ModelClass<A extends object> {
   validations: ValidationDeclaration[];
   validates(attribute: string, options: ValidationOptions): void;
 
-  belongsTo(name: string, target: () => unknown, options?: AssociationOptions): void;
-  hasMany(name: string, target: () => unknown, options?: AssociationOptions): void;
-  hasOne(name: string, target: () => unknown, options?: AssociationOptions): void;
-  hasManyThrough(
-    name: string,
+  belongsTo<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
+    target: () => unknown,
+    options?: AssociationOptions,
+  ): void;
+  hasMany<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
+    target: () => unknown,
+    options?: AssociationOptions,
+  ): void;
+  hasOne<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
+    target: () => unknown,
+    options?: AssociationOptions,
+  ): void;
+  hasManyThrough<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
     through: string,
     options?: AssociationOptions & { source?: string },
   ): void;
-  belongsToPolymorphic(
-    name: string,
+  belongsToPolymorphic<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
     types: Record<string, () => unknown>,
     options?: AssociationOptions,
   ): void;
@@ -1323,6 +1361,10 @@ export type ModelConstructor<A extends object, T> = new (
  *         this.hasMany("comments", () => Comment)
  *       }
  *     }
+ *
+ * The declaration is not optional: an association's name has to be a property
+ * the model declares, so a typo is a type error rather than an association
+ * nobody can reach.
  */
 export type BelongsTo<T> = () => Promise<T | null>;
 export type HasOne<T> = () => Promise<T | null>;

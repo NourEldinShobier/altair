@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
 import { SchemaStatements } from "../src/schema.js";
-import { Model } from "../src/model.js";
+import { Model, type BelongsTo, type HasMany, type HasOne } from "../src/model.js";
 import {
   NestedAttributesLimitExceeded,
   NestedRecordNotFound,
@@ -46,6 +46,10 @@ class Comment extends Model<CommentAttributes>("comments") {}
 class Cover extends Model<CoverAttributes>("covers") {}
 
 class Post extends Model<PostAttributes>("posts") {
+  declare comments: HasMany<Comment>;
+  declare cover: HasOne<Cover>;
+  declare author: BelongsTo<Author>;
+
   static {
     this.hasMany("comments", () => Comment);
     this.hasOne("cover", () => Cover);
@@ -119,7 +123,10 @@ describe("payload shapes", () => {
 });
 
 describe("declaring", () => {
+  // The name is checked at compile time too; this is the runtime backstop for
+  // code that reached here without one.
   it("refuses an association that was never declared", () => {
+    // @ts-expect-error not a property this model declares
     expect(() => Post.acceptsNestedAttributesFor("nonexistent")).toThrow();
   });
 });
@@ -196,6 +203,8 @@ describe("a collection", () => {
   // Without allowDestroy the flag is data, not an instruction.
   it("ignores a destroy flag the model did not allow", async () => {
     class Article extends Model<PostAttributes>("posts") {
+      declare comments: HasMany<Comment>;
+
       static {
         this.hasMany("comments", () => Comment, { foreignKey: "post_id" });
         this.acceptsNestedAttributesFor("comments");
@@ -214,6 +223,8 @@ describe("a collection", () => {
 
   it("skips a record rejectIf turns down", async () => {
     class Article extends Model<PostAttributes>("posts") {
+      declare comments: HasMany<Comment>;
+
       static {
         this.hasMany("comments", () => Comment, { foreignKey: "post_id" });
         this.acceptsNestedAttributesFor("comments", {
@@ -233,6 +244,8 @@ describe("a collection", () => {
 
   it("refuses more records than the limit allows", async () => {
     class Article extends Model<PostAttributes>("posts") {
+      declare comments: HasMany<Comment>;
+
       static {
         this.hasMany("comments", () => Comment, { foreignKey: "post_id" });
         this.acceptsNestedAttributesFor("comments", { limit: 2 });

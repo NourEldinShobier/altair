@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, setConnection } from "../src/connection.js";
 import { SchemaStatements } from "../src/schema.js";
-import { Model } from "../src/model.js";
+import { Model, type BelongsTo } from "../src/model.js";
 
 interface PostAttributes {
   id: number;
@@ -27,6 +27,8 @@ interface CommentAttributes {
 class Post extends Model<PostAttributes>("posts") {}
 
 class Comment extends Model<CommentAttributes>("comments") {
+  declare post: BelongsTo<Post>;
+
   static {
     this.belongsTo("post", () => Post, { counterCache: true });
   }
@@ -34,6 +36,8 @@ class Comment extends Model<CommentAttributes>("comments") {
 
 /** A second child, to prove the column name can be chosen. */
 class Review extends Model<CommentAttributes>("reviews") {
+  declare post: BelongsTo<Post>;
+
   static {
     this.belongsTo("post", () => Post, { counterCache: "reviews_tally" });
   }
@@ -135,6 +139,8 @@ describe("counter caches", () => {
 
   it("leaves a model without a counter cache alone", async () => {
     class Plain extends Model<CommentAttributes>("comments") {
+      declare post: BelongsTo<Post>;
+
       static {
         this.belongsTo("post", () => Post);
       }

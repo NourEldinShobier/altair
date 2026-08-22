@@ -196,9 +196,29 @@ describe("includes", () => {
   });
 });
 
+// Rails matches `belongs_to :author` to `post.author` at run time and never
+// says when they disagree — a typo produces an association nobody can reach.
+// The name is a property of the model, so the compiler can check it.
+describe("declaring an association", () => {
+  it("refuses a name the model does not declare", () => {
+    class Article extends Model<{ id: number }>("posts") {
+      declare comments: HasMany<Comment>;
+    }
+
+    // @ts-expect-error "commnets" is not a property Article declares
+    Article.hasMany("commnets", () => Comment);
+
+    // The declared spelling is accepted.
+    Article.hasMany("comments", () => Comment);
+    expect(Object.keys(Article.associations)).toContain("comments");
+  });
+});
+
 describe("inheritance", () => {
   it("does not leak a subclass association back to the parent", () => {
-    class Article extends Post {}
+    class Article extends Post {
+      declare revisions: HasMany<Comment>;
+    }
     Article.hasMany("revisions", () => Comment);
 
     expect(Object.keys(Article.associations)).toContain("revisions");
