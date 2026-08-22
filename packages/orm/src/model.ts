@@ -23,6 +23,15 @@ import { tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions } from "./relation.js";
+import {
+  cacheKey,
+  preloadAssociation,
+  relationFor,
+  type AssociationDefinition,
+  type AssociationOptions,
+  type InstanceLike,
+  type ModelLike,
+} from "./associations.js";
 
 export { RecordNotFound } from "./relation.js";
 
@@ -137,6 +146,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     static primaryKey = options.primaryKey ?? "id";
     static connectionOverride: Connection | undefined = options.connection;
     static columnCache: string[] | undefined;
+    static associations: Record<string, AssociationDefinition> = {};
 
     static {
       this.defineCallbacks(["save", "create", "update", "destroy", "validation"]);
@@ -177,7 +187,87 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         tableName: this.table,
         primaryKey: this.primaryKey,
         instantiate: (row: Row) => this.instantiate(row) as InstanceType<M>,
+        preload: async (records, names) => {
+          for (const name of names) {
+            const definition = this.associationFor(name);
+            await preloadAssociation(records as unknown as InstanceLike[], definition);
+          }
+        },
       });
+    }
+
+    /**
+     * Declares a to-one association owned by this model's foreign key.
+     *
+     * Rails' `belongs_to :author`.
+     */
+    static belongsTo(name: string, target: () => unknown, options: AssociationOptions = {}): void {
+      this.defineAssociation({
+        name,
+        kind: "belongsTo",
+        target: target as () => ModelLike,
+        ...options,
+      });
+    }
+
+    /** Rails' `has_many :comments`. */
+    static hasMany(name: string, target: () => unknown, options: AssociationOptions = {}): void {
+      this.defineAssociation({
+        name,
+        kind: "hasMany",
+        target: target as () => ModelLike,
+        ...options,
+      });
+    }
+
+    /** Rails' `has_one :profile`. */
+    static hasOne(name: string, target: () => unknown, options: AssociationOptions = {}): void {
+      this.defineAssociation({
+        name,
+        kind: "hasOne",
+        target: target as () => ModelLike,
+        ...options,
+      });
+    }
+
+    static defineAssociation(definition: AssociationDefinition): void {
+      // Copy on write, so declaring on a subclass leaves the parent alone —
+      // the same rule the callback chains follow.
+      if (!Object.hasOwn(this, "associations")) {
+        this.associations = { ...this.associations };
+      }
+      this.associations[definition.name] = definition;
+
+      // A to-many association is a relation so it stays chainable; a to-one is
+      // a promise. Either way a preloaded value short-circuits the query.
+      Object.defineProperty(this.prototype, definition.name, {
+        configurable: true,
+        writable: true,
+        value: function associationAccessor(this: InstanceLike) {
+          const cached = this[cacheKey(definition.name)];
+
+          // A to-many association is always a Relation so the declared type is
+          // honest. When it was preloaded the relation already holds the
+          // records and runs no query.
+          if (definition.kind === "hasMany") {
+            const relation = relationFor(this, definition);
+            return Array.isArray(cached)
+              ? relation.resolvedWith(cached as InstanceLike[])
+              : relation;
+          }
+
+          if (cached !== undefined) return Promise.resolve(cached);
+          return relationFor(this, definition).first();
+        },
+      });
+    }
+
+    static associationFor(name: string): AssociationDefinition {
+      const definition = this.associations[name];
+      if (!definition) {
+        throw new Error(`${this.name} has no association named "${name}"`);
+      }
+      return definition;
     }
 
     static where<M extends typeof BaseModel>(
@@ -512,34 +602,76 @@ const PROXY_HANDLER: ProxyHandler<{ [ATTRIBUTES]: Record<string, unknown> }> = {
   },
 };
 
-/** The static side of a model class, kept separate so the factory can be typed. */
+/**
+ * The static side of a model class.
+ *
+ * The finders take a polymorphic `this`, so `Post.find(1)` is typed as `Post`
+ * rather than the base shape — which is what lets a subclass declare its own
+ * association accessors and have them survive a query.
+ */
 export interface ModelClass<A extends object> {
   new (values?: Partial<A>, persisted?: boolean): BaseModelInstance<A> & A;
 
   tableName: string;
   primaryKey: string;
   connectionOverride: Connection | undefined;
+  columnCache: string[] | undefined;
+  associations: Record<string, AssociationDefinition>;
   readonly table: string;
   readonly connection: Connection;
 
-  all(): Relation<BaseModelInstance<A> & A>;
-  where(conditions: Conditions): Relation<BaseModelInstance<A> & A>;
-  order(column: string, direction?: "asc" | "desc"): Relation<BaseModelInstance<A> & A>;
-  limit(count: number): Relation<BaseModelInstance<A> & A>;
-  find(id: unknown): Promise<BaseModelInstance<A> & A>;
-  findBy(conditions: Conditions): Promise<(BaseModelInstance<A> & A) | null>;
-  first(): Promise<(BaseModelInstance<A> & A) | null>;
-  last(): Promise<(BaseModelInstance<A> & A) | null>;
+  all<T>(this: ModelConstructor<A, T>): Relation<T>;
+  where<T>(this: ModelConstructor<A, T>, conditions: Conditions): Relation<T>;
+  order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
+  limit<T>(this: ModelConstructor<A, T>, count: number): Relation<T>;
+  find<T>(this: ModelConstructor<A, T>, id: unknown): Promise<T>;
+  findBy<T>(this: ModelConstructor<A, T>, conditions: Conditions): Promise<T | null>;
+  first<T>(this: ModelConstructor<A, T>): Promise<T | null>;
+  last<T>(this: ModelConstructor<A, T>): Promise<T | null>;
+  build<T>(this: ModelConstructor<A, T>, values?: Partial<A>): T;
+  create<T>(this: ModelConstructor<A, T>, values?: Partial<A>): Promise<T>;
+  instantiate<T>(this: ModelConstructor<A, T>, row: Row): T;
+
   count(): Promise<number>;
   exists(conditions?: Conditions): Promise<boolean>;
-  build(values?: Partial<A>): BaseModelInstance<A> & A;
-  create(values?: Partial<A>): Promise<BaseModelInstance<A> & A>;
-  instantiate(row: Row): BaseModelInstance<A> & A;
+  columnNames(): Promise<string[]>;
+  hasTimestamps(): Promise<boolean>;
+
+  belongsTo(name: string, target: () => unknown, options?: AssociationOptions): void;
+  hasMany(name: string, target: () => unknown, options?: AssociationOptions): void;
+  hasOne(name: string, target: () => unknown, options?: AssociationOptions): void;
+  associationFor(name: string): AssociationDefinition;
 
   defineCallbacks(names: string | string[], config?: unknown): void;
   setCallback(name: string, kind: string, filter: unknown, options?: unknown): void;
   skipCallback(name: string, kind: string, filter: unknown, options?: unknown): void;
 }
+
+/** A model constructor that produces `T`, used to infer the subclass type. */
+export type ModelConstructor<A extends object, T> = new (
+  values?: Partial<A>,
+  persisted?: boolean,
+) => T;
+
+/**
+ * Declared association types.
+ *
+ * Rails defines these methods when the class loads, which a type checker
+ * cannot see. Declaring them keeps the accessors typed with no codegen:
+ *
+ *     class Post extends Model<PostAttributes>("posts") {
+ *       declare user: BelongsTo<User>
+ *       declare comments: HasMany<Comment>
+ *
+ *       static {
+ *         this.belongsTo("user", () => User)
+ *         this.hasMany("comments", () => Comment)
+ *       }
+ *     }
+ */
+export type BelongsTo<T> = () => Promise<T | null>;
+export type HasOne<T> = () => Promise<T | null>;
+export type HasMany<T> = () => Relation<T>;
 
 /** Rails' `underscore`d model name, used for error messages and params. */
 export function modelName(klass: { name: string }): string {

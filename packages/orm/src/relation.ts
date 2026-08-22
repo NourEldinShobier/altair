@@ -30,6 +30,8 @@ export interface RelationSource<T> {
   primaryKey: string;
   /** Turns a database row into a model instance. */
   instantiate: (row: Row) => T;
+  /** Loads named associations for a batch of records, one query each. */
+  preload?: (records: T[], names: string[]) => Promise<void>;
 }
 
 /** Raised by `find` and `first!` when nothing matches. Rails' RecordNotFound. */
@@ -47,6 +49,13 @@ export class Relation<T> implements PromiseLike<T[]> {
   #limit: number | undefined;
   #offset: number | undefined;
   #selects: string[] | undefined;
+  #includes: string[] = [];
+  /**
+   * Records handed over by `includes`. Chaining clears this — `#clone` does not
+   * copy it — so adding a condition re-queries rather than filtering a stale
+   * array, which is how Rails behaves too.
+   */
+  #preloaded: T[] | undefined;
 
   constructor(source: RelationSource<T>) {
     this.#source = source;
@@ -59,6 +68,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#limit = this.#limit;
     next.#offset = this.#offset;
     next.#selects = this.#selects ? [...this.#selects] : undefined;
+    next.#includes = [...this.#includes];
     return next;
   }
 
@@ -142,6 +152,18 @@ export class Relation<T> implements PromiseLike<T[]> {
     return next;
   }
 
+  /**
+   * Rails' `includes`: preload these associations for the whole result set.
+   *
+   * One extra query per association instead of one per row, which is the
+   * difference between a list page that scales and an N+1.
+   */
+  includes(...names: string[]): Relation<T> {
+    const next = this.#clone();
+    next.#includes.push(...names);
+    return next;
+  }
+
   select(...columns: string[]): Relation<T> {
     const next = this.#clone();
     next.#selects = columns;
@@ -201,11 +223,30 @@ export class Relation<T> implements PromiseLike<T[]> {
     return sql.replaceAll("?", () => `$${++index}`);
   }
 
-  /** Runs the query and returns model instances. */
+  /**
+   * A copy of this relation that already holds its records.
+   *
+   * Used by `includes`, so a preloaded association is still a Relation and
+   * runs no query when awaited.
+   */
+  resolvedWith(records: T[]): Relation<T> {
+    const relation = new Relation<T>(this.#source);
+    relation.#preloaded = records;
+    return relation;
+  }
+
+  /** Runs the query and returns model instances, preloading any includes. */
   async toArray(): Promise<T[]> {
+    if (this.#preloaded) return this.#preloaded;
+
     const { sql, bindings } = this.toSql();
     const rows = await this.connection.query<Row>(sql, bindings);
-    return rows.map((row) => this.#source.instantiate(row));
+    const records = rows.map((row) => this.#source.instantiate(row));
+
+    if (this.#includes.length > 0 && this.#source.preload) {
+      await this.#source.preload(records, this.#includes);
+    }
+    return records;
   }
 
   /**
