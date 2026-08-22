@@ -176,6 +176,7 @@ describe("new", () => {
       ".gitignore",
       "app/controllers/home_controller.ts",
       "bin/server.ts",
+      "config/console.ts",
       "config/routes.ts",
       "db/.gitkeep",
       "package.json",

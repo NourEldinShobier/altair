@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,523** | 26,775    | 5.7% |
+| **Total** | **1,557** | 26,775    | 5.8% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -26,7 +26,7 @@ one that needs no server.
 | `@altair/support`    | 649   | Inflector, callbacks + decorators, cache, message signing/encryption        |
 | `@altair/orm`        | 284   | Connection, migrations, models, relations, associations, validations        |
 | `@altair/controller` | 137   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
-| `@altair/cli`        | 67    | Generators, db tasks, file loading                                          |
+| `@altair/cli`        | 101   | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                     |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
 | `@altair/storage`    | 56    | Disk and S3 services, blobs, attachments, signed URLs                       |
@@ -51,7 +51,7 @@ Rails: 36,129 lines · 3,670 tests
 | Notifications               | 769       | **done** | Instrumentation bus; ORM reports every query   |
 | CurrentAttributes           | —         | **done** | `AsyncLocalStorage`; scoped per request        |
 | Duration / TimeWithZone     | ~1,200    | todo     | `Temporal` where it fits                       |
-| Number / date formatting    | ~1,000    | todo     | `Intl`                                         |
+| Number / date formatting    | ~1,000    | **done** | `Intl`, in @altair/view                        |
 | Core extensions             | 8,549     | **n/a**  | JavaScript has these                           |
 | XmlMini                     | 650       | **n/a**  | `Bun.XML`                                      |
 
@@ -116,7 +116,7 @@ Rails: 21,159 lines · 2,699 tests
 | ActionCable                      | 4,496     | 220         | `@altair/cable`               | **done**                              |
 | ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | **wip** — previews, attachments todo  |
 | ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | **wip** — cron and more adapters todo |
-| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — dev server, console todo    |
+| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — console and server done     |
 | ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations done            |
 | ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **wip** — no variants (see below)     |
 | ActionText                       | 2,617     | 318         | —                             | todo — late phase                     |
@@ -128,8 +128,8 @@ Rails: 21,159 lines · 2,699 tests
 
 The framework's shape is complete: every Rails component has an Altair
 counterpart that runs. What remains is depth. Next up: Vite
-integration and the dev server, then ActiveSupport's time handling and number
-formatting, content security policy and rate limiting. ActionText and
+integration, ActiveSupport's Duration and time zones, content security policy
+and rate limiting. ActionText and
 ActionMailbox are deliberately last, being the two components most
 applications never touch.
 

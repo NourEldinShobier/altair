@@ -199,6 +199,44 @@ switch (command) {
     break;
   }
 
+  case "console":
+  case "c": {
+    // The application's own entry boots it; the console just adds a prompt on
+    // top of whatever that leaves in scope.
+    const { startConsole } = await import("./console.js");
+    const context: Record<string, unknown> = {};
+
+    const boot = join(process.cwd(), "config", "console.ts");
+    if (await Bun.file(boot).exists()) {
+      const loaded = (await import(pathToFileURL(boot).href)) as { default?: unknown };
+      Object.assign(context, loaded.default ?? loaded);
+    }
+
+    await startConsole(context, {
+      banner: `Altair console — ${Object.keys(context).length} names in scope. Ctrl-D or .exit to leave.`,
+    });
+    break;
+  }
+
+  case "server":
+  case "s": {
+    // Bun's own --hot does the reloading, so this is about the entry point and
+    // the flags rather than a watcher of our own.
+    const entry = join(process.cwd(), "bin", "server.ts");
+    if (!(await Bun.file(entry).exists())) {
+      console.error("No bin/server.ts found. Run this from an Altair application.");
+      process.exit(1);
+    }
+
+    const port = args[0]?.replace(/^--port=?/, "");
+    const child = Bun.spawn(["bun", "run", "--hot", entry], {
+      stdio: ["inherit", "inherit", "inherit"],
+      env: { ...process.env, ...(port ? { PORT: port } : {}) },
+    });
+
+    process.exit(await child.exited);
+  }
+
   case "secret":
     console.log(generateSecret());
     break;
