@@ -81,16 +81,16 @@ Rails: 21,159 lines · 2,699 tests
 
 ## Everything else
 
-| Component                        | Rails LOC | Rails tests | Target            | Status                              |
-| -------------------------------- | --------- | ----------- | ----------------- | ----------------------------------- |
+| Component                        | Rails LOC | Rails tests | Target                        | Status                                       |
+| -------------------------------- | --------- | ----------- | ----------------------------- | -------------------------------------------- |
 | Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — boot, config, generators, db tasks |
-| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`     | **wip** — validations done          |
-| ActiveJob                        | 4,965     | 515         | `@altair/jobs`    | todo                                |
-| ActionCable                      | 4,496     | 220         | `@altair/cable`   | todo — `Bun.serve` WebSockets       |
-| ActiveStorage                    | 4,110     | 626         | `@altair/storage` | todo — `Bun.S3Client` + `Bun.Image` |
-| ActionMailer                     | 2,795     | 292         | `@altair/mailer`  | todo                                |
-| ActionText                       | 2,617     | 318         | —                 | todo — late phase                   |
-| ActionMailbox                    | 750       | 123         | —                 | todo — late phase                   |
+| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations done                   |
+| ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | todo                                         |
+| ActionCable                      | 4,496     | 220         | `@altair/cable`               | todo — `Bun.serve` WebSockets                |
+| ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | todo — `Bun.S3Client` + `Bun.Image`          |
+| ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | todo                                         |
+| ActionText                       | 2,617     | 318         | —                             | todo — late phase                            |
+| ActionMailbox                    | 750       | 123         | —                             | todo — late phase                            |
 
 ---
 
