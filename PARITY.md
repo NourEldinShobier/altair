@@ -8,10 +8,14 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,331** | 26,775    | 5.0% |
+| **Total** | **1,342** | 26,775    | 5.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
+
+The ORM suite runs against SQLite, PostgreSQL and MySQL/MariaDB on every push.
+Anything marked done for ActiveRecord has passed on all three, not just on the
+one that needs no server.
 
 ---
 
@@ -20,7 +24,7 @@ language already provides it)
 | Package              | Tests | Covers                                                                      |
 | -------------------- | ----- | --------------------------------------------------------------------------- |
 | `@altair/support`    | 649   | Inflector, callbacks + decorators, cache, message signing/encryption        |
-| `@altair/orm`        | 243   | Connection, migrations, models, relations, associations, validations        |
+| `@altair/orm`        | 254   | Connection, migrations, models, relations, associations, validations        |
 | `@altair/controller` | 132   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
 | `@altair/cli`        | 67    | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 45    | Resourceful routing, typed path helpers                                     |
@@ -59,7 +63,7 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Connection adapters           | 21,714    | **n/a**  | `Bun.sql`                                                   |
 | Attributes & dirty tracking   | 1,144     | **done** | Typed via an attributes interface                           |
 | Persistence                   | 1,006     | **done** | save, update, destroy, create, reload                       |
-| Migrations                    | 2,705     | **done** | DSL, versions, rollback                                     |
+| Migrations                    | 2,705     | **done** | DSL, versions, rollback, opt-in foreign keys                |
 | Callbacks                     | —         | **done** | save/create/update/destroy/validation                       |
 | Validations                   | —         | **done** | presence, length, format, uniqueness, and the rest          |
 | Associations                  | 6,031     | **wip**  | belongsTo/hasMany/hasOne/through/polymorphic, `includes`    |
