@@ -46,6 +46,13 @@
         "@altair/support": "workspace:*",
       },
     },
+    "packages/jobs": {
+      "name": "@altair/jobs",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/support": "workspace:*",
+      },
+    },
     "packages/orm": {
       "name": "@altair/orm",
       "version": "0.0.0",
@@ -78,6 +85,8 @@
     "@altair/controller": ["@altair/controller@workspace:packages/controller"],
 
     "@altair/core": ["@altair/core@workspace:packages/core"],
+
+    "@altair/jobs": ["@altair/jobs@workspace:packages/jobs"],
 
     "@altair/orm": ["@altair/orm@workspace:packages/orm"],
 
