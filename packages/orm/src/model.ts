@@ -1043,11 +1043,13 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       await klass.columnTypes();
       const now = new Date();
 
-      // Rails maintains these automatically when the columns exist.
-      if (await klass.hasTimestamps()) {
-        this[ATTRIBUTES].created_at ??= now;
-        this[ATTRIBUTES].updated_at = now;
-      }
+      // Rails maintains each of these only if that column exists. A table with
+      // one of the pair and not the other is ordinary — ActiveStorage's blobs
+      // are only ever created — and naming a column that is not there fails
+      // the insert outright.
+      const present = await klass.columnNames();
+      if (present.includes("created_at")) this[ATTRIBUTES].created_at ??= now;
+      if (present.includes("updated_at")) this[ATTRIBUTES].updated_at = now;
 
       // A hierarchy's rows record which class wrote them, root included.
       if (klass.stiRoot !== undefined || Object.keys(klass.descendants).length > 0) {
@@ -1103,7 +1105,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = klass.connection;
       const changes = this.changedAttributes() as Record<string, unknown>;
 
-      if (await klass.hasTimestamps()) changes.updated_at = new Date();
+      if ((await klass.columnNames()).includes("updated_at")) changes.updated_at = new Date();
       if (Object.keys(changes).length === 0) return;
 
       // Optimistic locking: the version the record was read at goes in the
