@@ -6,6 +6,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@altair/router": "workspace:*",
     "@altair/support": "workspace:*"
   }
 }

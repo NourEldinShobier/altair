@@ -15,6 +15,7 @@
       "name": "@altair/controller",
       "version": "0.0.0",
       "dependencies": {
+        "@altair/router": "workspace:*",
         "@altair/support": "workspace:*",
       },
     },

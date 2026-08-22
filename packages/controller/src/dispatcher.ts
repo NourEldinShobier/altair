@@ -1,0 +1,118 @@
+/**
+ * The dispatcher, ported from `ActionDispatch::Routing::RouteSet`.
+ *
+ * Turns a recognized route into a controller instance, runs the action, and
+ * returns its response. This is the piece that makes a route table answer an
+ * HTTP request.
+ *
+ * The result is a plain `fetch` handler, which is what `Bun.serve` wants, so
+ * there is no adapter between the framework and the runtime.
+ */
+
+import type { Router } from "@altair/router";
+import { Controller, type ControllerContext } from "./controller.js";
+
+export type ControllerClass = new (context: ControllerContext) => Controller;
+
+/** Maps the controller name a route carries to the class that serves it. */
+export type ControllerRegistry = Record<string, ControllerClass>;
+
+export interface DispatcherOptions {
+  router: Router;
+  controllers: ControllerRegistry;
+  /** Called when no route matches. Defaults to a bare 404. */
+  notFound?: (request: Request) => Response | Promise<Response>;
+  /** Called when an action throws. Defaults to rethrowing in development. */
+  onError?: (error: unknown, request: Request) => Response | Promise<Response>;
+}
+
+/** Raised when a route names a controller that was never registered. */
+export class MissingController extends Error {
+  constructor(readonly controller: string) {
+    super(
+      `No controller registered for "${controller}". Add it to the controllers map passed to createDispatcher.`,
+    );
+    this.name = "MissingController";
+  }
+}
+
+/**
+ * Reads the request body into params.
+ *
+ * Rails' ParamsParser middleware does this for JSON and form encodings; the
+ * same two cover almost every request, and anything else is left to the action
+ * to read off the request itself.
+ */
+export async function parseBody(request: Request): Promise<Record<string, unknown>> {
+  if (request.method === "GET" || request.method === "HEAD") return {};
+
+  const contentType = request.headers.get("content-type") ?? "";
+
+  try {
+    if (contentType.includes("application/json")) {
+      const parsed: unknown = await request.clone().json();
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { _json: parsed };
+    }
+
+    if (
+      contentType.includes("application/x-www-form-urlencoded") ||
+      contentType.includes("multipart/form-data")
+    ) {
+      const form = await request.clone().formData();
+      const out: Record<string, unknown> = {};
+      for (const [key, value] of form.entries()) {
+        // Rails' `tags[]` convention: repeated keys collect into an array.
+        if (key.endsWith("[]")) {
+          const name = key.slice(0, -2);
+          ((out[name] ??= []) as unknown[]).push(value);
+        } else {
+          out[key] = value;
+        }
+      }
+      return out;
+    }
+  } catch {
+    // A malformed body is not a crash; the action sees no params and can
+    // decide what to do, which is what Rails does for unparseable input.
+    return {};
+  }
+
+  return {};
+}
+
+/**
+ * Builds a `fetch` handler from a route table and a controller registry.
+ *
+ *     Bun.serve({ fetch: createDispatcher({ router, controllers }) })
+ */
+export function createDispatcher(
+  options: DispatcherOptions,
+): (request: Request) => Promise<Response> {
+  const { router, controllers, notFound, onError } = options;
+
+  return async function dispatch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const recognized = router.recognize(request.method, url.pathname);
+
+    if (!recognized) {
+      return notFound ? await notFound(request) : new Response("Not Found", { status: 404 });
+    }
+
+    const ControllerClass = controllers[recognized.controller];
+    if (!ControllerClass) throw new MissingController(recognized.controller);
+
+    try {
+      const controller = new ControllerClass({
+        request,
+        params: await parseBody(request),
+        routeParams: recognized.params,
+      });
+      return await controller.processAction(recognized.action);
+    } catch (error) {
+      if (onError) return await onError(error, request);
+      throw error;
+    }
+  };
+}
