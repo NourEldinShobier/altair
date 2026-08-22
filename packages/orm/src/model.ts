@@ -1042,7 +1042,12 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const bindings = entries.map(([, value]) => serialize(value, connection));
 
       if (entries.length === 0) {
-        await connection.execute(`INSERT INTO ${table} DEFAULT VALUES`);
+        // MySQL has no DEFAULT VALUES; an empty column list means the same.
+        const empty =
+          connection.adapter === "mysql"
+            ? `INSERT INTO ${table} () VALUES ()`
+            : `INSERT INTO ${table} DEFAULT VALUES`;
+        await connection.execute(empty);
       } else if (connection.supportsReturning) {
         const rows = await connection.query<Row>(
           `INSERT INTO ${table} (${columns}) VALUES (${placeholders}) RETURNING *`,
@@ -1050,14 +1055,20 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         );
         if (rows[0]) this[ATTRIBUTES] = klass.castRow(rows[0]);
       } else {
-        await connection.execute(
-          `INSERT INTO ${table} (${columns}) VALUES (${placeholders})`,
-          bindings,
-        );
-        const rows = await connection.query<Row>(
-          `SELECT * FROM ${table} WHERE ${connection.quote(klass.primaryKey)} = LAST_INSERT_ID()`,
-        );
-        if (rows[0]) this[ATTRIBUTES] = klass.castRow(rows[0]);
+        // LAST_INSERT_ID() answers for the connection that ran the INSERT, and
+        // a pool is free to hand the follow-up read a different one. The
+        // transaction pins both to the same connection; inside an open
+        // transaction it costs only a savepoint.
+        await connection.transaction(async (scoped) => {
+          await scoped.execute(
+            `INSERT INTO ${table} (${columns}) VALUES (${placeholders})`,
+            bindings,
+          );
+          const rows = await scoped.query<Row>(
+            `SELECT * FROM ${table} WHERE ${connection.quote(klass.primaryKey)} = LAST_INSERT_ID()`,
+          );
+          if (rows[0]) this[ATTRIBUTES] = klass.castRow(rows[0]);
+        });
       }
 
       this[PERSISTED] = true;

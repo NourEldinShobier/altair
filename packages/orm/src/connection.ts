@@ -139,7 +139,8 @@ export class Connection {
   async executeCount(sql: string, bindings: readonly unknown[] = []): Promise<number> {
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
       const result = await this.#run(sql, bindings);
-      return Number((result as { count?: number }).count ?? 0);
+      const reported = result as { count?: number; affectedRows?: number; rowsAffected?: number };
+      return Number(reported.count ?? reported.affectedRows ?? reported.rowsAffected ?? 0);
     });
   }
 

@@ -188,7 +188,10 @@ function sqlType(connection: Connection, column: Column): string {
     case "boolean":
       return pg ? "BOOLEAN" : mysql ? "TINYINT(1)" : "INTEGER";
     case "datetime":
-      return pg ? "TIMESTAMP" : "DATETIME";
+      // DATETIME without a precision truncates to whole seconds, which makes
+      // two saves in the same second indistinguishable — and `updated_at` is
+      // meant to distinguish them.
+      return pg ? "TIMESTAMP" : mysql ? "DATETIME(6)" : "DATETIME";
     case "date":
       return "DATE";
     case "json":

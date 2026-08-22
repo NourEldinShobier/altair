@@ -55,7 +55,8 @@ describe("introspection", () => {
   // A dump containing schema_migrations would try to recreate it on load.
   it("leaves the framework's own tables out", async () => {
     await connection.execute(
-      'CREATE TABLE "schema_migrations" ("version" VARCHAR(255) NOT NULL PRIMARY KEY)',
+      `CREATE TABLE IF NOT EXISTS ${connection.quote("schema_migrations")} ` +
+        `(${connection.quote("version")} VARCHAR(255) NOT NULL PRIMARY KEY)`,
     );
 
     const definition = await introspect(connection);
