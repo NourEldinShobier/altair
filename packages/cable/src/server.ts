@@ -1,0 +1,313 @@
+/**
+ * The cable server, ported from `ActionCable::Connection::Base`.
+ *
+ * Produces the `websocket` handlers `Bun.serve` takes, so the cable mounts into
+ * the same server as the rest of the application rather than running beside it.
+ *
+ * Bun's pub/sub sends identical bytes to every subscriber, which is perfect for
+ * the ping — one publish, every socket — and wrong for channel messages, which
+ * the protocol frames under each subscriber's own identifier. So the ping goes
+ * through Bun's pub/sub and channel messages go through a stream registry that
+ * frames per subscription. Forcing one mechanism to do both would have meant
+ * sending every client another client's identifier.
+ */
+
+import type { Broadcaster, CableSocket, ChannelContext, ConnectionContext } from "./channel.js";
+import { Channel, topicFor } from "./channel.js";
+import {
+  DEFAULT_MOUNT_PATH,
+  DISCONNECT_REASONS,
+  confirmationFrame,
+  disconnectFrame,
+  messageFrame,
+  parseData,
+  parseFrame,
+  parseIdentifier,
+  pingFrame,
+  rejectionFrame,
+  welcomeFrame,
+} from "./protocol.js";
+
+/** Per-socket state Bun carries for us via the upgrade's `data`. */
+export interface SocketData {
+  connection: ConnectionContext;
+  /** Live channels, keyed by the raw identifier string the client sent. */
+  subscriptions: Map<string, Channel>;
+}
+
+export interface CableOptions {
+  /** Where the cable is mounted. Rails defaults to /cable. */
+  path?: string;
+  channels?: (typeof Channel)[];
+  /**
+   * Decides who is connecting. Rails' `Connection#connect` with
+   * `identified_by`. Returning null refuses the connection.
+   */
+  authorize?: (request: Request) => ConnectionContext | null | Promise<ConnectionContext | null>;
+  /** Seconds between pings. Rails uses 3; the client watches for gaps. */
+  pingInterval?: number;
+  onError?: (error: unknown, context: { command?: string; identifier?: string }) => void;
+}
+
+/** Publishes through a Bun server. The default when everything is one process. */
+export class BunBroadcaster implements Broadcaster {
+  constructor(private readonly server: { publish(topic: string, data: string): unknown }) {}
+
+  publish(topic: string, payload: string): unknown {
+    return this.server.publish(topic, payload);
+  }
+}
+
+/**
+ * Delivers to the sockets streaming from each name, framing per subscription.
+ *
+ * This is what a broadcast actually goes through. It is in-process; reaching
+ * another server means republishing through Redis, which is why `Broadcaster`
+ * stays an interface.
+ */
+export class StreamRegistry implements Broadcaster {
+  readonly published: { topic: string; payload: string }[] = [];
+  readonly #streams = new Map<string, Set<CableSocket & { data: SocketData }>>();
+
+  add(stream: string, socket: CableSocket & { data: SocketData }): void {
+    const sockets = this.#streams.get(stream) ?? new Set();
+    sockets.add(socket);
+    this.#streams.set(stream, sockets);
+  }
+
+  remove(stream: string, socket: CableSocket & { data: SocketData }): void {
+    const sockets = this.#streams.get(stream);
+    if (!sockets) return;
+
+    sockets.delete(socket);
+    if (sockets.size === 0) this.#streams.delete(stream);
+  }
+
+  /** Drops a socket from every stream it was on. */
+  removeEverywhere(socket: CableSocket): void {
+    for (const [stream, sockets] of this.#streams) {
+      sockets.delete(socket as CableSocket & { data: SocketData });
+      if (sockets.size === 0) this.#streams.delete(stream);
+    }
+  }
+
+  subscriberCount(stream: string): number {
+    return this.#streams.get(stream)?.size ?? 0;
+  }
+
+  publish(topic: string, payload: string): void {
+    this.published.push({ topic, payload });
+
+    let parsed: { stream: string; message: unknown };
+    try {
+      parsed = JSON.parse(payload) as { stream: string; message: unknown };
+    } catch {
+      return;
+    }
+
+    for (const socket of this.#streams.get(parsed.stream) ?? []) {
+      // Each subscription gets the message under its own identifier, which is
+      // why this cannot be one publish of one payload.
+      for (const frame of frameFor(socket.data.subscriptions, payload)) socket.send(frame);
+    }
+  }
+}
+
+/**
+ * Wraps a broadcast payload back into a protocol frame.
+ *
+ * A broadcast names a stream, but each subscriber needs the message under
+ * *its own* identifier — two clients on the same stream have different
+ * identifiers, so the frame cannot be built once at publish time.
+ */
+export function frameFor(subscriptions: Map<string, Channel>, payload: string): string[] {
+  let parsed: { stream: string; message: unknown };
+  try {
+    parsed = JSON.parse(payload) as { stream: string; message: unknown };
+  } catch {
+    return [];
+  }
+
+  const frames: string[] = [];
+  for (const [identifier, channel] of subscriptions) {
+    if (channel.streams.includes(parsed.stream)) {
+      frames.push(messageFrame(identifier, parsed.message));
+    }
+  }
+  return frames;
+}
+
+export class Cable {
+  readonly path: string;
+  readonly streams = new StreamRegistry();
+  #broadcaster: Broadcaster = this.streams;
+  #ping: ReturnType<typeof setInterval> | undefined;
+
+  constructor(private readonly options: CableOptions = {}) {
+    this.path = options.path ?? DEFAULT_MOUNT_PATH;
+    if (options.channels) Channel.register(...options.channels);
+  }
+
+  get broadcaster(): Broadcaster {
+    return this.#broadcaster;
+  }
+
+  /**
+   * Starts the ping timer against a running server.
+   *
+   * Only the ping uses Bun's pub/sub: every socket gets the same bytes, so one
+   * publish serves all of them instead of a timer per connection.
+   */
+  attach(server: { publish(topic: string, data: string): unknown }): void {
+    const seconds = this.options.pingInterval ?? 3;
+    this.#ping ??= setInterval(
+      () => server.publish(topicFor("__ping__"), pingFrame()),
+      seconds * 1000,
+    );
+    // A timer that keeps the process alive is a server that will not shut down.
+    this.#ping.unref?.();
+  }
+
+  detach(): void {
+    if (this.#ping) clearInterval(this.#ping);
+    this.#ping = undefined;
+  }
+
+  /** Broadcasts from outside a socket — a controller, a job, a console. */
+  broadcastTo(stream: string, message: unknown): void {
+    Channel.broadcastTo(this.#broadcaster, stream, message);
+  }
+
+  /** Whether a request is for the cable, so `fetch` knows to upgrade it. */
+  handles(request: Request): boolean {
+    return new URL(request.url).pathname === this.path;
+  }
+
+  /** Builds the per-socket data an upgrade should carry, or null to refuse. */
+  async upgradeData(request: Request): Promise<SocketData | null> {
+    const connection = this.options.authorize
+      ? await this.options.authorize(request)
+      : ({ request } as ConnectionContext);
+
+    if (!connection) return null;
+    return { connection, subscriptions: new Map() };
+  }
+
+  /** The handlers `Bun.serve({ websocket })` takes. */
+  handlers(): {
+    open(ws: CableSocket & { data: SocketData }): void;
+    message(ws: CableSocket & { data: SocketData }, raw: string | Buffer): Promise<void>;
+    close(ws: CableSocket & { data: SocketData }): Promise<void>;
+  } {
+    return {
+      open: (ws) => {
+        // Every socket joins the ping topic, so one publish reaches everyone
+        // rather than one timer per connection.
+        ws.subscribe(topicFor("__ping__"));
+        ws.send(welcomeFrame());
+      },
+
+      message: async (ws, raw) => {
+        const frame = parseFrame(raw);
+        // A socket is untrusted input: one bad frame must not end the
+        // connection, so a malformed one is ignored.
+        if (!frame) return;
+
+        try {
+          switch (frame.command) {
+            case "subscribe":
+              await this.#subscribe(ws, frame.identifier);
+              return;
+            case "unsubscribe":
+              await this.#unsubscribe(ws, frame.identifier);
+              return;
+            case "message":
+              await this.#message(ws, frame.identifier, parseData(frame.data));
+              return;
+          }
+        } catch (error) {
+          this.options.onError?.(error, { command: frame.command, identifier: frame.identifier });
+        }
+      },
+
+      close: async (ws) => {
+        this.streams.removeEverywhere(ws);
+
+        for (const channel of ws.data.subscriptions.values()) {
+          channel.stopAllStreams();
+          await channel.unsubscribed();
+        }
+        ws.data.subscriptions.clear();
+      },
+    };
+  }
+
+  async #subscribe(ws: CableSocket & { data: SocketData }, identifier: string): Promise<void> {
+    if (ws.data.subscriptions.has(identifier)) return;
+
+    const parsed = parseIdentifier(identifier);
+    if (!parsed) {
+      ws.send(rejectionFrame(identifier));
+      return;
+    }
+
+    const ChannelClass = Channel.lookup(parsed.channel);
+    if (!ChannelClass) {
+      ws.send(rejectionFrame(identifier));
+      return;
+    }
+
+    const { channel: _name, ...params } = parsed;
+    const context: ChannelContext = {
+      socket: ws,
+      connection: ws.data.connection,
+      identifier,
+      params,
+      broadcaster: this.#broadcaster,
+    };
+
+    const channel = new ChannelClass(context);
+    await channel.subscribed();
+
+    if (channel.isRejected) {
+      channel.stopAllStreams();
+      ws.send(rejectionFrame(identifier));
+      return;
+    }
+
+    ws.data.subscriptions.set(identifier, channel);
+    for (const stream of channel.streams) this.streams.add(stream, ws);
+
+    ws.send(confirmationFrame(identifier));
+  }
+
+  async #unsubscribe(ws: CableSocket & { data: SocketData }, identifier: string): Promise<void> {
+    const channel = ws.data.subscriptions.get(identifier);
+    if (!channel) return;
+
+    for (const stream of channel.streams) this.streams.remove(stream, ws);
+
+    channel.stopAllStreams();
+    await channel.unsubscribed();
+    ws.data.subscriptions.delete(identifier);
+  }
+
+  async #message(
+    ws: CableSocket & { data: SocketData },
+    identifier: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const channel = ws.data.subscriptions.get(identifier);
+    // A message for a subscription that was never confirmed is dropped rather
+    // than opening a path into a channel the client does not hold.
+    if (!channel) return;
+
+    await channel.dispatch(data);
+  }
+
+  /** Closes a connection with a protocol disconnect frame. */
+  disconnect(ws: CableSocket, reason: string = DISCONNECT_REASONS.unauthorized): void {
+    ws.send(disconnectFrame(reason, false));
+    ws.close(1000, reason);
+  }
+}

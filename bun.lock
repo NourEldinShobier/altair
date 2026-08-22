@@ -14,6 +14,13 @@
         "typescript": "^7.0.2",
       },
     },
+    "packages/cable": {
+      "name": "@altair/cable",
+      "version": "0.0.0",
+      "dependencies": {
+        "@altair/support": "workspace:*",
+      },
+    },
     "packages/cli": {
       "name": "@altair/cli",
       "version": "0.0.0",
@@ -88,6 +95,8 @@
     },
   },
   "packages": {
+    "@altair/cable": ["@altair/cable@workspace:packages/cable"],
+
     "@altair/cli": ["@altair/cli@workspace:packages/cli"],
 
     "@altair/controller": ["@altair/controller@workspace:packages/controller"],
