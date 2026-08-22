@@ -205,8 +205,14 @@ describe("relations", () => {
     );
   });
 
+  // The generated text is adapter-specific, so it is asserted against one
+  // adapter rather than whichever the suite is running against.
   it("builds readable SQL", () => {
-    const { sql, bindings } = Post.where({ published: 1 }).order("title").limit(5).toSql();
+    class Article extends Model<PostAttributes>("posts", {
+      connection: new Connection("sqlite://:memory:"),
+    }) {}
+
+    const { sql, bindings } = Article.where({ published: 1 }).order("title").limit(5).toSql();
 
     expect(sql).toBe(
       'SELECT "posts".* FROM "posts" WHERE "posts"."published" = ? ORDER BY "posts"."title" ASC LIMIT 5',

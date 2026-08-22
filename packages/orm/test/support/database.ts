@@ -28,8 +28,16 @@ let shared: Connection | undefined;
 export async function testConnection(): Promise<Connection> {
   if (isSqlite) return new Connection(TEST_DATABASE_URL);
 
-  shared ??= new Connection(TEST_DATABASE_URL);
+  // A fresh pool each time, closing the previous one so connections do not
+  // accumulate. PostgreSQL caches a prepared statement's plan per connection
+  // and refuses to run it once the table it was planned against has been
+  // dropped and rebuilt — which is what these tests do between every case.
+  const previous = shared;
+  shared = new Connection(TEST_DATABASE_URL);
+
   await dropAllTables(shared);
+  await previous?.close();
+
   return shared;
 }
 

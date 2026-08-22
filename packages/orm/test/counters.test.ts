@@ -129,9 +129,10 @@ describe("counter caches", () => {
   // A parent that predates the column has null in it, and null + 1 is null —
   // a counter that silently stops counting.
   it("starts counting from a null", async () => {
-    await connection.execute("INSERT INTO posts (title, comments_count) VALUES (?, NULL)", [
-      "Legacy",
-    ]);
+    await connection.execute(
+      `INSERT INTO posts (title, comments_count) VALUES (${connection.placeholder(0)}, NULL)`,
+      ["Legacy"],
+    );
 
     await Comment.create({ post_id: 1, body: "First" });
 

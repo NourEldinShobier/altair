@@ -30,6 +30,13 @@ export interface RelationSource<T> {
   primaryKey: string;
   /** Turns a database row into a model instance. */
   instantiate: (row: Row) => T;
+  /**
+   * Work the source needs done before it can build records.
+   *
+   * A model has to know its column types to cast a row faithfully, and asking
+   * the database for them is asynchronous while `instantiate` is not.
+   */
+  prepare?: () => Promise<void>;
   /** Loads named associations for a batch of records, one query each. */
   preload?: (records: T[], names: string[]) => Promise<void>;
 }
@@ -277,6 +284,8 @@ export class Relation<T> implements PromiseLike<T[]> {
   /** Runs the query and returns model instances, preloading any includes. */
   async toArray(): Promise<T[]> {
     if (this.#preloaded) return this.#preloaded;
+
+    await this.#source.prepare?.();
 
     const { sql, bindings } = this.toSql();
     const rows = await this.connection.query<Row>(sql, bindings);

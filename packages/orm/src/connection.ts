@@ -53,6 +53,7 @@ export class Connection {
   #inTransaction = false;
   #savepoints = 0;
   #reserved: ReservedConnection | undefined;
+  #prepared = false;
 
   /**
    * The handle statements run on.
@@ -117,6 +118,8 @@ export class Connection {
    * what saves an application from having to restart after every migration.
    */
   async #run(sql: string, bindings: readonly unknown[]): Promise<unknown> {
+    await this.#prepareSession();
+
     try {
       return await this.#handle.unsafe(sql, bindings as unknown[]);
     } catch (error) {
@@ -216,6 +219,20 @@ export class Connection {
       this.#reserved = undefined;
       await reserved?.release?.();
     }
+  }
+
+  /**
+   * Settings a connection needs before its first statement.
+   *
+   * SQLite enforces foreign keys only when a connection asks it to, and the
+   * default is off — a declared constraint that is never enforced is worse
+   * than no constraint, because it reads as protection.
+   */
+  async #prepareSession(): Promise<void> {
+    if (this.#prepared) return;
+    this.#prepared = true;
+
+    if (this.adapter === "sqlite") await this.sql.unsafe("PRAGMA foreign_keys = ON");
   }
 
   get isInTransaction(): boolean {
