@@ -33,17 +33,31 @@ export function abortCallback(): never {
 export type CallbackKind = "before" | "around" | "after";
 
 /**
- * A callback body: a method name on the target, or a function.
+ * The names of `T`'s methods.
+ *
+ * Rails takes a symbol here and finds out at run time whether the method
+ * exists. Naming the methods in the type instead means `before_save :typo` is
+ * a compile error, and renaming a method updates its callback declaration.
+ */
+export type MethodName<T> = {
+  [K in keyof T]: T[K] extends (...args: never[]) => unknown ? K : never;
+}[keyof T] &
+  string;
+
+/**
+ * A callback body: the name of a method on the target, or a function.
  *
  * The signature always carries the `block` argument even though only `around`
  * callbacks use it. A function that declares fewer parameters is assignable to
  * one that declares more, so `() => {}` and `(post) => {}` both fit — writing
  * this as a union of arities instead makes inference fail at every call site.
  */
-export type Filter<T> = string | ((this: T, target: T, block: () => Promise<unknown>) => unknown);
+export type Filter<T> =
+  | MethodName<T>
+  | ((this: T, target: T, block: () => Promise<unknown>) => unknown);
 
-/** An `if`/`unless` guard: a method name on the target, or a predicate. */
-export type Condition<T> = string | ((this: T, target: T) => unknown);
+/** An `if`/`unless` guard: the name of a method on the target, or a predicate. */
+export type Condition<T> = MethodName<T> | ((this: T, target: T) => unknown);
 
 export interface SetCallbackOptions<T> {
   if?: Condition<T> | Condition<T>[];
@@ -103,6 +117,58 @@ interface Env<T> {
 /** Per-constructor chain storage. Subclasses copy on write, as in Rails. */
 const CHAINS = Symbol("altair.callbacks.chains");
 
+// Decorator metadata is stage 3 and the well-known symbol is missing in some
+// runtimes. Defining it is enough to opt in; Bun populates whatever is present.
+(Symbol as { metadata?: symbol }).metadata ??= Symbol.for("Symbol.metadata");
+
+/** @internal Shared with the decorators module. */
+export const METADATA = (Symbol as { metadata?: symbol }).metadata!;
+/** @internal Where decorators park callbacks until the chain is first touched. */
+export const PENDING = Symbol.for("altair.callbacks.pending");
+const DRAINED = Symbol.for("altair.callbacks.drained");
+
+/** @internal */
+export interface PendingCallback {
+  chain: string;
+  kind: CallbackKind;
+  method: string;
+  options: SetCallbackOptions<unknown>;
+}
+
+/**
+ * Moves decorator-declared callbacks onto a class's chains.
+ *
+ * Runs before anything reads or writes a chain, so registration order is the
+ * source order of the decorators no matter when the chain is first used.
+ */
+function drainDecorated(klass: object): void {
+  if (Object.hasOwn(klass, DRAINED)) return;
+  Object.defineProperty(klass, DRAINED, { value: true, configurable: true });
+
+  // Ancestors first: a subclass copies its parent's chain the moment it writes
+  // to one, so a parent drained afterwards would never reach the copy.
+  const parent = Object.getPrototypeOf(klass) as object | null;
+  if (typeof parent === "function") drainDecorated(parent);
+
+  const metadata = (klass as Record<symbol, unknown>)[METADATA] as
+    | Record<PropertyKey, unknown>
+    | undefined;
+  if (!metadata || !Object.hasOwn(metadata, PENDING)) return;
+
+  for (const pending of metadata[PENDING] as PendingCallback[]) {
+    // The decorator already proved the method exists — it was attached to it.
+    // MethodName<object> is never, so the checked signature cannot say so and
+    // this one call goes through the unchecked shape.
+    (setCallback as (...args: unknown[]) => void)(
+      klass,
+      pending.chain,
+      pending.kind,
+      pending.method,
+      pending.options,
+    );
+  }
+}
+
 type Chained = {
   [CHAINS]?: Map<string, Chain<unknown>>;
 };
@@ -135,6 +201,7 @@ function findChains(klass: object | null): Map<string, Chain<unknown>> | undefin
 }
 
 function lookupChain(klass: object, name: string): Chain<unknown> | undefined {
+  drainDecorated(klass);
   return findChains(klass)?.get(name);
 }
 
@@ -154,7 +221,9 @@ async function invokeFilter<T>(
     if (typeof method !== "function") {
       throw new TypeError(`Callback ${filter} is not a method on the target`);
     }
-    return await (method as (...args: unknown[]) => unknown).call(target, block);
+    // Same arguments as a function filter, so a method and a lambda declaring
+    // the same parameters behave identically.
+    return await (method as (...args: unknown[]) => unknown).call(target, target, block);
   }
   return await (filter as (target: T, block?: () => Promise<unknown>) => unknown).call(
     target,
@@ -213,6 +282,7 @@ export function setCallback<T>(
   filter: Filter<T>,
   options: SetCallbackOptions<T> = {},
 ): void {
+  drainDecorated(klass);
   const chains = ownChains(klass);
   let chain = chains.get(name);
   if (!chain) {
@@ -247,6 +317,7 @@ export function skipCallback<T>(
   filter: Filter<T>,
   { raise = true }: { raise?: boolean } = {},
 ): void {
+  drainDecorated(klass);
   const chains = ownChains(klass);
   const chain = chains.get(name);
   const index = chain?.callbacks.findIndex((c) => c.kind === kind && c.key === filter) ?? -1;

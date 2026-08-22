@@ -45,8 +45,14 @@ export interface ScopeOptions {
   constraints?: Record<string, RegExp>;
 }
 
+/**
+ * Rails' `to: "posts#show"`. Typed as a template literal so a missing `#` is a
+ * compile error rather than a route that silently never matches.
+ */
+export type ControllerAction = `${string}#${string}`;
+
 export interface MatchOptions extends RouteOptions {
-  to?: string;
+  to?: ControllerAction;
   as?: string;
   via?: HttpMethod | HttpMethod[];
   controller?: string;
@@ -202,7 +208,7 @@ export class Mapper {
   }
 
   /** The root route. Rails names it `root`. */
-  root(to: string): this {
+  root(to: ControllerAction): this {
     const [controller, action] = to.split("#");
     if (!controller || !action) throw new Error(`root() needs "controller#action", got "${to}"`);
 

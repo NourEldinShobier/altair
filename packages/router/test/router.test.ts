@@ -345,6 +345,24 @@ describe("plain routes", () => {
   it("requires a controller and action", () => {
     expect(() => draw((r) => r.get("about"))).toThrow("needs a controller and action");
   });
+
+  // Altair-specific: Rails discovers a malformed `to:` when the route fails to
+  // match. The template literal type catches it at the declaration.
+  //
+  // These are compile-time assertions — the closures are never called, because
+  // running them would throw for the very reason the type rejects them.
+  it("rejects a malformed to: at compile time", () => {
+    const _typeErrors = () => {
+      // @ts-expect-error "postsshow" is missing the # separator
+      draw((r) => r.get("about", { to: "postsshow" }));
+
+      // @ts-expect-error root() takes the same shape
+      draw((r) => r.root("home"));
+    };
+
+    expect(typeof _typeErrors).toBe("function");
+    expect(draw((r) => r.get("about", { to: "pages#about" })).routes).toHaveLength(1);
+  });
 });
 
 describe("constraints and formats", () => {

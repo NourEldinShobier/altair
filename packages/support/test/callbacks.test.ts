@@ -10,6 +10,7 @@ import { describe, expect, it } from "bun:test";
 import {
   Callbacks,
   CallbackAbort,
+  type Filter,
   abortCallback,
   callbacksFor,
   defineCallbacks,
@@ -471,10 +472,14 @@ describe("registration", () => {
     expect(person.history).toEqual([]);
   });
 
-  // Rails: skip_callback raises when the callback is not there
+  // Rails: skip_callback raises when the callback is not there.
+  //
+  // Reaching this at run time now takes a deliberate cast, because the type
+  // rejects a name that is not a method — see the compile-time test below.
   it("throws when skipping a callback that was never set", () => {
     const Person = personClass();
-    expect(() => Person.skipCallback("save", "before", "missing")).toThrow(
+    const missing = "missing" as unknown as Filter<InstanceType<typeof Person>>;
+    expect(() => Person.skipCallback("save", "before", missing)).toThrow(
       "No before callback missing defined for save",
     );
   });
@@ -482,7 +487,28 @@ describe("registration", () => {
   // Rails: skip_callback(raise: false) is silent
   it("stays quiet when raise is false", () => {
     const Person = personClass();
-    expect(() => Person.skipCallback("save", "before", "missing", { raise: false })).not.toThrow();
+    const missing = "missing" as unknown as Filter<InstanceType<typeof Person>>;
+    expect(() => Person.skipCallback("save", "before", missing, { raise: false })).not.toThrow();
+  });
+
+  // Altair-specific: Rails takes a symbol and finds out at run time. We do not.
+  it("rejects a method name that does not exist, at compile time", () => {
+    class Post extends Callbacks {
+      static {
+        this.defineCallbacks("save");
+      }
+      normalizeTitle(): void {}
+    }
+
+    // @ts-expect-error "normalizeTitel" is a typo and is not a method on Post
+    Post.setCallback("save", "before", "normalizeTitel");
+
+    // @ts-expect-error "nope" is not a method, so it cannot be a condition
+    Post.setCallback("save", "before", "normalizeTitle", { if: "nope" });
+
+    // The correctly spelled name is accepted.
+    Post.setCallback("save", "before", "normalizeTitle");
+    expect(callbacksFor(Post, "save").length).toBeGreaterThan(0);
   });
 
   // Rails: test_reset_callbacks
