@@ -9,3 +9,5 @@ export * from "./notifications.js";
 export * from "./duration.js";
 export * from "./time.js";
 export * from "./i18n.js";
+export * from "./logger.js";
+export * from "./error_reporter.js";

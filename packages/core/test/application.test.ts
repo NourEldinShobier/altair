@@ -197,7 +197,13 @@ describe("handler", () => {
 
 describe("errors", () => {
   it("shows the detail in development", async () => {
-    const application = await app({ env: "development", secretKeyBase: SECRET }).boot();
+    const application = await app({
+      env: "development",
+      secretKeyBase: SECRET,
+      // A development app logs like a development app; this suite does not
+      // need two lines per request in among its assertions.
+      log: { level: "fatal", format: "text", queries: false },
+    }).boot();
     running = application;
 
     const response = await application.handler()(new Request("http://test.host/boom"));
@@ -212,7 +218,11 @@ describe("errors", () => {
   // middleware and a plaintext request would be redirected before it ever
   // reached an action to fail in.
   it("hides the detail in production", async () => {
-    const application = await app({ env: "production", secretKeyBase: SECRET }).boot();
+    const application = await app({
+      env: "production",
+      secretKeyBase: SECRET,
+      log: { level: "fatal", format: "json", queries: false },
+    }).boot();
     running = application;
 
     const response = await application.handler()(new Request("https://test.host/boom"));
