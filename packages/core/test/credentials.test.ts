@@ -240,10 +240,16 @@ describe("choosing the file for an environment", () => {
 });
 
 describe("booting with them", () => {
-  const previous = { ...process.env };
+  const previous = process.env.SECRET_KEY_BASE;
 
   afterEach(() => {
-    process.env.SECRET_KEY_BASE = previous.SECRET_KEY_BASE;
+    // Deleted rather than assigned back: assigning undefined to a process.env
+    // key stores the string "undefined", which is truthy, and left every later
+    // test in the run believing there was a secret. Caught by CI, where the
+    // whole suite runs in one process.
+    if (previous === undefined) delete process.env.SECRET_KEY_BASE;
+    else process.env.SECRET_KEY_BASE = previous;
+
     delete process.env[MASTER_KEY_ENV];
   });
 
