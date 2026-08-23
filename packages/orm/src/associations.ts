@@ -59,6 +59,16 @@ export interface AssociationOptions {
   counterCache?: true | string;
 
   /**
+   * What happens to the children when the owner is destroyed.
+   *
+   * Rails' `dependent:`. Without one, destroying a post leaves its comments
+   * behind pointing at a row that is gone — rows nothing will ever read and
+   * nothing will ever delete, and a foreign key constraint will refuse the
+   * delete outright.
+   */
+  dependent?: "destroy" | "nullify" | "restrict";
+
+  /**
    * The polymorphic association on the other side. Rails' `has_many :comments,
    * as: :commentable`.
    *

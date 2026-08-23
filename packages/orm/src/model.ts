@@ -22,7 +22,7 @@
 import { tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
-import { Relation, RecordNotFound, type Conditions } from "./relation.js";
+import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
 import { columnTypeFor } from "./dump.js";
 import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
@@ -125,6 +125,23 @@ export class StaleObjectError extends Error {
   ) {
     super(`Attempted to update a stale ${model} (id ${String(id)}).`);
     this.name = "StaleObjectError";
+  }
+}
+
+/**
+ * Raised when a record still has children an association refuses to orphan.
+ *
+ * Rails' `dependent: :restrict_with_error`. The point is to fail loudly rather
+ * than quietly removing records someone still needs.
+ */
+export class DeleteRestricted extends Error {
+  constructor(
+    readonly model: string,
+    readonly association: string,
+    readonly count: number,
+  ) {
+    super(`Cannot delete this ${model}: it still has ${count} ${association}.`);
+    this.name = "DeleteRestricted";
   }
 }
 
@@ -303,6 +320,56 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     /** Encrypts the values in a condition that name a deterministic column. */
+    /**
+     * How to reach an association's table from this one.
+     *
+     * The relation asks rather than guessing: only the model knows which
+     * column points where, and a query that invented a foreign key would join
+     * the wrong rows rather than failing.
+     */
+    static joinFor(name: string): JoinSpec {
+      const definition = this.associationFor(name);
+
+      if (definition.through) {
+        throw new Error(
+          `"${name}" reaches its target through "${definition.through}", so joining it means joining both. Join them by name.`,
+        );
+      }
+
+      if (definition.polymorphic) {
+        throw new Error(
+          `"${name}" is polymorphic, so there is no one table to join. Query the target model instead.`,
+        );
+      }
+
+      const target = definition.target();
+
+      if (definition.kind === "belongsTo") {
+        return {
+          table: target.table,
+          from: definition.foreignKey ?? defaultForeignKey(target.name),
+          to: definition.primaryKey ?? target.primaryKey,
+        };
+      }
+
+      // hasMany and hasOne: the key is on the other table, pointing back here.
+      const spec: JoinSpec = {
+        table: target.table,
+        from: definition.primaryKey ?? this.primaryKey,
+        to: definition.as
+          ? `${definition.as}_id`
+          : (definition.foreignKey ?? defaultForeignKey(this.name)),
+      };
+
+      // The type column belongs in the ON clause: on a left join, a WHERE on
+      // it would drop the rows the left join exists to keep.
+      if (definition.as) {
+        spec.where = [{ column: `${definition.as}_type`, value: this.name }];
+      }
+
+      return spec;
+    }
+
     /** One value, encrypted if its column is. */
     static encryptFor(attribute: string, value: unknown): unknown {
       const options = this.encryptedAttributes[attribute];
@@ -390,15 +457,33 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           ? extractNested(values as Record<string, unknown>, klass.nestedAttributes)
           : { attributes: values as Record<string, unknown>, nested: {} };
 
-      this[ATTRIBUTES] = { ...attributes };
-      this[ORIGINAL] = persisted ? { ...attributes } : {};
+      // A value naming a property the class defines — a password, say — goes
+      // through that property rather than into the attributes, or it would be
+      // written to the table as a column of its own.
+      const declared: Record<string, unknown> = {};
+      const columns: Record<string, unknown> = {};
+
+      for (const [key, value] of Object.entries(attributes)) {
+        if (hasSetter(this, key)) declared[key] = value;
+        else columns[key] = value;
+      }
+
+      this[ATTRIBUTES] = columns;
+      this[ORIGINAL] = persisted ? { ...columns } : {};
       this[PERSISTED] = persisted;
       this[NESTED] = nested;
 
       // ponytail: a Proxy gives attribute access without knowing the columns
       // up front. Generating accessors from the schema at codegen time would be
       // faster; swap it in when the CLI can emit them.
-      return new Proxy(this, PROXY_HANDLER) as this;
+      const record = new Proxy(this, PROXY_HANDLER) as this;
+
+      // Through the proxy, so the setter the class defined actually runs.
+      for (const [key, value] of Object.entries(declared)) {
+        (record as unknown as Record<string, unknown>)[key] = value;
+      }
+
+      return record;
     }
 
     static get table(): string {
@@ -456,6 +541,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           await this.columnTypes();
         },
         prepareConditions: (conditions) => this.encryptConditions(conditions),
+        joinFor: (name) => this.joinFor(name),
         preload: async (records, names) => {
           for (const name of names) {
             const definition = this.associationFor(name);
@@ -1205,6 +1291,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     async destroy(): Promise<boolean> {
       checkWritable("destroy");
       if (this.isNewRecord) return false;
+      await this.handleDependents();
       const klass = this.constructor as typeof BaseModel;
       const connection = klass.connection;
 
@@ -1218,6 +1305,46 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       });
 
       return result !== false;
+    }
+
+    /**
+     * Deals with the children before the owner goes.
+     *
+     * Before, not after: a foreign key constraint refuses to delete a row
+     * something still points at, and an application that deletes the parent
+     * first only works while nothing is enforcing the relationship.
+     */
+    protected async handleDependents(): Promise<void> {
+      const klass = this.constructor as typeof BaseModel;
+
+      for (const definition of Object.values(klass.associations)) {
+        if (!definition.dependent || definition.kind === "belongsTo") continue;
+
+        const children = await relationFor(this as unknown as InstanceLike, definition);
+
+        if (definition.dependent === "restrict") {
+          if (children.length > 0) {
+            throw new DeleteRestricted(klass.name, definition.name, children.length);
+          }
+          continue;
+        }
+
+        if (definition.dependent === "destroy") {
+          // One at a time, because destroying is what runs the child's own
+          // callbacks and its own dependents. A bulk delete would skip both.
+          for (const child of children) await (child as unknown as BaseModel).destroy();
+          continue;
+        }
+
+        const target = definition.target();
+        const foreignKey = definition.as
+          ? `${definition.as}_id`
+          : (definition.foreignKey ?? defaultForeignKey(klass.name));
+
+        await target.where({ [foreignKey]: this[ATTRIBUTES][klass.primaryKey] }).updateAll({
+          [foreignKey]: null,
+        });
+      }
     }
 
     async reload(): Promise<void> {
@@ -1391,6 +1518,21 @@ function formatTimestamp(connection: Connection, date: Date): string {
   return connection.adapter === "mysql" ? iso.slice(0, 23).replace("T", " ") : iso;
 }
 
+/**
+ * Whether a property is one the class defines a setter for.
+ *
+ * A method is not: only a real accessor should take a value away from the
+ * attributes, and `attributes` or `save` arriving as a column name should
+ * still be treated as a column.
+ */
+function hasSetter(object: object, key: string): boolean {
+  for (let current: object | null = object; current; current = Object.getPrototypeOf(current)) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    if (descriptor) return typeof descriptor.set === "function";
+  }
+  return false;
+}
+
 /** Values the database cannot store directly are serialized on the way in. */
 function serialize(value: unknown, connection?: Connection): unknown {
   if (value instanceof Date) {
@@ -1467,6 +1609,7 @@ export interface ModelClass<A extends object> {
   ): void;
 
   all<T>(this: ModelConstructor<A, T>): Relation<T>;
+  joinFor(name: string): JoinSpec;
   unscoped<T>(this: ModelConstructor<A, T>): Relation<T>;
   where<T>(this: ModelConstructor<A, T>, conditions: Conditions): Relation<T>;
   order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
