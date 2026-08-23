@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,944** | 26,775    | 7.3% |
+| **Total** | **2,068** | 26,775    | 7.7% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,16 +24,16 @@ one that needs no server.
 | Package              | Tests | Covers                                                                      |
 | -------------------- | ----- | --------------------------------------------------------------------------- |
 | `@altair/support`    | 716   | Inflector, callbacks, cache, signing/encryption, durations, time zones      |
-| `@altair/orm`        | 372   | Connection, migrations, models, relations, associations, validations        |
+| `@altair/orm`        | 421   | Connection, migrations, models, relations, associations, ActiveModel        |
 | `@altair/controller` | 177   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
-| `@altair/cli`        | 101   | Generators, db tasks, file loading                                          |
+| `@altair/cli`        | 116   | Generators, db tasks, file loading, encrypted credentials                   |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                     |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
-| `@altair/storage`    | 82    | Disk and S3 services, blobs, attachments, signed URLs                       |
+| `@altair/storage`    | 116   | Disk and S3 services, blobs, attachments, variants, direct uploads          |
 | `@altair/view`       | 182   | TSX rendering, layouts, Inertia protocol, form builders                     |
 | `@altair/jobs`       | 60    | Jobs, queues, retries, worker                                               |
 | `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                    |
-| `@altair/core`       | 27    | Config, boot lifecycle, request handler                                     |
+| `@altair/core`       | 53    | Config, boot lifecycle, request handler, encrypted credentials              |
 | `@altair/mailer`     | 87    | Messages, TSX bodies, delivery methods                                      |
 
 ---
@@ -116,9 +116,9 @@ Rails: 21,159 lines · 2,699 tests
 | ActionCable                      | 4,496     | 220         | `@altair/cable`               | **done**                               |
 | ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | **done** — previews and attachments    |
 | ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | **done** — cron, memory/Redis/database |
-| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — console and server done      |
-| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations, secure password |
-| ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **wip** — no direct uploads yet        |
+| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — credentials, console, server |
+| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **done** — tableless models and naming |
+| ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **done** — variants and direct uploads |
 | ActionText                       | 2,617     | 318         | `@altair/orm`, `@altair/view` | **done** — rich text and sanitizing    |
 | ActionMailbox                    | 750       | 123         | `@altair/mailer`              | **done** — routing, ingress, retries   |
 
@@ -137,7 +137,17 @@ the result was written down as fact. Bun 1.4 ships libjpeg-turbo, libspng and
 libwebp statically with SIMD resize and rotate, so a variant needs no libvips,
 no ImageMagick and no native module to build, which is less than Rails needs.
 
-Direct uploads from the browser have no endpoint yet.
+**Direct uploads are built too**, so ActiveStorage is done. One thing works
+less well here than in Rails: on S3 the presigned PUT cannot enforce the
+declared content type or size, because Bun's presigner signs only `host`.
+Content-MD5 is still checked by the bucket, and the disk service enforces all
+three. Enforcing the rest needs a presigned POST policy, which Bun does not
+generate yet.
+
+**ActiveModel is done**: tableless models, naming, serialization, dirty
+tracking, and the errors API in full. Railties is the last **wip** — encrypted
+credentials, the console and the server are there; more generators and
+per-environment config files are not.
 
 ## How to update this file
 

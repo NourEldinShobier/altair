@@ -15,6 +15,22 @@ export interface UploadOptions {
   checksum?: string;
 }
 
+/** What a browser needs to PUT the bytes straight at the service. */
+export interface DirectUpload {
+  url: string;
+  headers: Record<string, string>;
+}
+
+export interface DirectUploadOptions {
+  contentType: string;
+  /** Checked on arrival. A byte count the client chose is not a byte count. */
+  contentLength: number;
+  /** base64 MD5, as Rails sends. Checked on arrival where the service can. */
+  checksum?: string;
+  /** Seconds the URL stays valid. Rails gives a direct upload five minutes. */
+  expiresIn?: number;
+}
+
 export interface UrlOptions {
   /** Seconds the URL stays valid. Services that cannot expire ignore it. */
   expiresIn?: number;
@@ -37,6 +53,13 @@ export interface StorageService {
   delete(key: string): Promise<void>;
   exists(key: string): Promise<boolean>;
   url(key: string, options?: UrlOptions): Promise<string>;
+  /**
+   * A URL the browser can PUT to, bypassing the application entirely.
+   *
+   * The point of a direct upload is that a two-gigabyte video never travels
+   * through the process serving requests.
+   */
+  directUpload(key: string, options: DirectUploadOptions): Promise<DirectUpload>;
 }
 
 /** Raised when a key names nothing the service holds. */
@@ -68,6 +91,9 @@ export interface DiskServiceOptions {
   /** Signs generated URLs, so a key alone does not grant access. */
   secret?: string;
 }
+
+const DOWNLOAD = "altair.storage.download";
+const UPLOAD = "altair.storage.upload";
 
 /** Files on the local filesystem. Rails' Disk service. */
 export class DiskService implements StorageService {
@@ -123,26 +149,73 @@ export class DiskService implements StorageService {
       return `${this.#urlPrefix}/${key}/${encodeURIComponent(filename)}`;
     }
 
-    const token = this.#verifier.generate({
-      key,
-      disposition: options.disposition ?? "inline",
-      contentType: options.contentType,
-      expiresAt: options.expiresIn ? Date.now() + options.expiresIn * 1000 : undefined,
-    });
+    const token = this.#verifier.generate(
+      {
+        key,
+        disposition: options.disposition ?? "inline",
+        contentType: options.contentType,
+        expiresAt: options.expiresIn ? Date.now() + options.expiresIn * 1000 : undefined,
+      },
+      DOWNLOAD,
+    );
 
     return `${this.#urlPrefix}/${encodeURIComponent(token)}/${encodeURIComponent(filename)}`;
   }
 
+  /**
+   * A URL to PUT bytes at. A bucket answers its own; the disk cannot, so
+   * `serveDisk` answers this one.
+   *
+   * The content type, the length and the checksum are signed into the token
+   * rather than read off the request, because a client that declares its own
+   * limits has none.
+   */
+  async directUpload(key: string, options: DirectUploadOptions): Promise<DirectUpload> {
+    if (!this.#verifier) {
+      throw new Error(
+        "Direct uploads need a signed URL. Give this DiskService a `secret`; " +
+          "an unsigned upload endpoint is a public file drop.",
+      );
+    }
+
+    const token = this.#verifier.generate(
+      {
+        key,
+        contentType: options.contentType,
+        contentLength: options.contentLength,
+        checksum: options.checksum,
+        expiresAt: Date.now() + (options.expiresIn ?? 300) * 1000,
+      },
+      UPLOAD,
+    );
+
+    return {
+      url: `${this.#urlPrefix}/${encodeURIComponent(token)}`,
+      headers: { "content-type": options.contentType },
+    };
+  }
+
   /** @internal Verifies a token produced by `url`. */
   verify(token: string): { key: string; disposition: string; contentType?: string } {
+    return this.#payload(token, DOWNLOAD);
+  }
+
+  /** @internal Verifies a token produced by `directUpload`. */
+  verifyUpload(token: string): {
+    key: string;
+    contentType: string;
+    contentLength: number;
+    checksum?: string;
+  } {
+    return this.#payload(token, UPLOAD);
+  }
+
+  // Read and write tokens are signed under different purposes deliberately: a
+  // link that lets someone see a file must not also let them replace it.
+  #payload<T>(token: string, purpose: string): T {
     if (!this.#verifier) throw new Error("This disk service was configured without a secret.");
 
-    const payload = this.#verifier.verify<{
-      key: string;
-      disposition: string;
-      contentType?: string;
-      expiresAt?: number;
-    }>(token);
+    const payload = this.#verifier.verify<T & { expiresAt?: number }>(token, purpose);
 
     if (payload.expiresAt !== undefined && Date.now() > payload.expiresAt) {
       throw new Error("This storage link has expired.");
@@ -223,15 +296,53 @@ export class S3Service implements StorageService {
       ...(options.contentType ? { type: options.contentType } : {}),
     });
   }
+
+  /**
+   * A presigned PUT, which is the whole reason direct uploads exist: the file
+   * goes from the browser to the bucket without passing through here.
+   *
+   * The signature covers `host` and nothing else, because that is all Bun's
+   * presigner signs — `type` there becomes `response-content-type`, a GET
+   * response override that means nothing on a PUT. So unlike the disk service,
+   * the bucket will not reject a file whose type or size differs from what was
+   * declared; it stores what arrives. Content-MD5 is still sent, since S3
+   * checks it when present and rejects a body that does not match, which is
+   * the one guarantee available here.
+   *
+   * Enforcing the rest would need a presigned POST policy, which Bun does not
+   * generate. Until it does, an application that must enforce a size limit on
+   * S3 should check `byte_size` on the blob after the upload, before showing
+   * the file to anyone.
+   */
+  async directUpload(key: string, options: DirectUploadOptions): Promise<DirectUpload> {
+    const url = this.client.presign(key, {
+      method: "PUT",
+      expiresIn: options.expiresIn ?? this.#expiresIn,
+    });
+
+    return {
+      url,
+      headers: {
+        "content-type": options.contentType,
+        ...(options.checksum ? { "content-md5": options.checksum } : {}),
+      },
+    };
+  }
 }
 
 const services = new Map<string, StorageService>();
 let defaultService: string | undefined;
+let signingSecret: string | undefined;
 
 export interface StorageConfig {
   services: Record<string, StorageService>;
   /** Which one to use when a blob does not name its own. */
   default?: string;
+  /**
+   * Signs blob ids, so a form can hand one back without the server having to
+   * trust a raw primary key. Without it, `1` attaches whatever blob is first.
+   */
+  secret?: string;
 }
 
 export function configureStorage(config: StorageConfig): void {
@@ -242,6 +353,7 @@ export function configureStorage(config: StorageConfig): void {
   }
 
   defaultService = config.default ?? Object.keys(config.services)[0];
+  signingSecret = config.secret;
 }
 
 /** The service a blob belongs to, or the default. */
@@ -272,7 +384,20 @@ export function defaultServiceName(): string {
   return defaultService;
 }
 
+/** The verifier signed blob ids use. Rails signs them with the app's secret. */
+export function storageVerifier(): MessageVerifier {
+  if (!signingSecret) {
+    throw new Error(
+      "Signed blob ids need a secret. Pass `secret` to configureStorage(); " +
+        "an unsigned id lets a form attach any file in the table.",
+    );
+  }
+
+  return new MessageVerifier(signingSecret);
+}
+
 export function resetStorage(): void {
   services.clear();
   defaultService = undefined;
+  signingSecret = undefined;
 }

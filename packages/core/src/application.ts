@@ -23,6 +23,7 @@ import {
 } from "@altair/controller";
 import { connect, type Connection } from "@altair/orm";
 import { buildConfig, type ApplicationConfig } from "./config.js";
+import { credentialsFor, type Credentials } from "./credentials.js";
 
 export interface Provider {
   name?: string;
@@ -60,6 +61,7 @@ export class Application {
   providers: Provider[] = [];
   readonly middleware = new MiddlewareStack();
 
+  #credentials: Credentials | undefined;
   #connection: Connection | undefined;
   #booted = false;
   #server: { stop: (closeActive?: boolean) => void } | undefined;
@@ -77,6 +79,20 @@ export class Application {
     middleware?.(this.middleware);
 
     if (routes) this.router.draw(routes);
+  }
+
+  /**
+   * The encrypted credentials. Rails' `Rails.application.credentials`.
+   *
+   *     app.credentials.get("stripe.secret_key")
+   *
+   * Built on first use rather than at boot: an application that keeps its
+   * secrets in the environment has no credentials file, and should not have to
+   * explain that to the framework.
+   */
+  get credentials(): Credentials {
+    this.#credentials ??= credentialsFor(this.config.env, this.config.root);
+    return this.#credentials;
   }
 
   /**

@@ -26,6 +26,32 @@ export class Attachment extends Model<AttachmentRow>("active_storage_attachments
   }
 }
 
+/**
+ * What can be attached: a file to upload, a blob that already exists, or the
+ * signed id of one — which is what a direct upload puts in the form.
+ */
+export type Attachable = UploadedFile | StorageBlob | string;
+
+/** Raised when a form hands back an id we did not sign. */
+export class InvalidSignedId extends Error {
+  constructor() {
+    super("That signed blob id is not one this application produced, or it has expired.");
+    this.name = "InvalidSignedId";
+  }
+}
+
+async function blobFor(attachable: Attachable): Promise<StorageBlob> {
+  if (typeof attachable === "string") {
+    const blob = await StorageBlob.findSigned(attachable);
+    if (!blob) throw new InvalidSignedId();
+    return blob;
+  }
+
+  if (attachable instanceof StorageBlob) return attachable;
+
+  return await createBlob(attachable);
+}
+
 /** The record an attachment hangs off. Structural, so any model qualifies. */
 interface AttachedRecord {
   id: unknown;
@@ -56,8 +82,8 @@ abstract class Attached {
     return await Attachment.where(this.scope).exists();
   }
 
-  protected async attachOne(file: UploadedFile): Promise<Attachment> {
-    const blob = await createBlob(file);
+  protected async attachOne(attachable: Attachable): Promise<Attachment> {
+    const blob = await blobFor(attachable);
 
     return await Attachment.create({
       ...(this.scope as { name: string; record_type: string; record_id: number }),
@@ -83,10 +109,15 @@ abstract class Attached {
 /** Rails' `has_one_attached`. */
 export class AttachedOne extends Attached {
   /** Replaces whatever was attached. */
-  async attach(file: UploadedFile): Promise<StorageBlob> {
+  async attach(attachable: Attachable): Promise<StorageBlob> {
+    // Resolved before the old one goes: a bad signed id should leave the
+    // record with the file it already had, not with nothing.
+    const blob = await blobFor(attachable);
+
     await this.purge();
-    const attachment = await this.attachOne(file);
-    return await attachment.blob();
+    await this.attachOne(blob);
+
+    return blob;
   }
 
   async blob(): Promise<StorageBlob | null> {
@@ -108,11 +139,11 @@ export class AttachedOne extends Attached {
 /** Rails' `has_many_attached`. */
 export class AttachedMany extends Attached {
   /** Adds files, keeping what was already there. */
-  async attach(...files: UploadedFile[]): Promise<StorageBlob[]> {
+  async attach(...attachables: Attachable[]): Promise<StorageBlob[]> {
     const blobs: StorageBlob[] = [];
 
-    for (const file of files) {
-      const attachment = await this.attachOne(file);
+    for (const attachable of attachables) {
+      const attachment = await this.attachOne(attachable);
       blobs.push(await attachment.blob());
     }
 

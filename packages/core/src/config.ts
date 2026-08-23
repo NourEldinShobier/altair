@@ -6,6 +6,8 @@
  * so development is convenient and production is safe.
  */
 
+import { secretKeyBaseFromCredentials } from "./credentials.js";
+
 export type Environment = "development" | "test" | "production";
 
 export interface DatabaseConfig {
@@ -89,11 +91,13 @@ export function buildConfig(overrides: Partial<ApplicationConfig> = {}): Applica
   const secretKeyBase =
     overrides.secretKeyBase ??
     process.env.SECRET_KEY_BASE ??
+    secretKeyBaseFromCredentials(env, root) ??
     (env === "production" ? undefined : "development".repeat(8));
 
   if (!secretKeyBase) {
     throw new Error(
-      "SECRET_KEY_BASE is required in production. Generate one with `altair secret` and set it in the environment.",
+      "SECRET_KEY_BASE is required in production. Set it in the environment, or put it in the " +
+        "encrypted credentials with `altair credentials:edit`. Generate one with `altair secret`.",
     );
   }
 

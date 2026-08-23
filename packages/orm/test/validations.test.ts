@@ -332,9 +332,10 @@ describe("messages and combination", () => {
 
     await user.validate();
     expect(user.errors.attributes.sort()).toEqual(["email", "name"]);
+    // Humanized, as Rails writes them: these go straight into a page.
     expect(user.errors.fullMessages().sort()).toEqual([
-      "email can't be blank",
-      "name can't be blank",
+      "Email can't be blank",
+      "Name can't be blank",
     ]);
   });
 
