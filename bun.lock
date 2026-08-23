@@ -57,6 +57,7 @@
       "name": "@altair/jobs",
       "version": "0.0.0",
       "dependencies": {
+        "@altair/orm": "workspace:*",
         "@altair/support": "workspace:*",
       },
     },

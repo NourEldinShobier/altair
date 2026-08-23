@@ -113,16 +113,25 @@ export class MemoryStore implements CacheStore {
     this.#entries.clear();
   }
 
+  /**
+   * Adds to a counter, atomically.
+   *
+   * No `await` between reading and writing, which on one event loop is what
+   * atomic means: three callers incrementing at once would otherwise each read
+   * zero and each write one. Everything built on this — rate limits, and the
+   * lock that keeps a schedule from running on every server at once — is
+   * counting on exactly that.
+   */
   async increment(key: string, amount = 1): Promise<number> {
     const existing = this.#entries.get(key);
-    const current = Number((await this.read(key)) ?? 0);
-    const next = current + amount;
+    const live = existing && !isExpired(existing) ? existing : undefined;
 
-    // Keeping the expiry is the whole point for a counter: a rate limit whose
-    // window is reset on every request is a limit that never lifts. Redis'
-    // INCR leaves the TTL alone for the same reason.
-    const expiresAt = existing && !isExpired(existing) ? existing.expiresAt : null;
-    this.#entries.set(key, { value: next, expiresAt });
+    const next = Number(live?.value ?? 0) + amount;
+
+    // Keeping the expiry is the other half: a rate limit whose window is reset
+    // on every request is a limit that never lifts. Redis' INCR leaves the TTL
+    // alone for the same reason.
+    this.#entries.set(key, { value: next, expiresAt: live?.expiresAt ?? null });
 
     return next;
   }

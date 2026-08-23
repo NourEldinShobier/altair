@@ -282,3 +282,41 @@ describe("redis store", () => {
     await expect(new RedisStore(fakeRedis()).clear()).rejects.toThrow("not implemented");
   });
 });
+
+// Everything built on increment — rate limits, and the lock that keeps a
+// schedule from running on every server at once — is counting on it being
+// atomic and on it leaving the expiry alone.
+describe("counters", () => {
+  it("count each caller once when they arrive together", async () => {
+    const store = new MemoryStore();
+
+    const results = await Promise.all(Array.from({ length: 50 }, () => store.increment("hits")));
+
+    expect(new Set(results).size).toBe(50);
+    expect(await store.read<number>("hits")).toBe(50);
+  });
+
+  // A counter whose window is reset on every increment is a rate limit that
+  // never lifts.
+  it("keep the expiry the first write set", async () => {
+    const store = new MemoryStore();
+
+    await store.write("window", 1, { expiresIn: 0.05 });
+    await store.increment("window");
+    await store.increment("window");
+
+    expect(await store.read<number>("window")).toBe(3);
+
+    await Bun.sleep(70);
+    expect(await store.read("window")).toBeNull();
+  });
+
+  it("start from nothing when the key has expired", async () => {
+    const store = new MemoryStore();
+
+    await store.write("window", 9, { expiresIn: 0.02 });
+    await Bun.sleep(40);
+
+    expect(await store.increment("window")).toBe(1);
+  });
+});
