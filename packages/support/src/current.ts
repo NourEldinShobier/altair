@@ -122,6 +122,8 @@ export interface CurrentState {
   csrfToken?: string;
   /** Messages that survive one redirect, as the view sees them. */
   flash?: Readonly<Record<string, unknown>>;
+  /** The Content Security Policy nonce this response was built with. */
+  cspNonce?: string;
   user?: unknown;
   [key: string]: unknown;
 }

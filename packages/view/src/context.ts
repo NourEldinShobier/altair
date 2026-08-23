@@ -59,6 +59,16 @@ export function useCsrfToken(): string | undefined {
   return Current.csrfToken;
 }
 
+/**
+ * The nonce this response's Content Security Policy allows.
+ *
+ * An inline script or style has to carry it to run at all, which is the point:
+ * one script the page vouched for, rather than every inline script.
+ */
+export function useCspNonce(): string | undefined {
+  return Current.cspNonce;
+}
+
 /** Messages that survived one redirect. Rails' `flash`. */
 export function useFlash(): Readonly<Record<string, unknown>> {
   return Current.flash ?? {};
