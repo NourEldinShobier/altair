@@ -119,11 +119,10 @@ export class Scheduler {
     const key = lockKey(name, at, window);
 
     // increment is the atomic one: whoever gets 1 back is the one that
-    // created it, and everybody else sees a larger number.
-    const claimed = await store.increment(key);
-    if (claimed === 1) await store.write(key, 1, { expiresIn: window });
-
-    return claimed === 1;
+    // created it, and everybody else sees a larger number. The expiry travels
+    // with it, so a second process cannot reset the claim by writing the
+    // window separately.
+    return (await store.increment(key, 1, { expiresIn: window })) === 1;
   }
 
   /** Runs one task now, whether or not it is scheduled. */

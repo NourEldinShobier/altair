@@ -352,3 +352,174 @@ describe("counters", () => {
     expect(await store.increment("window")).toBe(1);
   });
 });
+
+// A counter's window has to travel with the count. Setting it afterwards is a
+// race: another process can count in between, and the write that carries the
+// expiry also carries a value.
+describe("counters with a window", () => {
+  it("starts the clock on the first count", async () => {
+    const store = new MemoryStore();
+
+    await store.increment("hits", 1, { expiresIn: 0.05 });
+    expect(await store.read<number>("hits")).toBe(1);
+
+    await Bun.sleep(70);
+    expect(await store.read("hits")).toBeNull();
+  });
+
+  // Every count after the first must leave the clock alone, or the window is
+  // pushed along by traffic and the limit never lifts.
+  it("leaves a clock that is already running", async () => {
+    const store = new MemoryStore();
+
+    await store.increment("hits", 1, { expiresIn: 0.06 });
+    await Bun.sleep(30);
+    await store.increment("hits", 1, { expiresIn: 0.06 });
+
+    expect(await store.read<number>("hits")).toBe(2);
+
+    await Bun.sleep(50);
+    expect(await store.read("hits")).toBeNull();
+  });
+
+  it("counts without a window when none is given", async () => {
+    const store = new MemoryStore();
+
+    await store.increment("hits");
+    await Bun.sleep(20);
+
+    expect(await store.read<number>("hits")).toBe(1);
+  });
+});
+
+describe("a Redis counter with a window", () => {
+  function countingRedis() {
+    const data = new Map<string, string>();
+    const ttls = new Map<string, number>();
+    const calls: string[] = [];
+
+    const client: RedisLike & { calls: string[]; ttls: Map<string, number> } = {
+      calls,
+      ttls,
+      get: async (key) => data.get(key) ?? null,
+      set: async (key, value) => void data.set(key, value),
+      del: async (key) => (data.delete(key) ? 1 : 0),
+      exists: async (key) => data.has(key),
+      expire: async (key, seconds) => {
+        calls.push(`expire:${key}`);
+        ttls.set(key, seconds);
+      },
+      ttl: async (key) => ttls.get(key) ?? -1,
+      incrby: async (key, amount) => {
+        calls.push(`incrby:${key}`);
+        const next = Number(data.get(key) ?? 0) + amount;
+        data.set(key, String(next));
+        return next;
+      },
+    };
+    return client;
+  }
+
+  it("sets the window on the first count", async () => {
+    const client = countingRedis();
+    await new RedisStore(client).increment("hits", 1, { expiresIn: 60 });
+
+    expect(client.ttls.get("altair:hits")).toBe(60);
+  });
+
+  // EXPIRE never touches the value, so counting and the clock cannot clobber
+  // each other whichever order two processes arrive in.
+  it("leaves a window that is already set", async () => {
+    const client = countingRedis();
+    const store = new RedisStore(client);
+
+    await store.increment("hits", 1, { expiresIn: 60 });
+    client.calls.length = 0;
+
+    await store.increment("hits", 1, { expiresIn: 60 });
+
+    expect(client.calls).toEqual(["incrby:altair:hits"]);
+    expect(await store.read<number>("hits")).toBe(2);
+  });
+
+  it("never writes the value while setting the window", async () => {
+    const client = countingRedis();
+    await new RedisStore(client).increment("hits", 1, { expiresIn: 60 });
+
+    expect(client.calls.some((call) => call.startsWith("set"))).toBe(false);
+  });
+});
+
+// Rails calls this the failsafe: a cache outage should make an application
+// slow, not down.
+describe("when Redis cannot be reached", () => {
+  function unreachable(): RedisLike {
+    const fail = () => {
+      throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:6379"), {
+        code: "ECONNREFUSED",
+      });
+    };
+
+    return {
+      get: fail,
+      set: fail,
+      del: fail,
+      exists: fail,
+      incrby: fail,
+    } as unknown as RedisLike;
+  }
+
+  it("reads as a miss", async () => {
+    expect(await new RedisStore(unreachable()).read("a")).toBeNull();
+  });
+
+  it("drops a write", async () => {
+    await expect(new RedisStore(unreachable()).write("a", 1)).resolves.toBeUndefined();
+  });
+
+  it("reports what failed", async () => {
+    const seen: string[] = [];
+    const store = new RedisStore(unreachable(), { onError: (_error, op) => seen.push(op) });
+
+    await store.read("a");
+    await store.write("a", 1);
+
+    expect(seen).toEqual(["read", "write"]);
+  });
+
+  it("lets the error through when asked to", async () => {
+    const store = new RedisStore(unreachable(), { failsafe: false });
+    await expect(store.read("a")).rejects.toThrow("ECONNREFUSED");
+  });
+
+  // A command Redis refused is a bug in the caller, and hiding it would turn
+  // a mistake into a cache that quietly never hits.
+  it("lets a command error through", async () => {
+    const refusing = {
+      get: async () => {
+        throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+      },
+    } as unknown as RedisLike;
+
+    await expect(new RedisStore(refusing).read("a")).rejects.toThrow("WRONGTYPE");
+  });
+
+  it("still takes a namespace as a string", async () => {
+    const client = countingRedisNamespace();
+    await new RedisStore(client, "myapp").write("a", 1);
+
+    expect([...client.data.keys()]).toEqual(["myapp:a"]);
+  });
+
+  function countingRedisNamespace() {
+    const data = new Map<string, string>();
+    return {
+      data,
+      get: async (key: string) => data.get(key) ?? null,
+      set: async (key: string, value: string) => void data.set(key, value),
+      del: async (key: string) => (data.delete(key) ? 1 : 0),
+      exists: async (key: string) => data.has(key),
+      incrby: async () => 1,
+    } as unknown as RedisLike & { data: Map<string, string> };
+  }
+});
