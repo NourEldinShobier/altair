@@ -11,3 +11,4 @@ export * from "./time.js";
 export * from "./i18n.js";
 export * from "./logger.js";
 export * from "./error_reporter.js";
+export * from "./pretty.js";

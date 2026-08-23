@@ -13,8 +13,8 @@ import {
   errors,
   jsonFormatter,
   Logger,
+  prettyFormatter,
   Secrets,
-  textFormatter,
   type Subscription,
 } from "@altair/support";
 import { Current } from "@altair/support";
@@ -85,7 +85,7 @@ export class Application {
     this.secrets = new Secrets(this.config.secretKeyBase);
     this.logger = new Logger({
       level: this.config.log.level,
-      formatter: this.config.log.format === "text" ? textFormatter : jsonFormatter,
+      formatter: this.config.log.format === "text" ? prettyFormatter() : jsonFormatter,
     });
     this.controllers = controllers ?? {};
     this.providers = providers ?? [];
