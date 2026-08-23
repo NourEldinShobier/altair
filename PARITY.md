@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,885** | 26,775    | 7.0% |
+| **Total** | **1,911** | 26,775    | 7.1% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -29,7 +29,7 @@ one that needs no server.
 | `@altair/cli`        | 101   | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                     |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
-| `@altair/storage`    | 56    | Disk and S3 services, blobs, attachments, signed URLs                       |
+| `@altair/storage`    | 82    | Disk and S3 services, blobs, attachments, signed URLs                       |
 | `@altair/view`       | 182   | TSX rendering, layouts, Inertia protocol, form builders                     |
 | `@altair/jobs`       | 60    | Jobs, queues, retries, worker                                               |
 | `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                    |
@@ -130,11 +130,12 @@ Every Rails component now has an Altair counterpart that runs and is tested,
 ActionText and ActionMailbox included. What remains is depth in the parts
 already standing, and the gaps recorded here.
 
-**Image variants are not built.** Early research recorded a `Bun.Image` API;
-it does not exist in Bun 1.4, which was checked rather than assumed the second
-time. Variants need an image library, so they wait until it is worth taking
-that dependency. Everything else ActiveStorage does — services, blobs,
-attachments, signed URLs, purging — is here.
+**Image variants are built, on `Bun.Image`.** This file said twice that the
+API did not exist. It does, and both checks were run against a Bun 1.3
+runtime while the types and CI were on 1.4 — the wrong thing was tested, and
+the result was written down as fact. Bun 1.4 ships libjpeg-turbo, libspng and
+libwebp statically with SIMD resize and rotate, so a variant needs no libvips,
+no ImageMagick and no native module to build, which is less than Rails needs.
 
 Direct uploads from the browser have no endpoint yet.
 

@@ -8,6 +8,10 @@
 
 import { Model, type SchemaStatements } from "@altair/orm";
 import { secureToken } from "@altair/support";
+// A variant needs a blob and a blob makes variants, so these two import each
+// other. The use here is inside a method, which runs long after both modules
+// have finished loading.
+import { Variant, type Transformations } from "./variant.js";
 import {
   defaultServiceName,
   storageService,
@@ -65,6 +69,15 @@ export class StorageBlob extends Model<BlobRow>("active_storage_blobs") {
       // A row someone edited by hand should not take down a page.
       return {};
     }
+  }
+
+  /**
+   * A transformed copy of this image. Rails' `variant`.
+   *
+   * Nothing is processed until the variant is asked for, and then only once.
+   */
+  variant(transformations: Transformations): Variant {
+    return new Variant(this, transformations);
   }
 
   /** Deletes the bytes and the row. Rails' `purge`. */
