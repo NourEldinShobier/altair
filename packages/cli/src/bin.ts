@@ -20,8 +20,10 @@ import {
   routesTable,
   type GeneratedFile,
 } from "./commands.js";
+import { editCredentials, ignoreMasterKey, showCredentials } from "./credentials.js";
 import { loadMigrations } from "./loader.js";
 import { Connection, dumpSchema, dumpTypes, introspect, loadSchema } from "@altair/orm";
+import type { Environment } from "@altair/core";
 
 /**
  * The database this command should talk to.
@@ -74,6 +76,14 @@ async function write(files: GeneratedFile[], root: string): Promise<void> {
     await writeFile(target, file.contents);
     console.log(`      create  ${file.path}`);
   }
+}
+
+/** `--environment production`, or the ALTAIR_ENV the rest of the CLI uses. */
+function environmentArgument(argv: string[]): Environment {
+  const flag = argv.indexOf("--environment");
+  const value = flag === -1 ? undefined : argv[flag + 1];
+
+  return (value ?? process.env.ALTAIR_ENV ?? "development") as Environment;
 }
 
 const [command, ...args] = process.argv.slice(2);
@@ -240,6 +250,22 @@ switch (command) {
   case "secret":
     console.log(generateSecret());
     break;
+
+  case "credentials:edit": {
+    const environment = environmentArgument(args);
+    // Ignored first, and every time. A first edit that fails after writing the
+    // key would otherwise leave it uncommitted-but-untracked forever, since
+    // the next edit finds a key already there and says nothing.
+    ignoreMasterKey(process.cwd());
+
+    console.log((await editCredentials({ env: environment })).output);
+    break;
+  }
+
+  case "credentials:show": {
+    console.log(showCredentials({ env: environmentArgument(args) }).output);
+    break;
+  }
 
   case undefined:
   case "help":

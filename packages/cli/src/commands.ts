@@ -255,7 +255,11 @@ SECRET_KEY_BASE=
     },
     {
       path: ".gitignore",
-      contents: "node_modules/\ndb/*.sqlite3\n.env\n.env.*\n!.env.example\n",
+      // The master key is the one thing that must not be committed:
+      // everything encrypted beside it is readable the moment it is.
+      contents:
+        "node_modules/\ndb/*.sqlite3\n.env\n.env.*\n!.env.example\n" +
+        "config/master.key\nconfig/credentials/*.key\n",
     },
     {
       path: "tsconfig.json",
@@ -298,5 +302,10 @@ export function helpText(): string {
     "  server, s                 Run the application with reloading",
     "  console, c                A prompt with the application booted",
     "  secret                    Print a new SECRET_KEY_BASE",
+    "  credentials:edit          Edit the encrypted credentials in $EDITOR",
+    "  credentials:show          Print the decrypted credentials",
+    "",
+    "Options:",
+    "  --environment ENV         Which environment a command applies to",
   ].join("\n");
 }
