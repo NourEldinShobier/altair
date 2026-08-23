@@ -73,6 +73,30 @@ export interface RelationSource<T> {
   preload?: (records: T[], names: string[]) => Promise<void>;
 }
 
+/**
+ * One batch of a walk.
+ *
+ * Not the relation itself: a relation is a thenable, and an async generator
+ * awaits what it yields, so `yield relation` would deliver a loaded array.
+ */
+export interface Batch<T> {
+  /** The primary keys this batch covers, in order. */
+  keys: unknown[];
+  /** A relation over exactly those rows, ready for `updateAll` or `includes`. */
+  relation: Relation<T>;
+}
+
+export interface BatchOptions {
+  /** How many rows a query reads at a time. Rails' 1000. */
+  batchSize?: number;
+  /** The primary key to begin at, inclusive. Rails' `start`. */
+  start?: unknown;
+  /** The primary key to stop at, inclusive. Rails' `finish`. */
+  finish?: unknown;
+  /** Which way to walk the key. */
+  order?: Direction;
+}
+
 /** Raised by `find` and `first!` when nothing matches. Rails' RecordNotFound. */
 export class RecordNotFound extends Error {
   constructor(message: string) {
@@ -512,22 +536,141 @@ export class Relation<T> implements PromiseLike<T[]> {
     return (await this.limit(1).toArray()).length > 0;
   }
 
-  async pluck(column: string): Promise<unknown[]> {
-    const { sql, bindings } = this.select(column).toSql();
+  /** One column's values. Rails' `pluck`. */
+  async pluck(column: string): Promise<unknown[]>;
+  /** Several columns, as a row of values each. */
+  async pluck(...columns: string[]): Promise<unknown[][]>;
+  async pluck(...columns: string[]): Promise<unknown[] | unknown[][]> {
+    const { sql, bindings } = this.select(...columns).toSql();
     const rows = await this.connection.query<Row>(sql, bindings);
-    return rows.map((row) => row[column]);
+
+    if (columns.length === 1) return rows.map((row) => row[columns[0] as string]);
+    return rows.map((row) => columns.map((column) => row[column]));
   }
 
-  /** Rails' `find_each`, for iterating without loading everything at once. */
-  async *each(batchSize = 1000): AsyncGenerator<T> {
-    let offset = 0;
-    for (;;) {
-      const batch = await this.#firstOrdered().limit(batchSize).offset(offset).toArray();
-      if (batch.length === 0) return;
+  /**
+   * Iterates in batches, a record at a time. Rails' `find_each`.
+   *
+   *     for await (const post of Post.where({ draft: true }).findEach()) { … }
+   *
+   * The point is not to hold a million rows in memory at once. The other
+   * point, less obvious and more important, is the cursor: batches walk
+   * `WHERE id > last_seen` rather than counting with OFFSET.
+   *
+   * OFFSET is wrong twice over. The database scans and discards every row it
+   * skips, so walking a large table is quadratic; and if the block deletes or
+   * inserts anything, the offsets shift underneath the walk and records are
+   * silently skipped. A queue drained with `destroy` inside the loop misses
+   * half its rows — which is exactly what a batching helper is for.
+   */
+  async *findEach(options: BatchOptions = {}): AsyncGenerator<T> {
+    for await (const batch of this.findInBatches(options)) {
       for (const record of batch) yield record;
-      if (batch.length < batchSize) return;
-      offset += batchSize;
     }
+  }
+
+  /** Rails' `find_in_batches`: an array at a time. */
+  async *findInBatches(options: BatchOptions = {}): AsyncGenerator<T[]> {
+    for await (const batch of this.inBatches(options)) {
+      const records = await batch.relation.toArray();
+      if (records.length > 0) yield records;
+    }
+  }
+
+  /**
+   * Rails' `in_batches`: a relation at a time.
+   *
+   * What makes bulk work possible without instantiating anything —
+   * `batch.relation.updateAll(...)` keeps a long update off one lock.
+   *
+   * A `Batch` rather than the relation itself, because a relation is a
+   * thenable and an async generator awaits whatever it yields: yielding one
+   * directly would hand the caller a loaded array and quietly undo the point
+   * of the method.
+   */
+  async *inBatches(options: BatchOptions = {}): AsyncGenerator<Batch<T>> {
+    const size = options.batchSize ?? 1000;
+    const direction = options.order ?? "asc";
+    const key = this.#source.primaryKey;
+
+    if (size < 1) throw new Error(`batchSize must be at least 1, got ${size}.`);
+
+    // Rails ignores an order here and logs a warning. Ignoring the order
+    // somebody wrote is a worse outcome than saying so: the walk has to be
+    // ordered by the key it pages on, and a relation that quietly came back in
+    // a different order than asked for is a bug found much later.
+    if (this.#orders.length > 0) {
+      throw new Error(
+        `Cannot batch an ordered relation: batching walks the ${key} to page with a cursor. ` +
+          `Drop the order, or load the records with toArray().`,
+      );
+    }
+
+    if (this.#selects && !this.#selects.includes(key)) {
+      throw new Error(`Batching needs ${key} in the select, since it is what the cursor reads.`);
+    }
+
+    const after = direction === "asc" ? ">" : "<";
+    const before = direction === "asc" ? "<=" : ">=";
+
+    let scope = this.order(key, direction);
+    if (options.start !== undefined) {
+      scope = scope.where(
+        `${this.#quoteColumn(key)} ${direction === "asc" ? ">=" : "<="} ?`,
+        options.start,
+      );
+    }
+    if (options.finish !== undefined) {
+      scope = scope.where(`${this.#quoteColumn(key)} ${before} ?`, options.finish);
+    }
+
+    // A limit on the relation is a limit on the whole walk, not on each batch.
+    let remaining = this.#limit;
+    let cursor: unknown;
+
+    for (;;) {
+      const take = remaining === undefined ? size : Math.min(size, remaining);
+      if (take <= 0) return;
+
+      let batch = scope.limit(take);
+      if (cursor !== undefined) {
+        batch = batch.where(`${this.#quoteColumn(key)} ${after} ?`, cursor);
+      }
+
+      const keys = (await batch.pluck(key)) as unknown[];
+      if (keys.length === 0) return;
+
+      cursor = keys.at(-1);
+      if (remaining !== undefined) remaining -= keys.length;
+
+      // Yielded as a relation over the keys just read, so the caller can add
+      // `includes` or run `updateAll` against exactly this batch.
+      // Ordered the same way the walk is: without this the batch comes back in
+      // whatever order the database felt like, so a descending walk delivered
+      // its batches backwards but each batch's contents forwards.
+      yield {
+        keys,
+        relation: this.unordered()
+          .where({ [key]: keys })
+          .order(key, direction),
+      };
+
+      if (keys.length < take) return;
+    }
+  }
+
+  /** @internal A copy with no order, limit or offset. */
+  unordered(): Relation<T> {
+    const next = this.#clone();
+    next.#orders = [];
+    next.#limit = undefined;
+    next.#offset = undefined;
+    return next;
+  }
+
+  /** Rails' `find_each`, under the name this had before batching was fixed. */
+  each(batchSize = 1000): AsyncGenerator<T> {
+    return this.findEach({ batchSize });
   }
 
   /** The WHERE clause and its bindings, shared by update and delete. */

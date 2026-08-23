@@ -19,6 +19,9 @@
  * validation on a persisted row.
  */
 
+import { t } from "@altair/support";
+import { humanAttributeName } from "./active_model.js";
+
 export interface LengthOptions {
   minimum?: number;
   maximum?: number;
@@ -57,26 +60,50 @@ export interface ValidationDeclaration {
   options: ValidationOptions;
 }
 
-/** The messages Rails produces, kept word for word. */
+/**
+ * The messages Rails produces, kept word for word — and now looked up rather
+ * than hard-coded, so a translated application gets translated validations.
+ *
+ * Getters rather than constants: the locale is per request, so the message has
+ * to be resolved when it is asked for, not when this module loaded.
+ */
 export const MESSAGES = {
-  blank: "can't be blank",
-  present: "must be blank",
-  tooShort: (count: number) => `is too short (minimum is ${count} characters)`,
-  tooLong: (count: number) => `is too long (maximum is ${count} characters)`,
-  wrongLength: (count: number) => `is the wrong length (should be ${count} characters)`,
-  invalid: "is invalid",
-  inclusion: "is not included in the list",
-  exclusion: "is reserved",
-  notANumber: "is not a number",
-  notAnInteger: "must be an integer",
-  greaterThan: (count: number) => `must be greater than ${count}`,
-  greaterThanOrEqualTo: (count: number) => `must be greater than or equal to ${count}`,
-  lessThan: (count: number) => `must be less than ${count}`,
-  lessThanOrEqualTo: (count: number) => `must be less than or equal to ${count}`,
-  taken: "has already been taken",
-  confirmation: "doesn't match confirmation",
-  accepted: "must be accepted",
-} as const;
+  get blank() {
+    return t("errors.messages.blank");
+  },
+  get present() {
+    return t("errors.messages.present");
+  },
+  tooShort: (count: number) => t("errors.messages.too_short", { count }),
+  tooLong: (count: number) => t("errors.messages.too_long", { count }),
+  wrongLength: (count: number) => t("errors.messages.wrong_length", { count }),
+  get invalid() {
+    return t("errors.messages.invalid");
+  },
+  get inclusion() {
+    return t("errors.messages.inclusion");
+  },
+  get exclusion() {
+    return t("errors.messages.exclusion");
+  },
+  get notANumber() {
+    return t("errors.messages.not_a_number");
+  },
+  get notAnInteger() {
+    return t("errors.messages.not_an_integer");
+  },
+  greaterThan: (count: number) => t("errors.messages.greater_than", { count }),
+  greaterThanOrEqualTo: (count: number) => t("errors.messages.greater_than_or_equal_to", { count }),
+  lessThan: (count: number) => t("errors.messages.less_than", { count }),
+  lessThanOrEqualTo: (count: number) => t("errors.messages.less_than_or_equal_to", { count }),
+  get taken() {
+    return t("errors.messages.taken");
+  },
+  confirmation: (attribute: string) => t("errors.messages.confirmation", { attribute }),
+  get accepted() {
+    return t("errors.messages.accepted");
+  },
+};
 
 /** Rails' `blank?`: nil, an empty string, or whitespace only. */
 export function isBlank(value: unknown): boolean {
@@ -162,7 +189,9 @@ export async function runValidation(
 
   if (options.confirmation) {
     const confirmation = record[`${attribute}_confirmation`];
-    if (confirmation !== undefined && confirmation !== value) fail(MESSAGES.confirmation);
+    if (confirmation !== undefined && confirmation !== value) {
+      fail(MESSAGES.confirmation(humanAttributeName(attribute)));
+    }
   }
 
   if (options.acceptance && value !== true && value !== 1 && value !== "1") {

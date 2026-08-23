@@ -9,7 +9,14 @@
  * bindings, then boot, then the app starts, then it terminates.
  */
 
-import { Secrets } from "@altair/support";
+import {
+  errors,
+  jsonFormatter,
+  Logger,
+  Secrets,
+  textFormatter,
+  type Subscription,
+} from "@altair/support";
 import { Current } from "@altair/support";
 import { Router, type Mapper } from "@altair/router";
 import {
@@ -24,6 +31,7 @@ import {
 import { connect, type Connection } from "@altair/orm";
 import { buildConfig, type ApplicationConfig } from "./config.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
+import { logQueries, requestLogging } from "./logging.js";
 
 export interface Provider {
   name?: string;
@@ -56,12 +64,15 @@ export class Application {
   readonly config: ApplicationConfig;
   readonly router = new Router();
   readonly secrets: Secrets;
+  /** Rails' `Rails.logger`. Everything the framework writes goes here. */
+  readonly logger: Logger;
 
   controllers: ControllerRegistry = {};
   providers: Provider[] = [];
   readonly middleware = new MiddlewareStack();
 
   #credentials: Credentials | undefined;
+  #queryLog: Subscription | undefined;
   #connection: Connection | undefined;
   #booted = false;
   #server: { stop: (closeActive?: boolean) => void } | undefined;
@@ -72,6 +83,10 @@ export class Application {
 
     this.config = buildConfig(config);
     this.secrets = new Secrets(this.config.secretKeyBase);
+    this.logger = new Logger({
+      level: this.config.log.level,
+      formatter: this.config.log.format === "text" ? textFormatter : jsonFormatter,
+    });
     this.controllers = controllers ?? {};
     this.providers = providers ?? [];
 
@@ -105,6 +120,9 @@ export class Application {
   #defaultMiddleware(): void {
     if (this.config.forceSsl) this.middleware.use("ssl", forceSsl());
     this.middleware.use("requestId", requestId());
+    // Outside the dispatcher, so a request that fails in another middleware is
+    // still logged with the id the response carries.
+    this.middleware.use("logging", requestLogging({ logger: this.logger }));
     this.middleware.use("securityHeaders", securityHeaders());
   }
 
@@ -148,6 +166,12 @@ export class Application {
     for (const provider of this.providers) await provider.register?.(this);
 
     this.#connection = connect(this.config.database.url);
+
+    // Subscribed at boot rather than at construction, so an application that
+    // is built and never booted leaves no subscriber behind.
+    if (this.config.log.queries || this.config.database.logQueries) {
+      this.#queryLog ??= logQueries({ logger: this.logger });
+    }
 
     for (const provider of this.providers) await provider.boot?.(this);
 
@@ -200,6 +224,16 @@ export class Application {
   }
 
   async #handleError(error: unknown, request: Request): Promise<Response> {
+    // Reported before anything is rendered, and whatever the handler decides:
+    // an application that turns every error into a friendly page still needs
+    // the error to reach whatever is watching for them.
+    errors.report(error, {
+      handled: false,
+      severity: "error",
+      source: "altair",
+      context: { method: request.method, path: new URL(request.url).pathname },
+    });
+
     if (this.#onError) return await this.#onError(error, request);
 
     // Detailed errors are a development convenience and a production leak, so
@@ -241,6 +275,9 @@ export class Application {
     this.#server = undefined;
 
     for (const provider of [...this.providers].reverse()) await provider.terminate?.(this);
+
+    this.#queryLog?.unsubscribe();
+    this.#queryLog = undefined;
 
     await this.#connection?.close();
     this.#connection = undefined;

@@ -228,7 +228,7 @@ describe("confirmation and acceptance", () => {
     const mismatched = User.build({ email: "a@b.c" });
     (mismatched as unknown as Record<string, unknown>).email_confirmation = "x@y.z";
     expect(await mismatched.validate()).toBe(false);
-    expect(mismatched.errors.on("email")).toEqual([MESSAGES.confirmation]);
+    expect(mismatched.errors.on("email")).toEqual([MESSAGES.confirmation("Email")]);
 
     const matched = User.build({ email: "a@b.c" });
     (matched as unknown as Record<string, unknown>).email_confirmation = "a@b.c";

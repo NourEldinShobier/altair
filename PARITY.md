@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,068** | 26,775    | 7.7% |
+| **Total** | **2,197** | 26,775    | 8.2% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -21,20 +21,20 @@ one that needs no server.
 
 ## Shipped
 
-| Package              | Tests | Covers                                                                      |
-| -------------------- | ----- | --------------------------------------------------------------------------- |
-| `@altair/support`    | 716   | Inflector, callbacks, cache, signing/encryption, durations, time zones      |
-| `@altair/orm`        | 421   | Connection, migrations, models, relations, associations, ActiveModel        |
-| `@altair/controller` | 177   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
-| `@altair/cli`        | 116   | Generators, db tasks, file loading, encrypted credentials                   |
-| `@altair/router`     | 66    | Resourceful routing, typed path helpers                                     |
-| `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
-| `@altair/storage`    | 116   | Disk and S3 services, blobs, attachments, variants, direct uploads          |
-| `@altair/view`       | 182   | TSX rendering, layouts, Inertia protocol, form builders                     |
-| `@altair/jobs`       | 60    | Jobs, queues, retries, worker                                               |
-| `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                    |
-| `@altair/core`       | 53    | Config, boot lifecycle, request handler, encrypted credentials              |
-| `@altair/mailer`     | 87    | Messages, TSX bodies, delivery methods                                      |
+| Package              | Tests | Covers                                                                     |
+| -------------------- | ----- | -------------------------------------------------------------------------- |
+| `@altair/support`    | 777   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
+| `@altair/orm`        | 450   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/controller` | 198   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
+| `@altair/cli`        | 116   | Generators, db tasks, file loading, encrypted credentials                  |
+| `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
+| `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                       |
+| `@altair/storage`    | 116   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
+| `@altair/view`       | 182   | TSX rendering, layouts, Inertia protocol, form builders                    |
+| `@altair/jobs`       | 60    | Jobs, queues, retries, worker                                              |
+| `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                   |
+| `@altair/core`       | 71    | Config, boot lifecycle, request handler, credentials, logging              |
+| `@altair/mailer`     | 87    | Messages, TSX bodies, delivery methods                                     |
 
 ---
 
@@ -51,6 +51,9 @@ Rails: 36,129 lines · 3,670 tests
 | Notifications               | 769       | **done** | Instrumentation bus; ORM reports every query       |
 | CurrentAttributes           | —         | **done** | `AsyncLocalStorage`; scoped per request            |
 | Duration / TimeWithZone     | ~1,200    | **done** | `Intl`; Temporal is not in Bun 1.4                 |
+| I18n                        | 2,180     | **done** | Rails' keys and `%{…}`; plurals from `Intl`        |
+| Logger / TaggedLogging      | 490       | **done** | Levels, JSON or text, tags in `AsyncLocalStorage`  |
+| ErrorReporter               | 240       | **done** | `handle` swallows, `record` re-raises              |
 | Number / date formatting    | ~1,000    | **done** | `Intl`, in @altair/view                            |
 | Core extensions             | 8,549     | **n/a**  | JavaScript has these                               |
 | XmlMini                     | 650       | **n/a**  | `Bun.XML`                                          |
@@ -148,6 +151,20 @@ generate yet.
 tracking, and the errors API in full. Railties is the last **wip** — encrypted
 credentials, the console and the server are there; more generators and
 per-environment config files are not.
+
+**Internationalization is done**, which it was not before: every framework
+message was a hard-coded English string. Keys and interpolation match the i18n
+gem exactly, so rails-i18n's forty languages drop in. Plural categories come
+from `Intl.PluralRules` rather than a one/other switch, so Polish gets `few`
+and `many` without the plugin Rails needs.
+
+**Batching was broken and is fixed.** `each()` paged with OFFSET, so a loop
+that destroyed as it went saw ten of twenty rows and said nothing. Batches now
+walk a cursor, as Rails does.
+
+There is a logger now, with tags in an `AsyncLocalStorage`, a request log that
+reports what the database did inside each request, and an error reporter for
+an application to hang Sentry or its equivalent off.
 
 ## How to update this file
 

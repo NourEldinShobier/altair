@@ -6,6 +6,7 @@
  * so development is convenient and production is safe.
  */
 
+import type { Level } from "@altair/support";
 import { secretKeyBaseFromCredentials } from "./credentials.js";
 
 export type Environment = "development" | "test" | "production";
@@ -21,6 +22,20 @@ export interface ServerConfig {
   hostname?: string;
 }
 
+export interface LogConfig {
+  level: Level;
+  /**
+   * Text for a person watching a terminal, JSON for anything else.
+   *
+   * A log line is read by a machine far more often than by a person, and the
+   * machine reading it with `grep` is why an incident takes an hour instead of
+   * a minute.
+   */
+  format: "text" | "json";
+  /** Logs every statement. Useful in development, deafening in production. */
+  queries: boolean;
+}
+
 export interface ApplicationConfig {
   env: Environment;
   /** Signs and encrypts cookies and sessions. */
@@ -33,6 +48,7 @@ export interface ApplicationConfig {
   forceSsl: boolean;
   /** Directory the app was loaded from, used to resolve app files. */
   root: string;
+  log: LogConfig;
 }
 
 /** Reads the environment, defaulting to development as Rails does. */
@@ -72,6 +88,13 @@ export function defaultsFor(
     },
     showDetailedErrors: !production,
     forceSsl: production,
+    log: {
+      // Quiet in tests: a suite that prints a line per request buries the one
+      // assertion failure anybody cares about.
+      level: env === "test" ? "fatal" : production ? "info" : "debug",
+      format: env === "development" ? "text" : "json",
+      queries: env === "development",
+    },
   };
 }
 
@@ -109,5 +132,6 @@ export function buildConfig(overrides: Partial<ApplicationConfig> = {}): Applica
     secretKeyBase,
     database: { ...defaults.database, ...overrides.database },
     server: { ...defaults.server, ...overrides.server },
+    log: { ...defaults.log, ...overrides.log },
   };
 }

@@ -19,7 +19,7 @@
  * stated once as an interface instead and the accessors follow from it.
  */
 
-import { humanize, tableize, underscore } from "@altair/support";
+import { t, tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
@@ -28,6 +28,7 @@ import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./en
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import type { ColumnType } from "./schema.js";
 import {
+  humanAttributeName,
   modelNameFor,
   serializableHash,
   type ModelName,
@@ -218,9 +219,17 @@ export class ValidationErrors {
    * The attribute is humanized — `Title can't be blank`, not `title can't be
    * blank` — because these go straight into a page, and Rails' scaffolds,
    * translations and every screenshot of a Rails form show the humanized form.
+   *
+   * The joining is a translation too, under Rails' `errors.format` key: a
+   * language that puts the attribute somewhere other than the front cannot be
+   * served by string concatenation.
    */
   fullMessage(attribute: string, message: string): string {
-    return `${humanize(underscore(attribute))} ${message}`;
+    return t("errors.format", {
+      default: "%{attribute} %{message}",
+      attribute: humanAttributeName(attribute),
+      message,
+    });
   }
 
   fullMessages(): string[] {

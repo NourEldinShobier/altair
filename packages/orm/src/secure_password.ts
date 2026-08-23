@@ -19,6 +19,8 @@
  * enough to be hashed and validated, and the digest is what is stored.
  */
 
+import { t } from "@altair/support";
+import { humanAttributeName } from "./active_model.js";
 import { Model } from "./model.js";
 
 /** Rails' minimum. Long enough to matter, short enough that people comply. */
@@ -137,33 +139,36 @@ export function hasSecurePassword<M extends ModelClass>(
       // not have to be given its password back.
       if (plain === undefined) {
         if (typeof digest !== "string" || digest === "") {
-          this.errors.add(attribute, "can't be blank");
+          this.errors.add(attribute, t("errors.messages.blank"));
         }
         return;
       }
 
       if (plain.length === 0) {
-        this.errors.add(attribute, "can't be blank");
+        this.errors.add(attribute, t("errors.messages.blank"));
         return;
       }
 
       if (plain.length < MINIMUM_PASSWORD_LENGTH) {
         this.errors.add(
           attribute,
-          `is too short (minimum is ${MINIMUM_PASSWORD_LENGTH} characters)`,
+          t("errors.messages.too_short", { count: MINIMUM_PASSWORD_LENGTH }),
         );
       }
 
       if (plain.length > MAXIMUM_PASSWORD_LENGTH) {
         this.errors.add(
           attribute,
-          `is too long (maximum is ${MAXIMUM_PASSWORD_LENGTH} characters)`,
+          t("errors.messages.too_long", { count: MAXIMUM_PASSWORD_LENGTH }),
         );
       }
 
       const given = (this as unknown as Record<string, unknown>)[confirmation];
       if (given !== undefined && given !== plain) {
-        this.errors.add(`${attribute}Confirmation`, "doesn't match");
+        this.errors.add(
+          `${attribute}Confirmation`,
+          t("errors.messages.confirmation", { attribute: humanAttributeName(attribute) }),
+        );
       }
     });
   }
