@@ -153,7 +153,18 @@ export interface RedisLike {
   del(key: string): Promise<number>;
   exists(key: string): Promise<boolean | number>;
   expire?(key: string, seconds: number): Promise<unknown>;
-  incrby?(key: string, amount: number): Promise<number>;
+  /**
+   * Required, not optional.
+   *
+   * A counter is the one thing a cache cannot fake: read-then-write over a
+   * network is not atomic, and there is no way to add to a value without
+   * clearing its expiry. Everything built on `increment` — rate limits, and
+   * the lock that keeps a schedule from running on every server at once —
+   * fails open when it is approximated, which is the worst way to fail.
+   * Redis' INCRBY is atomic and leaves the TTL alone; a client that cannot do
+   * it cannot back this store.
+   */
+  incrby(key: string, amount: number): Promise<number>;
 }
 
 /**
@@ -208,13 +219,7 @@ export class RedisStore implements CacheStore {
   }
 
   async increment(key: string, amount = 1): Promise<number> {
-    const namespaced = this.#key(key);
-    if (this.client.incrby) return await this.client.incrby(namespaced, amount);
-
-    const current = Number((await this.read(namespaced)) ?? 0);
-    const next = current + amount;
-    await this.write(key, next);
-    return next;
+    return await this.client.incrby(this.#key(key), amount);
   }
 
   async decrement(key: string, amount = 1): Promise<number> {

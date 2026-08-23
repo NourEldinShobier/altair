@@ -233,6 +233,38 @@ describe("redis store", () => {
     return client;
   }
 
+  // The counter has to go through the server's own atomic operation. Reading
+  // and writing it here would not be atomic across processes, and the SET
+  // would clear the expiry that ends a rate limit's window.
+  it("counts through the server rather than reading and writing", async () => {
+    const client = fakeRedis();
+    const store = new RedisStore(client);
+
+    expect(await store.increment("hits")).toBe(1);
+    expect(await store.increment("hits")).toBe(2);
+    expect(await store.increment("hits", 5)).toBe(7);
+  });
+
+  it("counts under the namespaced key it reads back", async () => {
+    const client = fakeRedis();
+    const store = new RedisStore(client);
+
+    await store.increment("hits");
+    await store.increment("hits");
+
+    // The bug this replaces read one key and wrote another, so the count
+    // never rose above one and nothing built on it ever triggered.
+    expect(client.data.get("altair:hits")).toBe("2");
+    expect(await store.read<number>("hits")).toBe(2);
+  });
+
+  it("counts down the same way", async () => {
+    const store = new RedisStore(fakeRedis());
+
+    await store.increment("hits", 5);
+    expect(await store.decrement("hits", 2)).toBe(3);
+  });
+
   it("namespaces its keys", async () => {
     const client = fakeRedis();
     await new RedisStore(client).write("a", 1);
