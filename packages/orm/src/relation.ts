@@ -20,6 +20,22 @@ export type Direction = "asc" | "desc";
 export type WhereValue = unknown;
 export type Conditions = Record<string, WhereValue>;
 
+/** One table joined to another, and the columns that connect them. */
+export interface JoinSpec {
+  /** The table being joined in. */
+  table: string;
+  /** The column on this side. */
+  from: string;
+  /** The column on the joined table. */
+  to: string;
+  /** Extra conditions, as a polymorphic association needs on its type column. */
+  where?: { column: string; value: unknown }[];
+}
+
+interface JoinClause extends JoinSpec {
+  kind: "inner" | "left";
+}
+
 interface WhereClause {
   sql: string;
   bindings: unknown[];
@@ -46,6 +62,13 @@ export interface RelationSource<T> {
    * condition was added.
    */
   prepareConditions?: (conditions: Conditions) => Conditions;
+  /**
+   * How to reach an association's table from this one.
+   *
+   * Supplied by the model, because only it knows the associations. A relation
+   * that had to guess would be inventing foreign keys.
+   */
+  joinFor?: (name: string) => JoinSpec;
   /** Loads named associations for a batch of records, one query each. */
   preload?: (records: T[], names: string[]) => Promise<void>;
 }
@@ -69,6 +92,7 @@ export class Relation<T> implements PromiseLike<T[]> {
   #groups: string[] = [];
   #havings: WhereClause[] = [];
   #distinct = false;
+  #joins: JoinClause[] = [];
   /**
    * Records handed over by `includes`. Chaining clears this — `#clone` does not
    * copy it — so adding a condition re-queries rather than filtering a stale
@@ -91,6 +115,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#groups = [...this.#groups];
     next.#havings = [...this.#havings];
     next.#distinct = this.#distinct;
+    next.#joins = [...this.#joins];
     return next;
   }
 
@@ -182,6 +207,45 @@ export class Relation<T> implements PromiseLike<T[]> {
    * One extra query per association instead of one per row, which is the
    * difference between a list page that scales and an N+1.
    */
+  /**
+   * Joins an association's table. Rails' `joins`.
+   *
+   * An inner join, so a record with none of the association drops out — which
+   * is what makes `Post.joins("comments")` mean "posts that have comments".
+   */
+  joins(...names: string[]): Relation<T> {
+    return this.#addJoins("inner", names);
+  }
+
+  /**
+   * Joins and keeps records that have none. Rails' `left_joins`.
+   *
+   * The one to use for counting: an inner join answers "how many posts have
+   * comments" when the question was "how many comments has each post".
+   */
+  leftJoins(...names: string[]): Relation<T> {
+    return this.#addJoins("left", names);
+  }
+
+  #addJoins(kind: "inner" | "left", names: string[]): Relation<T> {
+    if (!this.#source.joinFor) {
+      throw new Error("This relation cannot join: its source does not know the associations.");
+    }
+
+    const next = this.#clone();
+
+    for (const name of names) {
+      const spec = this.#source.joinFor(name);
+
+      // Joining the same table twice produces a cross product, so a relation
+      // that was told to join it twice joins it once.
+      if (next.#joins.some((join) => join.table === spec.table)) continue;
+      next.#joins.push({ ...spec, kind });
+    }
+
+    return next;
+  }
+
   includes(...names: string[]): Relation<T> {
     const next = this.#clone();
     next.#includes.push(...names);
@@ -216,6 +280,21 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   #quoteColumn(column: string): string {
+    // A condition on a joined table names it: `comments.approved`.
+    const dotted = /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(column);
+
+    if (dotted) {
+      const [, table, name] = dotted;
+      // Only a table this relation actually joined, so a condition cannot
+      // reach a table the query does not mention.
+      if (table !== this.#source.tableName && !this.#joins.some((join) => join.table === table)) {
+        throw new Error(
+          `Cannot filter on "${column}": this relation does not join "${table}". Add .joins("...") first.`,
+        );
+      }
+      return `${this.connection.quote(table!)}.${this.connection.quote(name!)}`;
+    }
+
     // Identifiers cannot be bound, so they are validated rather than escaped.
     // Anything that is not a plain column name is rejected outright.
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
@@ -235,6 +314,23 @@ export class Relation<T> implements PromiseLike<T[]> {
       : `${table}.*`;
 
     let sql = `SELECT ${this.#distinct ? "DISTINCT " : ""}${columns} FROM ${table}`;
+
+    for (const join of this.#joins) {
+      const joined = connection.quote(join.table);
+      const keyword = join.kind === "left" ? "LEFT OUTER JOIN" : "INNER JOIN";
+
+      let on = `${table}.${connection.quote(join.from)} = ${joined}.${connection.quote(join.to)}`;
+
+      // A polymorphic association needs its type column in the ON clause, not
+      // the WHERE: on a left join, putting it in WHERE would drop the rows the
+      // left join exists to keep.
+      for (const condition of join.where ?? []) {
+        bindings.push(condition.value);
+        on += ` AND ${joined}.${connection.quote(condition.column)} = ?`;
+      }
+
+      sql += ` ${keyword} ${joined} ON ${on}`;
+    }
 
     if (this.#wheres.length > 0) {
       const clauses = this.#wheres.map((clause) => {

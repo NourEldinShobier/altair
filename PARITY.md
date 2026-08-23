@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,911** | 26,775    | 7.1% |
+| **Total** | **1,944** | 26,775    | 7.3% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,7 +24,7 @@ one that needs no server.
 | Package              | Tests | Covers                                                                      |
 | -------------------- | ----- | --------------------------------------------------------------------------- |
 | `@altair/support`    | 716   | Inflector, callbacks, cache, signing/encryption, durations, time zones      |
-| `@altair/orm`        | 334   | Connection, migrations, models, relations, associations, validations        |
+| `@altair/orm`        | 372   | Connection, migrations, models, relations, associations, validations        |
 | `@altair/controller` | 177   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
 | `@altair/cli`        | 101   | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                     |
@@ -59,24 +59,24 @@ Rails: 36,129 lines · 3,670 tests
 
 Rails: 71,873 lines · 10,602 tests — the largest remaining block
 
-| Subsystem                     | Rails LOC | Status   | Notes                                                              |
-| ----------------------------- | --------- | -------- | ------------------------------------------------------------------ |
-| Connection adapters           | 21,714    | **n/a**  | `Bun.sql`                                                          |
-| Attributes & dirty tracking   | 1,144     | **done** | Typed via an attributes interface                                  |
-| Persistence                   | 1,006     | **done** | save, update, destroy, create, reload                              |
-| Migrations                    | 2,705     | **done** | DSL, versions, rollback, opt-in foreign keys                       |
-| Callbacks                     | —         | **done** | save/create/update/destroy/validation                              |
-| Validations                   | —         | **done** | presence, length, format, uniqueness, and the rest                 |
-| Associations                  | 6,031     | **wip**  | belongsTo/hasMany/hasOne/through/polymorphic both ways, `includes` |
-| Relation / query interface    | 5,579     | **wip**  | where/order/group/aggregates/scopes/bulk writes                    |
-| Fixtures & test helpers       | 860       | **done** | Transactional tests, savepoint nesting, fixtures, factories        |
-| Schema dump & type emission   | —         | **done** | Types generated from the database itself                           |
-| Nested attributes             | 1,146     | **done** | Collections, to-one, to-many, `_destroy`, limit, rejectIf          |
-| Single-table inheritance      | —         | **done** | Subclass queries, typed instantiation, `unscoped`                  |
-| Counter cache                 | —         | **done** | Adjusted on create and destroy                                     |
-| Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                   |
-| Multiple databases & sharding | —         | **done** | Named databases, roles, read-only guard, horizontal shards         |
-| Encryption                    | 2,046     | **done** | Deterministic and random-nonce, queryable when deterministic       |
+| Subsystem                     | Rails LOC | Status   | Notes                                                           |
+| ----------------------------- | --------- | -------- | --------------------------------------------------------------- |
+| Connection adapters           | 21,714    | **n/a**  | `Bun.sql`                                                       |
+| Attributes & dirty tracking   | 1,144     | **done** | Typed via an attributes interface                               |
+| Persistence                   | 1,006     | **done** | save, update, destroy, create, reload                           |
+| Migrations                    | 2,705     | **done** | DSL, versions, rollback, opt-in foreign keys                    |
+| Callbacks                     | —         | **done** | save/create/update/destroy/validation                           |
+| Validations                   | —         | **done** | presence, length, format, uniqueness, and the rest              |
+| Associations                  | 6,031     | **done** | All kinds, both polymorphic directions, `includes`, `dependent` |
+| Relation / query interface    | 5,579     | **done** | where/order/group/aggregates/scopes/bulk writes, joins          |
+| Fixtures & test helpers       | 860       | **done** | Transactional tests, savepoint nesting, fixtures, factories     |
+| Schema dump & type emission   | —         | **done** | Types generated from the database itself                        |
+| Nested attributes             | 1,146     | **done** | Collections, to-one, to-many, `_destroy`, limit, rejectIf       |
+| Single-table inheritance      | —         | **done** | Subclass queries, typed instantiation, `unscoped`               |
+| Counter cache                 | —         | **done** | Adjusted on create and destroy                                  |
+| Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                |
+| Multiple databases & sharding | —         | **done** | Named databases, roles, read-only guard, horizontal shards      |
+| Encryption                    | 2,046     | **done** | Deterministic and random-nonce, queryable when deterministic    |
 
 ## ActionPack → `@altair/router`, `@altair/controller`
 
@@ -117,8 +117,8 @@ Rails: 21,159 lines · 2,699 tests
 | ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | **done** — previews and attachments    |
 | ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | **done** — cron, memory/Redis/database |
 | Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — console and server done      |
-| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations done             |
-| ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **wip** — no variants (see below)      |
+| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations, secure password |
+| ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **wip** — no direct uploads yet        |
 | ActionText                       | 2,617     | 318         | `@altair/orm`, `@altair/view` | **done** — rich text and sanitizing    |
 | ActionMailbox                    | 750       | 123         | `@altair/mailer`              | **done** — routing, ingress, retries   |
 
