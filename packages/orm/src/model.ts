@@ -24,6 +24,7 @@ import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions } from "./relation.js";
 import { columnTypeFor } from "./dump.js";
+import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import type { ColumnType } from "./schema.js";
 import {
@@ -284,6 +285,55 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return (await this.columnNames()).includes(this.lockingColumn);
     }
 
+    /** Columns held as ciphertext. Rails' `encrypts`. */
+    static encryptedAttributes: Record<string, EncryptedAttributeOptions> = {};
+
+    /**
+     * Encrypts a column. Rails' `encrypts :ssn`.
+     *
+     * The application still reads and writes the plain value; the column holds
+     * the ciphertext. A deterministic column can be queried, at the cost of
+     * revealing which rows share a value.
+     */
+    static encrypts(name: string, options: EncryptedAttributeOptions = {}): void {
+      if (!Object.hasOwn(this, "encryptedAttributes")) {
+        this.encryptedAttributes = { ...this.encryptedAttributes };
+      }
+      this.encryptedAttributes[name] = options;
+    }
+
+    /** Encrypts the values in a condition that name a deterministic column. */
+    /** One value, encrypted if its column is. */
+    static encryptFor(attribute: string, value: unknown): unknown {
+      const options = this.encryptedAttributes[attribute];
+      return options ? encryptValue(value, options) : value;
+    }
+
+    static encryptConditions(conditions: Conditions): Conditions {
+      const encrypted = Object.keys(this.encryptedAttributes);
+      if (encrypted.length === 0) return conditions;
+
+      const prepared: Record<string, unknown> = {};
+
+      for (const [column, value] of Object.entries(conditions)) {
+        const options = this.encryptedAttributes[column];
+
+        // Only a deterministic column can be matched: a random nonce means the
+        // same value encrypts differently every time, so there is nothing to
+        // compare against.
+        if (!options?.deterministic || value === null || value === undefined) {
+          prepared[column] = value;
+          continue;
+        }
+
+        prepared[column] = Array.isArray(value)
+          ? value.map((one) => encryptValue(one, options))
+          : encryptValue(value, options);
+      }
+
+      return prepared as Conditions;
+    }
+
     /** Associations that may be written through this model's own attributes. */
     static nestedAttributes: Record<string, NestedAttributesOptions> = {};
 
@@ -405,6 +455,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         prepare: async () => {
           await this.columnTypes();
         },
+        prepareConditions: (conditions) => this.encryptConditions(conditions),
         preload: async (records, names) => {
           for (const name of names) {
             const definition = this.associationFor(name);
@@ -1058,9 +1109,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
       if (await klass.lockingEnabled()) this[ATTRIBUTES][klass.lockingColumn] ??= 0;
 
-      const entries = Object.entries(this[ATTRIBUTES]).filter(
-        ([key, value]) => value !== undefined && key !== klass.primaryKey,
-      );
+      const entries = Object.entries(this[ATTRIBUTES])
+        .filter(([key, value]) => value !== undefined && key !== klass.primaryKey)
+        // Ciphertext goes into the statement; the attribute in memory stays
+        // plain, so the record reads back the way it was written.
+        .map(([key, value]) => [key, klass.encryptFor(key, value)] as [string, unknown]);
 
       const table = connection.quote(klass.table);
       const columns = entries.map(([key]) => connection.quote(key)).join(", ");
@@ -1115,7 +1168,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const readVersion = this[ORIGINAL][klass.lockingColumn];
       if (locking) changes[klass.lockingColumn] = Number(readVersion ?? 0) + 1;
 
-      const entries = Object.entries(changes);
+      const entries = Object.entries(changes).map(
+        ([key, value]) => [key, klass.encryptFor(key, value)] as [string, unknown],
+      );
       const assignments = entries
         .map(([key], index) => `${connection.quote(key)} = ${connection.placeholder(index)}`)
         .join(", ");
@@ -1142,7 +1197,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // Cast on the way back in: the binding went out in the adapter's own
       // spelling, and an attribute has to hold what its type promises. A raw
       // MySQL timestamp left in memory would not even sort against an ISO one.
-      Object.assign(this[ATTRIBUTES], klass.castRow(changes as Row));
+      // `changes` is still the plain values; only the bindings were encrypted.
+      Object.assign(this[ATTRIBUTES], klass.castRow(changes as Row, { encrypted: false }));
       this[ORIGINAL] = { ...this[ATTRIBUTES] };
     }
 
@@ -1232,14 +1288,20 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * string. Without this that is true on SQLite and false on PostgreSQL,
      * which is the kind of difference that only shows up in production.
      */
-    static castRow(row: Row): Row {
+    static castRow(row: Row, options: { encrypted?: boolean } = {}): Row {
       const types = this.columnTypeCache;
       if (!types) return row;
+
+      const decrypting = options.encrypted !== false;
 
       const cast: Row = {};
 
       for (const [key, value] of Object.entries(row)) {
-        cast[key] = castValue(value, types[key]);
+        const options = this.encryptedAttributes[key];
+        // Decrypt before casting: the column's type describes the plain value,
+        // and the ciphertext is a string whatever the column says.
+        cast[key] =
+          options && decrypting ? decryptValue(value, key, options) : castValue(value, types[key]);
       }
 
       return cast;
@@ -1379,7 +1441,9 @@ export interface ModelClass<A extends object> {
   connectsTo(options: { database: string }): void;
   columnTypeCache: Record<string, ColumnType> | undefined;
   columnTypes(): Promise<Record<string, ColumnType>>;
-  castRow(row: Row): Row;
+  castRow(row: Row, options?: { encrypted?: boolean }): Row;
+  encryptedAttributes: Record<string, EncryptedAttributeOptions>;
+  encrypts(name: string, options?: EncryptedAttributeOptions): void;
   associations: Record<string, AssociationDefinition>;
   readonly table: string;
   readonly connection: Connection;

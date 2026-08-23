@@ -38,6 +38,14 @@ export interface RelationSource<T> {
    * the database for them is asynchronous while `instantiate` is not.
    */
   prepare?: () => Promise<void>;
+  /**
+   * Rewrites conditions before they become SQL.
+   *
+   * A deterministically encrypted column stores ciphertext, so matching it
+   * means encrypting the value being looked for — wherever in a chain the
+   * condition was added.
+   */
+  prepareConditions?: (conditions: Conditions) => Conditions;
   /** Loads named associations for a batch of records, one query each. */
   preload?: (records: T[], names: string[]) => Promise<void>;
 }
@@ -107,7 +115,9 @@ export class Relation<T> implements PromiseLike<T[]> {
       return next;
     }
 
-    for (const [column, value] of Object.entries(conditionsOrSql)) {
+    const prepared = this.#source.prepareConditions?.(conditionsOrSql) ?? conditionsOrSql;
+
+    for (const [column, value] of Object.entries(prepared)) {
       const quoted = this.#quoteColumn(column);
 
       if (value === null) {
