@@ -7,7 +7,8 @@
  * use it without inventing a table.
  */
 
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { i18n } from "@altair/support";
 import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
 import {
   ActiveModel,
@@ -442,5 +443,67 @@ describe("a database-backed model has the same API", () => {
     await article.validate();
 
     expect(article.errors.fullMessages()).toEqual(["Title can't be blank"]);
+  });
+});
+
+// The point of putting the framework's own messages behind keys: an
+// application can be translated without anyone editing the framework.
+describe("in another language", () => {
+  afterEach(() => {
+    i18n.reset();
+  });
+
+  const translated = <T>(body: () => T): T => {
+    i18n.store("fr", {
+      errors: {
+        format: "%{attribute} : %{message}",
+        messages: {
+          blank: "doit être rempli(e)",
+          too_short: {
+            one: "est trop court (1 caractère minimum)",
+            other: "est trop court (%{count} caractères minimum)",
+          },
+        },
+        template: {
+          header: {
+            one: "1 erreur a empêché l'enregistrement",
+            other: "%{count} erreurs ont empêché l'enregistrement",
+          },
+        },
+      },
+      attributes: { email: "Adresse électronique" },
+    });
+
+    return i18n.withLocale("fr", body);
+  };
+
+  it("translates a validation message", async () => {
+    const signup = new Signup({ email: "" });
+    await translated(async () => await signup.validate());
+
+    expect(signup.errors.on("email")).toContain("doit être rempli(e)");
+  });
+
+  it("translates the attribute name and the way it is joined on", () => {
+    const signup = new Signup({});
+    signup.errors.add("email", "doit être rempli(e)");
+
+    expect(translated(() => signup.errors.fullMessages())).toEqual([
+      "Adresse électronique : doit être rempli(e)",
+    ]);
+  });
+
+  it("counts in the other language's plural forms", () => {
+    expect(translated(() => errorHeading(1))).toBe("1 erreur a empêché l'enregistrement");
+    expect(translated(() => errorHeading(4))).toBe("4 erreurs ont empêché l'enregistrement");
+  });
+
+  // English is unchanged: nothing about this is opt-in.
+  it("leaves an untranslated application exactly as it was", async () => {
+    const signup = new Signup({ email: "" });
+    await signup.validate();
+
+    expect(signup.errors.fullMessages()).toContain("Email can't be blank");
+    expect(errorHeading(2)).toBe("2 errors prohibited this record from being saved");
   });
 });

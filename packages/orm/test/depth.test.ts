@@ -386,7 +386,7 @@ describe("a model with a secure password", () => {
     user.passwordConfirmation = "different horse";
 
     expect(await user.save()).toBe(false);
-    expect(user.errors.on("passwordConfirmation")).toContain("doesn't match");
+    expect(user.errors.on("passwordConfirmation")).toContain("doesn't match Password");
   });
 
   it("accepts a matching confirmation", async () => {

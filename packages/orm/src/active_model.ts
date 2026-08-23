@@ -30,7 +30,7 @@
  * that renders one should not have to know which it was given.
  */
 
-import { camelize, humanize, pluralize, tableize, underscore } from "@altair/support";
+import { camelize, humanize, i18n, pluralize, t, tableize, underscore } from "@altair/support";
 import { ValidationErrors } from "./model.js";
 import {
   runValidation,
@@ -316,14 +316,24 @@ export abstract class ActiveModel {
 /**
  * Rails' `human_attribute_name`: `first_name` becomes `First name`.
  *
- * Kept separate from the errors object so a view can use it for a label and
- * get the same words that appear in the message beneath it.
+ * Translated first, under Rails' keys, so a label and the error message
+ * beneath it name the field the same way in every language. Humanizing the
+ * column name is the fallback, not the answer.
  */
-export function humanAttributeName(attribute: string): string {
-  return humanize(underscore(attribute));
+export function humanAttributeName(attribute: string, model?: string): string {
+  const key = underscore(attribute);
+  const scoped = model ? `attributes.${modelNameFor({ name: model }).singular}.${key}` : undefined;
+
+  if (scoped && i18n.exists(scoped)) return t(scoped);
+  if (i18n.exists(`attributes.${key}`)) return t(`attributes.${key}`);
+
+  return humanize(key);
 }
 
 /** The heading Rails' scaffold puts above a form that failed to save. */
 export function errorHeading(count: number): string {
-  return `${count} ${count === 1 ? "error" : pluralize("error")} prohibited this record from being saved`;
+  return t("errors.template.header", {
+    count,
+    default: `%{count} ${count === 1 ? "error" : pluralize("error")} prohibited this record from being saved`,
+  });
 }
