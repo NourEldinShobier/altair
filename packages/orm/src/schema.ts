@@ -6,6 +6,7 @@
  * `schema_migrations` so a migration runs once.
  */
 
+import { createHash } from "node:crypto";
 import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
 
@@ -166,6 +167,32 @@ export class TableDefinition {
   }
 }
 
+/**
+ * The shortest identifier limit of the three adapters.
+ *
+ * MySQL stops at 64 characters, PostgreSQL truncates at 63 without saying so,
+ * and SQLite has no limit. Generating a name none of them will refuse means
+ * living within the smallest.
+ */
+export const MAX_IDENTIFIER_LENGTH = 63;
+
+/**
+ * Rails' name for an index, shortened when it has to be.
+ *
+ * `index_action_text_rich_texts_on_record_type_and_record_id_and_name` is 66
+ * characters, so a schema that loads on PostgreSQL is refused by MySQL —
+ * which is a migration that works until the day it is run somewhere else.
+ * A digest of the full name is appended to the part that fits, so the result
+ * is deterministic, unique, and still says which table it belongs to.
+ */
+export function indexName(table: string, columns: readonly string[]): string {
+  const full = `index_${table}_on_${columns.join("_and_")}`;
+  if (full.length <= MAX_IDENTIFIER_LENGTH) return full;
+
+  const digest = createHash("sha1").update(full).digest("hex").slice(0, 10);
+  return `${full.slice(0, MAX_IDENTIFIER_LENGTH - digest.length - 1)}_${digest}`;
+}
+
 /** Maps a logical column type to this adapter's SQL type. */
 function sqlType(connection: Connection, column: Column): string {
   const { type, limit } = column;
@@ -294,7 +321,7 @@ export class SchemaStatements {
     columns: string[],
     options: { unique?: boolean; name?: string } = {},
   ): Promise<void> {
-    const name = options.name ?? `index_${table}_on_${columns.join("_and_")}`;
+    const name = options.name ?? indexName(table, columns);
     const unique = options.unique ? "UNIQUE " : "";
     await this.connection.execute(
       `CREATE ${unique}INDEX ${this.connection.quote(name)} ON ${this.connection.quote(table)} (${columns

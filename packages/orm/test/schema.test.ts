@@ -9,7 +9,13 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, adapterFor } from "../src/connection.js";
 import { columnNamesOf, indexNamesOf, isSqlite, testConnection } from "./support/database.js";
-import { Migrator, SchemaStatements, type Migration } from "../src/schema.js";
+import {
+  indexName,
+  MAX_IDENTIFIER_LENGTH,
+  Migrator,
+  SchemaStatements,
+  type Migration,
+} from "../src/schema.js";
 
 let connection: Connection;
 let schema: SchemaStatements;
@@ -366,5 +372,61 @@ describe("foreign keys", () => {
     await schema.removeForeignKey("comments", { to: "posts" });
     await connection.execute("INSERT INTO comments (post_id) VALUES (999)");
     expect(await connection.query("SELECT * FROM comments")).toHaveLength(1);
+  });
+});
+
+// A generated name longer than the shortest adapter allows is a migration
+// that works until the day it is run somewhere else.
+describe("index names", () => {
+  it("read as Rails' do when they fit", () => {
+    expect(indexName("posts", ["title"])).toBe("index_posts_on_title");
+    expect(indexName("posts", ["a", "b"])).toBe("index_posts_on_a_and_b");
+  });
+
+  // MySQL refuses an identifier over 64 characters; PostgreSQL truncates at
+  // 63 without saying so.
+  it("stay within the shortest limit of the three", () => {
+    const name = indexName("action_text_rich_texts", ["record_type", "record_id", "name"]);
+
+    expect(name.length).toBeLessThanOrEqual(MAX_IDENTIFIER_LENGTH);
+    expect(name).toStartWith("index_action_text_rich_texts_on_");
+  });
+
+  it("are the same every time, so a migration can be re-run", () => {
+    const columns = ["record_type", "record_id", "name"];
+    expect(indexName("action_text_rich_texts", columns)).toBe(
+      indexName("action_text_rich_texts", columns),
+    );
+  });
+
+  // Truncating alone would give two long names on one table the same short
+  // one, and the second index would fail to create.
+  it("do not collide when two long names share a prefix", () => {
+    const first = indexName("a_very_long_table_name_indeed_here", ["column_one", "column_two"]);
+    const second = indexName("a_very_long_table_name_indeed_here", ["column_one", "column_three"]);
+
+    expect(first).not.toBe(second);
+    expect(first.length).toBeLessThanOrEqual(MAX_IDENTIFIER_LENGTH);
+  });
+
+  it("are what addIndex uses", async () => {
+    await schema.createTable("long_table", (t) => {
+      t.string("first_column_name");
+      t.string("second_column_name");
+      t.string("third_column_name");
+    });
+
+    await schema.addIndex("long_table", [
+      "first_column_name",
+      "second_column_name",
+      "third_column_name",
+    ]);
+
+    const expected = indexName("long_table", [
+      "first_column_name",
+      "second_column_name",
+      "third_column_name",
+    ]);
+    expect(await indexNamesOf(connection, "long_table")).toContain(expected);
   });
 });

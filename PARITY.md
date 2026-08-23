@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,773** | 26,775    | 6.6% |
+| **Total** | **1,885** | 26,775    | 7.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,17 +24,17 @@ one that needs no server.
 | Package              | Tests | Covers                                                                      |
 | -------------------- | ----- | --------------------------------------------------------------------------- |
 | `@altair/support`    | 716   | Inflector, callbacks, cache, signing/encryption, durations, time zones      |
-| `@altair/orm`        | 309   | Connection, migrations, models, relations, associations, validations        |
+| `@altair/orm`        | 334   | Connection, migrations, models, relations, associations, validations        |
 | `@altair/controller` | 177   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
 | `@altair/cli`        | 101   | Generators, db tasks, file loading                                          |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                     |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                        |
 | `@altair/storage`    | 56    | Disk and S3 services, blobs, attachments, signed URLs                       |
-| `@altair/view`       | 134   | TSX rendering, layouts, Inertia protocol, form builders                     |
+| `@altair/view`       | 182   | TSX rendering, layouts, Inertia protocol, form builders                     |
 | `@altair/jobs`       | 60    | Jobs, queues, retries, worker                                               |
 | `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                    |
 | `@altair/core`       | 27    | Config, boot lifecycle, request handler                                     |
-| `@altair/mailer`     | 53    | Messages, TSX bodies, delivery methods                                      |
+| `@altair/mailer`     | 87    | Messages, TSX bodies, delivery methods                                      |
 
 ---
 
@@ -75,7 +75,7 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Single-table inheritance      | —         | **done** | Subclass queries, typed instantiation, `unscoped`                  |
 | Counter cache                 | —         | **done** | Adjusted on create and destroy                                     |
 | Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                   |
-| Multiple databases & sharding | —         | **wip**  | Named databases, roles, read-only guard; no sharding yet           |
+| Multiple databases & sharding | —         | **done** | Named databases, roles, read-only guard, horizontal shards         |
 | Encryption                    | 2,046     | **done** | Deterministic and random-nonce, queryable when deterministic       |
 
 ## ActionPack → `@altair/router`, `@altair/controller`
@@ -119,26 +119,24 @@ Rails: 21,159 lines · 2,699 tests
 | Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **wip** — console and server done      |
 | ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **wip** — validations done             |
 | ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **wip** — no variants (see below)      |
-| ActionText                       | 2,617     | 318         | —                             | todo — late phase                      |
-| ActionMailbox                    | 750       | 123         | —                             | todo — late phase                      |
+| ActionText                       | 2,617     | 318         | `@altair/orm`, `@altair/view` | **done** — rich text and sanitizing    |
+| ActionMailbox                    | 750       | 123         | `@altair/mailer`              | **done** — routing, ingress, retries   |
 
 ---
 
 ## What is left, in short
 
-The framework's shape is complete: every Rails component has an Altair
-counterpart that runs. What remains is depth. Next up: ActionText and
-ActionMailbox, the two components most applications never touch, and the
-standing gaps below. ActionText and ActionMailbox are deliberately last, being the two
-components most applications never touch.
+Every Rails component now has an Altair counterpart that runs and is tested,
+ActionText and ActionMailbox included. What remains is depth in the parts
+already standing, and the gaps recorded here.
+
 **Image variants are not built.** Early research recorded a `Bun.Image` API;
 it does not exist in Bun 1.4, which was checked rather than assumed the second
 time. Variants need an image library, so they wait until it is worth taking
 that dependency. Everything else ActiveStorage does — services, blobs,
 attachments, signed URLs, purging — is here.
 
-Horizontal sharding is also not built, and direct uploads from the browser
-have no endpoint yet.
+Direct uploads from the browser have no endpoint yet.
 
 ## How to update this file
 
