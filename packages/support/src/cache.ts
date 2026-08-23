@@ -114,9 +114,16 @@ export class MemoryStore implements CacheStore {
   }
 
   async increment(key: string, amount = 1): Promise<number> {
+    const existing = this.#entries.get(key);
     const current = Number((await this.read(key)) ?? 0);
     const next = current + amount;
-    await this.write(key, next);
+
+    // Keeping the expiry is the whole point for a counter: a rate limit whose
+    // window is reset on every request is a limit that never lifts. Redis'
+    // INCR leaves the TTL alone for the same reason.
+    const expiresAt = existing && !isExpired(existing) ? existing.expiresAt : null;
+    this.#entries.set(key, { value: next, expiresAt });
+
     return next;
   }
 
