@@ -3,3 +3,4 @@ export * from "./blob.js";
 export * from "./attachment.js";
 export * from "./serve.js";
 export * from "./variant.js";
+export * from "./direct_upload.js";

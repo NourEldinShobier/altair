@@ -321,4 +321,42 @@ describe("the S3 service", () => {
     expect(s3.name).toBe("s3");
     expect(new S3Service({ bucket: "b", name: "archive" }).name).toBe("archive");
   });
+
+  describe("direct uploads", () => {
+    const upload = () =>
+      s3.directUpload("abcdefgh", {
+        contentType: "image/png",
+        contentLength: 1024,
+        checksum: "Q2hlY2tzdW0=",
+      });
+
+    it("points at the same object", async () => {
+      const { url } = await upload();
+      expect(url.split("?")[0]).toBe("https://s3.us-east-1.amazonaws.com/my-bucket/abcdefgh");
+    });
+
+    // A signature for a GET is not a signature for a PUT, which is what stops
+    // a read link being turned into a write one.
+    it("signs the method, not just the object", async () => {
+      const write = new URL((await upload()).url).searchParams.get("X-Amz-Signature");
+      const read = new URL(await s3.url("abcdefgh")).searchParams.get("X-Amz-Signature");
+
+      expect(write).not.toBe(read);
+    });
+
+    // Found by looking at the URL: Bun's presigner turns `type` into
+    // `response-content-type`, which is a GET response override and means
+    // nothing on a PUT. Sending it would have put a stray parameter in every
+    // upload URL.
+    it("carries no response overrides", async () => {
+      expect((await upload()).url).not.toContain("response-content-type");
+    });
+
+    it("sends the type and the digest as headers", async () => {
+      expect((await upload()).headers).toEqual({
+        "content-type": "image/png",
+        "content-md5": "Q2hlY2tzdW0=",
+      });
+    });
+  });
 });

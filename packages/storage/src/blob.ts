@@ -15,9 +15,13 @@ import { Variant, type Transformations } from "./variant.js";
 import {
   defaultServiceName,
   storageService,
+  storageVerifier,
   type StorageService,
   type UrlOptions,
 } from "./service.js";
+
+/** What signed blob ids are signed under. */
+const SIGNED_ID = "altair.storage.blob";
 
 export interface BlobRow {
   id: number;
@@ -78,6 +82,37 @@ export class StorageBlob extends Model<BlobRow>("active_storage_blobs") {
    */
   variant(transformations: Transformations): Variant {
     return new Variant(this, transformations);
+  }
+
+  /**
+   * An opaque id a form can hand back. Rails' `signed_id`.
+   *
+   * A direct upload creates the blob before anything is attached to it, so the
+   * browser has to name it on submit. A raw primary key there would let a form
+   * attach any file in the table to any record; a signed one only names the
+   * blob the server itself just created.
+   */
+  signedId(options: { expiresIn?: number } = {}): string {
+    return storageVerifier().generate(
+      {
+        id: this.id,
+        expiresAt: options.expiresIn ? Date.now() + options.expiresIn * 1000 : undefined,
+      },
+      SIGNED_ID,
+    );
+  }
+
+  /** The blob a signed id names, or null if the id is not one we signed. */
+  static async findSigned(signedId: string): Promise<StorageBlob | null> {
+    const payload = storageVerifier().verified<{ id: number; expiresAt?: number }>(
+      signedId,
+      SIGNED_ID,
+    );
+
+    if (!payload) return null;
+    if (payload.expiresAt !== undefined && Date.now() > payload.expiresAt) return null;
+
+    return await StorageBlob.where({ id: payload.id }).first();
   }
 
   /** Deletes the bytes and the row. Rails' `purge`. */
@@ -148,6 +183,38 @@ export async function createBlob(file: UploadedFile): Promise<StorageBlob> {
     service_name: serviceName,
     byte_size: bytes.byteLength,
     checksum: checksumFor(bytes),
+  });
+}
+
+/** What a browser declares about a file it is about to upload itself. */
+export interface DeclaredFile {
+  filename: string;
+  byteSize: number;
+  /** base64 MD5. The service checks the bytes against it on arrival. */
+  checksum: string;
+  contentType?: string;
+  metadata?: Record<string, unknown>;
+  service?: string;
+}
+
+/**
+ * Records a file that has not arrived yet. Rails'
+ * `create_before_direct_upload!`.
+ *
+ * The row comes first here, unlike `createBlob`, because the browser needs the
+ * key before it can upload anything. That leaves a window where a blob exists
+ * with no bytes behind it — which is why the byte count and the digest are
+ * signed into the upload URL and checked on arrival, instead of being believed.
+ */
+export async function createBlobRecord(file: DeclaredFile): Promise<StorageBlob> {
+  return await StorageBlob.create({
+    key: generateKey(),
+    filename: file.filename,
+    content_type: file.contentType ?? contentTypeFor(file.filename),
+    metadata: file.metadata ? JSON.stringify(file.metadata) : null,
+    service_name: file.service ?? defaultServiceName(),
+    byte_size: file.byteSize,
+    checksum: file.checksum,
   });
 }
 
