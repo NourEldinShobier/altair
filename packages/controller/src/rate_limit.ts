@@ -100,11 +100,10 @@ export async function recordRequest(
   const caller = await (options.by ?? clientAddress)(request);
   const key = counterKey(options.name ?? "default", caller, seconds, now);
 
-  const count = await options.store.increment(key);
-
-  // The first request in a window is what sets the expiry; incrementing keeps
-  // it, so the window ends on time rather than being pushed along by traffic.
-  if (count === 1) await options.store.write(key, 1, { expiresIn: seconds });
+  // The window travels with the count. Setting it afterwards was a race: a
+  // second request could count in between, and the write that carried the
+  // expiry also carried a value, resetting the count to one.
+  const count = await options.store.increment(key, 1, { expiresIn: seconds });
 
   const elapsed = (now / 1000) % seconds;
 

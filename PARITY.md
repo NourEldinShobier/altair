@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **1,758** | 26,775    | 6.6% |
+| **Total** | **1,773** | 26,775    | 6.6% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -23,7 +23,7 @@ one that needs no server.
 
 | Package              | Tests | Covers                                                                      |
 | -------------------- | ----- | --------------------------------------------------------------------------- |
-| `@altair/support`    | 701   | Inflector, callbacks, cache, signing/encryption, durations, time zones      |
+| `@altair/support`    | 716   | Inflector, callbacks, cache, signing/encryption, durations, time zones      |
 | `@altair/orm`        | 309   | Connection, migrations, models, relations, associations, validations        |
 | `@altair/controller` | 177   | Filters, strong params, rendering, dispatch, cookies, sessions, flash, CSRF |
 | `@altair/cli`        | 101   | Generators, db tasks, file loading                                          |
@@ -42,18 +42,18 @@ one that needs no server.
 
 Rails: 36,129 lines · 3,670 tests
 
-| Subsystem                   | Rails LOC | Status   | Notes                                          |
-| --------------------------- | --------- | -------- | ---------------------------------------------- |
-| Inflector                   | 972       | **done** | 246 fixture cases ported from Rails            |
-| Callbacks                   | 1,048     | **done** | Async chains, halting, inheritance, decorators |
-| Cache                       | 3,951     | **done** | Memory and Redis stores                        |
-| MessageEncryptor / Verifier | 576       | **done** | AES-256-GCM, HMAC, PBKDF2                      |
-| Notifications               | 769       | **done** | Instrumentation bus; ORM reports every query   |
-| CurrentAttributes           | —         | **done** | `AsyncLocalStorage`; scoped per request        |
-| Duration / TimeWithZone     | ~1,200    | **done** | `Intl`; Temporal is not in Bun 1.4             |
-| Number / date formatting    | ~1,000    | **done** | `Intl`, in @altair/view                        |
-| Core extensions             | 8,549     | **n/a**  | JavaScript has these                           |
-| XmlMini                     | 650       | **n/a**  | `Bun.XML`                                      |
+| Subsystem                   | Rails LOC | Status   | Notes                                              |
+| --------------------------- | --------- | -------- | -------------------------------------------------- |
+| Inflector                   | 972       | **done** | 246 fixture cases ported from Rails                |
+| Callbacks                   | 1,048     | **done** | Async chains, halting, inheritance, decorators     |
+| Cache                       | 3,951     | **done** | Memory and Redis stores, atomic counters, failsafe |
+| MessageEncryptor / Verifier | 576       | **done** | AES-256-GCM, HMAC, PBKDF2                          |
+| Notifications               | 769       | **done** | Instrumentation bus; ORM reports every query       |
+| CurrentAttributes           | —         | **done** | `AsyncLocalStorage`; scoped per request            |
+| Duration / TimeWithZone     | ~1,200    | **done** | `Intl`; Temporal is not in Bun 1.4                 |
+| Number / date formatting    | ~1,000    | **done** | `Intl`, in @altair/view                            |
+| Core extensions             | 8,549     | **n/a**  | JavaScript has these                               |
+| XmlMini                     | 650       | **n/a**  | `Bun.XML`                                          |
 
 ## ActiveRecord → `@altair/orm`
 
