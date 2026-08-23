@@ -20,6 +20,8 @@ import {
   currentScope,
   database,
   databaseSelector,
+  eachShard,
+  shardNames,
   disconnectDatabases,
   isReadOnly,
   ReadOnlyError,
@@ -132,7 +134,7 @@ describe("connectedTo", () => {
     expect(currentScope()).toBeUndefined();
 
     await connectedTo({ role: "reading" }, async () => {
-      expect(currentScope()).toEqual({ database: "primary", role: "reading" });
+      expect(currentScope()).toEqual({ database: "primary", role: "reading", shard: "default" });
     });
   });
 
@@ -146,7 +148,11 @@ describe("connectedTo", () => {
   it("inherits what an inner block does not set", async () => {
     await connectedTo({ database: "analytics" }, async () => {
       await connectedTo({ role: "reading" }, async () => {
-        expect(currentScope()).toEqual({ database: "analytics", role: "reading" });
+        expect(currentScope()).toEqual({
+          database: "analytics",
+          role: "reading",
+          shard: "default",
+        });
       });
     });
   });
@@ -287,5 +293,122 @@ describe("the database selector", () => {
     );
 
     expect(await response.text()).toBe("ok");
+  });
+});
+
+// Rails' horizontal sharding: the same schema on more than one server, split
+// by a key the framework cannot guess. Nothing picks a shard for you.
+describe("shards", () => {
+  const shardedConfig = {
+    primary: {
+      writing: "sqlite://:memory:",
+      shards: {
+        one: { writing: "sqlite://:memory:" },
+        two: { writing: "sqlite://:memory:" },
+      },
+    },
+  };
+
+  beforeEach(async () => {
+    configureDatabases(shardedConfig);
+    Post.columnCache = undefined;
+    Post.columnTypeCache = undefined;
+
+    for (const shard of shardNames("primary")) {
+      await new SchemaStatements(database("primary", "writing", shard)).createTable("posts", (t) =>
+        t.string("title"),
+      );
+    }
+  });
+
+  it("lists the shards a database has, the default included", () => {
+    expect(shardNames("primary")).toEqual(["default", "one", "two"]);
+  });
+
+  it("has none for a database without them", () => {
+    configureDatabases({ primary: "sqlite://:memory:" });
+    expect(shardNames("primary")).toEqual(["default"]);
+  });
+
+  it("opens a connection per shard", () => {
+    expect(database("primary", "writing", "one")).not.toBe(database("primary", "writing", "two"));
+  });
+
+  // An application without shards should never notice they exist.
+  it("treats the default shard as the database itself", () => {
+    expect(database("primary", "writing", "default")).toBe(database("primary"));
+  });
+
+  it("names the shards it knows when asked for one it does not", () => {
+    expect(() => database("primary", "writing", "three")).toThrow("Shards: one, two");
+  });
+
+  it("writes to the shard the block selected", async () => {
+    await connectedTo({ shard: "one" }, async () => {
+      await Post.create({ title: "On shard one" });
+    });
+
+    await connectedTo({ shard: "one" }, async () => {
+      expect(await Post.count()).toBe(1);
+    });
+
+    await connectedTo({ shard: "two" }, async () => {
+      expect(await Post.count()).toBe(0);
+    });
+  });
+
+  it("goes back to the default shard afterwards", async () => {
+    await connectedTo({ shard: "one" }, async () => {
+      await Post.create({ title: "On shard one" });
+    });
+
+    expect(await Post.count()).toBe(0);
+  });
+
+  it("reports the shard in force", async () => {
+    await connectedTo({ shard: "two" }, async () => {
+      expect(currentScope()?.shard).toBe("two");
+    });
+  });
+
+  it("keeps a shard chosen by an outer block", async () => {
+    await connectedTo({ shard: "one" }, async () => {
+      await connectedTo({ role: "reading" }, async () => {
+        expect(currentScope()).toEqual({ database: "primary", role: "reading", shard: "one" });
+      });
+    });
+  });
+
+  it("visits every shard in turn", async () => {
+    await connectedTo({ shard: "one" }, async () => {
+      await Post.create({ title: "One" });
+    });
+    await connectedTo({ shard: "two" }, async () => {
+      await Post.create({ title: "Two" });
+      await Post.create({ title: "Also two" });
+    });
+
+    const counts = await eachShard(async () => await Post.count());
+    expect(counts).toEqual([0, 1, 2]);
+  });
+
+  it("tells the block which shard it is on", async () => {
+    expect(await eachShard(async (shard) => shard)).toEqual(["default", "one", "two"]);
+  });
+
+  // The scope follows the async call chain, so two requests on different
+  // shards cannot pull each other across.
+  it("keeps concurrent work on its own shard", async () => {
+    await Promise.all([
+      connectedTo({ shard: "one" }, async () => {
+        await Bun.sleep(5);
+        await Post.create({ title: "One" });
+      }),
+      connectedTo({ shard: "two" }, async () => {
+        await Post.create({ title: "Two" });
+      }),
+    ]);
+
+    expect(await eachShard(async () => await Post.count())).toEqual([0, 1, 1]);
   });
 });

@@ -27,12 +27,25 @@ export interface DatabaseConfig {
   writing: string;
   /** Defaults to `writing`, so a single database needs no replica configured. */
   reading?: string;
+  /**
+   * The same schema on more than one server, split by some key.
+   *
+   * Rails calls this horizontal sharding. Nothing picks a shard for you: a
+   * query has to say which one it means, because the framework cannot know
+   * whether a record lives with its customer, its region, or its tenant.
+   */
+  shards?: Record<string, { writing: string; reading?: string }>;
 }
 
 export interface ConnectedTo {
   database?: string;
   role?: Role;
+  /** Which shard, when the database has them. */
+  shard?: string;
 }
+
+/** The shard used when none is named, as in Rails. */
+export const DEFAULT_SHARD = "default";
 
 /** Raised when a write is attempted while connected to a reading role. */
 export class ReadOnlyError extends Error {
@@ -85,7 +98,11 @@ function reset(): void {
  * application without a replica behaves exactly as it did before roles
  * existed.
  */
-export function database(name: string = PRIMARY, role: Role = "writing"): Connection {
+export function database(
+  name: string = PRIMARY,
+  role: Role = "writing",
+  shard: string = DEFAULT_SHARD,
+): Connection {
   const config = configured.get(name);
   if (!config) {
     const known = [...configured.keys()];
@@ -96,8 +113,25 @@ export function database(name: string = PRIMARY, role: Role = "writing"): Connec
     );
   }
 
-  const url = role === "reading" ? (config.reading ?? config.writing) : config.writing;
-  const key = `${name}/${url}`;
+  // The default shard is the database itself, so an application without
+  // shards never notices they exist.
+  let target: { writing: string; reading?: string } = config;
+
+  if (shard !== DEFAULT_SHARD) {
+    const found = config.shards?.[shard];
+    if (!found) {
+      const known = Object.keys(config.shards ?? {});
+      throw new Error(
+        known.length > 0
+          ? `No shard named "${shard}" on "${name}". Shards: ${known.join(", ")}.`
+          : `No shard named "${shard}" on "${name}", which has none configured.`,
+      );
+    }
+    target = found;
+  }
+
+  const url = role === "reading" ? (target.reading ?? target.writing) : target.writing;
+  const key = `${name}/${shard}/${url}`;
 
   let pool = pools.get(key);
   if (!pool) {
@@ -121,9 +155,33 @@ export async function connectedTo<T>(options: ConnectedTo, body: () => Promise<T
     {
       database: options.database ?? outer?.database ?? PRIMARY,
       role: options.role ?? outer?.role ?? "writing",
+      shard: options.shard ?? outer?.shard ?? DEFAULT_SHARD,
     },
     body,
   );
+}
+
+/** Runs a block against every shard of a database, in turn. */
+export async function eachShard<T>(
+  body: (shard: string) => Promise<T>,
+  options: { database?: string } = {},
+): Promise<T[]> {
+  const name = options.database ?? PRIMARY;
+  const results: T[] = [];
+
+  for (const shard of shardNames(name)) {
+    results.push(await connectedTo({ database: name, shard }, async () => await body(shard)));
+  }
+
+  return results;
+}
+
+/** Every shard a database has, the default one included. */
+export function shardNames(name: string = PRIMARY): string[] {
+  const config = configured.get(name);
+  if (!config) return [];
+
+  return [DEFAULT_SHARD, ...Object.keys(config.shards ?? {})];
 }
 
 /** The database and role in force, if a block set one. */
@@ -145,7 +203,7 @@ export function checkWritable(operation: string): void {
 export function scopedConnection(): Connection | undefined {
   const active = scope.getStore();
   if (!active) return undefined;
-  return database(active.database, active.role);
+  return database(active.database, active.role, active.shard);
 }
 
 /** Whether any database has been configured, for callers that can fall back. */

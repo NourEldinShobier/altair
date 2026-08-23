@@ -9,3 +9,4 @@ export * from "./dump.js";
 export * from "./nested.js";
 export * from "./databases.js";
 export * from "./encryption.js";
+export * from "./rich_text.js";
