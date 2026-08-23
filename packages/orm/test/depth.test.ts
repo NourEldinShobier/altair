@@ -75,6 +75,23 @@ beforeEach(async () => {
   });
 });
 
+/** A model pinned to SQLite, for assertions about the SQL text itself. */
+function sqliteArticles() {
+  class Article extends Model<PostRow>("posts", {
+    connection: new Connection("sqlite://:memory:"),
+  }) {
+    declare author: BelongsTo<Author>;
+    declare comments: HasMany<Comment>;
+
+    static {
+      this.belongsTo("author", () => Author);
+      this.hasMany("comments", () => Comment, { foreignKey: "post_id" });
+    }
+  }
+
+  return Article;
+}
+
 describe("joining", () => {
   beforeEach(async () => {
     const ada = await Author.create({ name: "Ada" });
@@ -112,8 +129,10 @@ describe("joining", () => {
     expect(posts).toHaveLength(1);
   });
 
+  // The generated text is quoted differently per adapter, so it is asserted
+  // against one rather than whichever the suite happens to be running against.
   it("writes the join into the SQL", () => {
-    const { sql } = Post.all().joins("comments").toSql();
+    const { sql } = sqliteArticles().all().joins("comments").toSql();
 
     expect(sql).toContain('INNER JOIN "comments" ON "posts"."id" = "comments"."post_id"');
   });
@@ -130,7 +149,7 @@ describe("joining", () => {
   });
 
   it("joins more than one association", () => {
-    const { sql } = Post.all().joins("author", "comments").toSql();
+    const { sql } = sqliteArticles().all().joins("author", "comments").toSql();
 
     expect(sql).toContain('INNER JOIN "authors"');
     expect(sql).toContain('INNER JOIN "comments"');
