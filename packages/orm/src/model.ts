@@ -19,7 +19,7 @@
  * stated once as an interface instead and the accessors follow from it.
  */
 
-import { tableize, underscore } from "@altair/support";
+import { humanize, tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
@@ -27,6 +27,12 @@ import { columnTypeFor } from "./dump.js";
 import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import type { ColumnType } from "./schema.js";
+import {
+  modelNameFor,
+  serializableHash,
+  type ModelName,
+  type SerializationOptions,
+} from "./active_model.js";
 import {
   runValidation,
   type ValidationDeclaration,
@@ -171,6 +177,11 @@ export class ValidationErrors {
     return [...this.#errors.values()].reduce((total, messages) => total + messages.length, 0);
   }
 
+  /** Rails calls it `size`. Both are here, because both get typed. */
+  get size(): number {
+    return this.count;
+  }
+
   on(attribute: string): string[] {
     return this.#errors.get(attribute) ?? [];
   }
@@ -179,10 +190,59 @@ export class ValidationErrors {
     return [...this.#errors.keys()];
   }
 
+  /** Every message, by attribute. Rails' `messages`. */
+  get messages(): Record<string, string[]> {
+    return Object.fromEntries(this.#errors);
+  }
+
+  /** Whether anything went wrong with this attribute. Rails' `include?`. */
+  has(attribute: string): boolean {
+    return (this.#errors.get(attribute)?.length ?? 0) > 0;
+  }
+
+  /** Whether this exact message was added. Rails' `added?`. */
+  added(attribute: string, message: string): boolean {
+    return this.on(attribute).includes(message);
+  }
+
+  /** Drops an attribute's errors and returns them. Rails' `delete`. */
+  delete(attribute: string): string[] {
+    const messages = this.on(attribute);
+    this.#errors.delete(attribute);
+    return messages;
+  }
+
+  /**
+   * One message with its attribute in front of it. Rails' `full_message`.
+   *
+   * The attribute is humanized — `Title can't be blank`, not `title can't be
+   * blank` — because these go straight into a page, and Rails' scaffolds,
+   * translations and every screenshot of a Rails form show the humanized form.
+   */
+  fullMessage(attribute: string, message: string): string {
+    return `${humanize(underscore(attribute))} ${message}`;
+  }
+
   fullMessages(): string[] {
     return [...this.#errors.entries()].flatMap(([attribute, messages]) =>
-      messages.map((message) => `${attribute} ${message}`),
+      messages.map((message) => this.fullMessage(attribute, message)),
     );
+  }
+
+  /** The full messages for one attribute. Rails' `full_messages_for`. */
+  fullMessagesFor(attribute: string): string[] {
+    return this.on(attribute).map((message) => this.fullMessage(attribute, message));
+  }
+
+  /** So `for (const { attribute, message } of errors)` works. */
+  *[Symbol.iterator](): Iterator<{ attribute: string; message: string }> {
+    for (const [attribute, messages] of this.#errors) {
+      for (const message of messages) yield { attribute, message };
+    }
+  }
+
+  toJSON(): Record<string, string[]> {
+    return this.messages;
   }
 
   clear(): void {
@@ -210,8 +270,11 @@ export interface BaseModelInstance<A> {
   readonly errors: ValidationErrors;
   attributes(): A;
   changedAttributes(): Partial<A>;
+  changes(): Record<string, [unknown, unknown]>;
   changed(): (keyof A & string)[];
   hasChanged(attribute?: keyof A & string): boolean;
+  attributeWas(attribute: keyof A & string): unknown;
+  restoreAttributes(attributes?: readonly (keyof A & string)[]): void;
   assign(values: Partial<A>): void;
   save(): Promise<boolean>;
   saveOrFail(): Promise<void>;
@@ -223,6 +286,9 @@ export interface BaseModelInstance<A> {
   runValidations(): Promise<void>;
   toJSON(): A;
   toParam(): string;
+  serializableHash(options?: SerializationOptions): Record<string, unknown>;
+  toPartialPath(): string;
+  readonly modelName: ModelName;
 }
 
 /**
@@ -243,6 +309,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     /** The column optimistic locking uses, when the table has one. */
     static lockingColumn = "lock_version";
+
+    /** Rails' `model_name`, on the class as well as the record. */
+    static get modelName(): ModelName {
+      return modelNameFor(this);
+    }
 
     /** The column single-table inheritance stores the class name in. */
     static inheritanceColumn = "type";
@@ -934,8 +1005,51 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return Object.keys(this.changedAttributes()) as (keyof A & string)[];
     }
 
+    /** Every change as `[was, is]`. Rails' `changes`. */
+    changes(): Record<string, [unknown, unknown]> {
+      const changes: Record<string, [unknown, unknown]> = {};
+
+      for (const key of Object.keys(this.changedAttributes())) {
+        changes[key] = [this[ORIGINAL][key], this[ATTRIBUTES][key]];
+      }
+
+      return changes;
+    }
+
     hasChanged(attribute?: keyof A & string): boolean {
       return attribute ? this.changed().includes(attribute) : this.changed().length > 0;
+    }
+
+    /** What it held when the record was last loaded or saved. */
+    attributeWas(attribute: keyof A & string): unknown {
+      return this[ORIGINAL][attribute];
+    }
+
+    /**
+     * Puts the changed attributes back. Rails' `restore_attributes`.
+     *
+     * What a form does when the person cancels: the record in memory goes back
+     * to the row on disk without another query.
+     */
+    restoreAttributes(attributes: readonly (keyof A & string)[] = this.changed()): void {
+      for (const attribute of attributes) {
+        this[ATTRIBUTES][attribute] = this[ORIGINAL][attribute];
+      }
+    }
+
+    /** Rails' `serializable_hash`, with `only`, `except` and `methods`. */
+    serializableHash(options: SerializationOptions = {}): Record<string, unknown> {
+      return serializableHash(this, this.attributes() as Record<string, unknown>, options);
+    }
+
+    /** Which partial renders this record. Rails' `to_partial_path`. */
+    toPartialPath(): string {
+      return modelNameFor(this.constructor).partialPath;
+    }
+
+    /** Rails' `model_name`: every name derived from the class's. */
+    get modelName(): ModelName {
+      return modelNameFor(this.constructor);
     }
 
     /**
@@ -1592,6 +1706,9 @@ export interface ModelClass<A extends object> {
 
   lockingColumn: string;
   lockingEnabled(): Promise<boolean>;
+
+  /** Rails' `model_name`: every name derived from the class's. */
+  readonly modelName: ModelName;
 
   inheritanceColumn: string;
   /** Subclasses sharing this table, keyed by the name stored in `type`. */

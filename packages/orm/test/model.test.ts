@@ -315,7 +315,7 @@ describe("validations", () => {
     const article = Article.build({ title: "" });
     await article.validate();
 
-    expect(article.errors.fullMessages()).toEqual(["title can't be blank"]);
+    expect(article.errors.fullMessages()).toEqual(["Title can't be blank"]);
     expect(article.errors.count).toBe(1);
     expect(article.errors.isEmpty).toBe(false);
   });
