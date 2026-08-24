@@ -27,6 +27,7 @@ import { columnTypeFor } from "./dump.js";
 import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import type { ColumnType } from "./schema.js";
+import { runBulk, type BulkContext, type BulkOptions, type BulkResult } from "./bulk.js";
 import {
   humanAttributeName,
   modelNameFor,
@@ -868,6 +869,46 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * has the same gap and says so — a unique index is what actually prevents
      * the duplicate, and this reports the resulting error.
      */
+    /**
+     * Rails' `insert_all`: many rows in one statement, collisions skipped.
+     *
+     * No callbacks, no validations, nothing instantiated — the name is the
+     * warning. What it buys is one round trip instead of thousands, and
+     * atomicity that saving one at a time cannot offer.
+     */
+    static async insertAll(
+      rows: readonly Record<string, unknown>[],
+      options: BulkOptions = {},
+    ): Promise<BulkResult> {
+      return await runBulk(this.bulkContext(), rows, "skip", options);
+    }
+
+    /** Rails' `insert_all!`: a collision is an error rather than a skip. */
+    static async insertAllOrFail(
+      rows: readonly Record<string, unknown>[],
+      options: BulkOptions = {},
+    ): Promise<BulkResult> {
+      return await runBulk(this.bulkContext(), rows, "raise", options);
+    }
+
+    /** Rails' `upsert_all`: a collision overwrites. */
+    static async upsertAll(
+      rows: readonly Record<string, unknown>[],
+      options: BulkOptions = {},
+    ): Promise<BulkResult> {
+      return await runBulk(this.bulkContext(), rows, "update", options);
+    }
+
+    /** @internal What the bulk writer needs from a model. */
+    static bulkContext(): BulkContext {
+      return {
+        connection: this.connection,
+        table: this.table,
+        primaryKey: this.primaryKey,
+        columnNames: () => this.columnNames(),
+      };
+    }
+
     static async findOrCreateBy<M extends typeof BaseModel>(
       this: M,
       conditions: Conditions,
@@ -1685,7 +1726,7 @@ function hasSetter(object: object, key: string): boolean {
 }
 
 /** Values the database cannot store directly are serialized on the way in. */
-function serialize(value: unknown, connection?: Connection): unknown {
+export function serialize(value: unknown, connection?: Connection): unknown {
   if (value instanceof Date) {
     return connection ? formatTimestamp(connection, value) : value.toISOString();
   }
@@ -1778,6 +1819,14 @@ export interface ModelClass<A extends object> {
 
   count(): Promise<number>;
   exists(conditions?: Conditions): Promise<boolean>;
+  insertAll(rows: readonly Record<string, unknown>[], options?: BulkOptions): Promise<BulkResult>;
+  insertAllOrFail(
+    rows: readonly Record<string, unknown>[],
+    options?: BulkOptions,
+  ): Promise<BulkResult>;
+  upsertAll(rows: readonly Record<string, unknown>[], options?: BulkOptions): Promise<BulkResult>;
+  bulkContext(): BulkContext;
+
   findOrCreateBy<T>(
     this: ModelConstructor<A, T>,
     conditions: Conditions,
