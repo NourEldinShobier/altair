@@ -385,6 +385,8 @@ describe("a database-backed model has the same API", () => {
     body: string;
   }
 
+  class Stamped extends Model<{ id: number; title: string; updated_at: Date }>("stampeds") {}
+
   class Article extends Model<ArticleRow>("articles") {
     get excerpt(): string {
       return String(this.body).slice(0, 5);
@@ -433,6 +435,43 @@ describe("a database-backed model has the same API", () => {
     article.restoreAttributes();
     expect(article.title).toBe("Hello");
     expect(article.hasChanged()).toBe(false);
+  });
+
+  // What makes a record usable as an etag: the key changes the moment the
+  // record does, so a cached copy expires by becoming unreachable rather than
+  // by being swept.
+  it("gives a cache key that carries its version", async () => {
+    const connection = new Connection("sqlite://:memory:");
+    setConnection(connection);
+    Stamped.columnCache = undefined;
+    Stamped.columnTypeCache = undefined;
+
+    await new SchemaStatements(connection).createTable("stampeds", (t) => {
+      t.string("title");
+      t.datetime("updated_at");
+    });
+
+    const record = await Stamped.create({ title: "Hello", updated_at: new Date() });
+    expect(record.cacheKey()).toMatch(/^stampeds\/\d+-\d{14}$/);
+
+    // Assigned rather than saved: `updated_at` is managed on write, so a save
+    // would stamp the current time and this asserts the key follows the
+    // attribute, without a second of sleep to make the clocks differ.
+    const before = record.cacheKey();
+    record.updated_at = new Date("2030-06-01T09:08:07Z");
+
+    expect(record.cacheKey()).not.toBe(before);
+    expect(record.cacheKey()).toEndWith("-20300601090807");
+  });
+
+  // A table with no `updated_at` gets a key with no version — the same as
+  // Rails. Worth a test rather than a footnote: used as an etag it can never
+  // detect a change, so the browser would keep the first page it saw forever.
+  it("has no version to give when the table keeps no timestamp", async () => {
+    await setup();
+    const article = await Article.create({ title: "Hello", body: "World" });
+
+    expect(article.cacheKey()).toMatch(/^articles\/\d+$/);
   });
 
   it("reports the same full messages", async () => {

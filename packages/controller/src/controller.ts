@@ -81,6 +81,25 @@ function filterConditions<T extends Controller>(options: FilterOptions<T>): SetC
   return conditions;
 }
 
+import {
+  cacheControl,
+  freshnessFor,
+  notModified,
+  type FreshnessOptions,
+} from "./conditional_get.js";
+
+/** A copy of a response with extra headers. Response headers are immutable. */
+function withHeaders(response: Response, extra: Record<string, string>): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(extra)) headers.set(name, value);
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export class Controller extends Callbacks {
   static {
     this.defineCallbacks<Controller>("action", {
@@ -222,14 +241,25 @@ export class Controller extends Callbacks {
     });
   }
 
+  /** Cache headers set before the body was rendered. */
+  #pendingCacheHeaders: Record<string, string> | undefined;
+
   #setResponse(response: Response): Response {
     if (this.#response) {
       throw new Error(
         `Render and/or redirect were called multiple times in this action (${this.constructor.name}#${this.actionName})`,
       );
     }
-    this.#response = response;
-    return response;
+
+    // Applied here rather than at each render: `freshWhen` runs before the
+    // action decides what to render, and the validators it worked out have to
+    // travel with whatever that turns out to be.
+    this.#response = this.#pendingCacheHeaders
+      ? withHeaders(response, this.#pendingCacheHeaders)
+      : response;
+    this.#pendingCacheHeaders = undefined;
+
+    return this.#response;
   }
 
   /** Responses. Rails spells these `render json:`, `render plain:`, `render html:`. */
@@ -288,6 +318,58 @@ export class Controller extends Callbacks {
         headers: { location },
       }),
     );
+  }
+
+  /**
+   * Rails' `fresh_when`.
+   *
+   * Sets the validators, and answers 304 straight away when the client
+   * already has this version. The action stops there — `performed()` is true,
+   * so the filter chain halts exactly as it does after a render.
+   */
+  freshWhen(options: FreshnessOptions): boolean {
+    const { fresh, headers } = freshnessFor(this.request, options);
+
+    this.#pendingCacheHeaders = headers;
+    if (fresh) this.#setResponse(notModified(headers));
+
+    return fresh;
+  }
+
+  /**
+   * Rails' `stale?`: true when the client needs the body.
+   *
+   *     if (this.stale({ etag: post, lastModified: post.updated_at })) {
+   *       this.render.json(post)
+   *     }
+   *
+   * A boolean rather than a decorator, because the saving is the render that
+   * does not run — not the bytes that are not sent.
+   */
+  stale(options: FreshnessOptions): boolean {
+    return !this.freshWhen(options);
+  }
+
+  /**
+   * Rails' `expires_in`, without any validators.
+   *
+   * For a response that may simply be reused for a while — a public listing, a
+   * generated image — where there is nothing to compare against.
+   */
+  expiresIn(seconds: number, options: Omit<FreshnessOptions, "expiresIn"> = {}): void {
+    this.#pendingCacheHeaders = {
+      "cache-control": cacheControl({ ...options, expiresIn: seconds }),
+    };
+  }
+
+  /** Rails' `expires_now`: a cache must revalidate before reusing this. */
+  expiresNow(): void {
+    this.#pendingCacheHeaders = { "cache-control": "no-cache" };
+  }
+
+  /** For anything a cache must never keep at all. */
+  noStore(): void {
+    this.#pendingCacheHeaders = { "cache-control": "no-store" };
   }
 
   /** Rails' `head`: a response with a status and no body. */
