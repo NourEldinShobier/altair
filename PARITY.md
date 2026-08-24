@@ -164,11 +164,16 @@ walk a cursor, as Rails does.
 There is a logger now, with tags in an `AsyncLocalStorage`, a request log that
 reports what the database did inside each request, and an error reporter for
 an application to hang Sentry or its equivalent off. It is written here rather
-than taken from a package, and the reason is measured: our logger costs 296ns
-for an enabled call on Bun, against a published 773ns for Pino on the same
-runtime — Pino's worker-thread transports are a Node optimization that becomes
-overhead on Bun, and `pino-pretty` does not resolve there without a bundler
-plugin at all.
+than taken from a package, and the reason is the dependency, not the speed.
+Measured head to head on Bun 1.4 with output discarded: 400ns an enabled call
+here, 439 consola, 463 pino, 581 LogTape, 1047 winston. Nothing on offer is
+faster, and pino brings 14 packages where winston brings 28 — a cost a
+framework pays on behalf of every application built on it.
+
+An earlier version of this file quoted a published benchmark showing pino at
+773ns on Bun and claimed `pino-pretty` would not run there. Neither
+reproduced: the numbers were someone else's machine and harness, and
+pino-pretty works under Bun 1.4.
 
 **Railties is done**, which makes every Rails component done. `config/
 environments/<env>.ts` layers over the defaults, `config/initializers/*.ts`

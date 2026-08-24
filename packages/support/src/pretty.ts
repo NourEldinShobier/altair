@@ -7,10 +7,15 @@
  * the logger — the same records that render as JSON in production render as
  * this in a terminal, and nothing about the call site changes.
  *
- * No dependency. `pino-pretty`, the usual answer, runs in a worker thread
- * through Pino's transport machinery, which is the part of Pino that does not
- * resolve under Bun without a bundler plugin. Colour is ANSI escape codes and
- * a check for whether anything is watching.
+ * No dependency, and the reason is the dependency rather than the alternatives
+ * being bad. Measured on Bun 1.4 with output discarded, an enabled call costs
+ * 400ns here, 439 in consola, 463 in pino, 581 in LogTape and 1047 in winston
+ * — nothing on offer is faster, so adopting one would buy a package rather
+ * than a speed-up. pino brings 14 packages and winston 28; a framework spends
+ * that budget on behalf of every application built on it.
+ *
+ * (`pino-pretty` does work under Bun 1.4 — an earlier version of this comment
+ * said it did not, on the strength of a 2023 issue rather than a test.)
  *
  * What gets colour is chosen, not uniform. Colouring everything is the same as
  * colouring nothing; these highlight the four things worth a glance — how bad
