@@ -41,6 +41,14 @@ interface JoinClause extends JoinSpec {
 interface WhereClause {
   sql: string;
   bindings: unknown[];
+  /**
+   * The column this came from, when it came from the object form.
+   *
+   * Only `merge` reads it, and only so it can do what Rails does: a merged
+   * condition on a column replaces an earlier one rather than being ANDed with
+   * it. A clause written as raw SQL has no single column and is always kept.
+   */
+  column?: string;
 }
 
 export interface RelationSource<T> {
@@ -105,6 +113,37 @@ export class RecordNotFound extends Error {
     super(message);
     this.name = "RecordNotFound";
   }
+}
+
+/**
+ * ANDs a set of clauses into one fragment, or nothing when there are none.
+ *
+ * Each clause is bracketed: a clause may itself be an OR, and `a OR b AND c`
+ * does not mean what the person who wrote it thought.
+ */
+/**
+ * Brackets a clause only when it needs it.
+ *
+ * A clause containing OR has to keep its shape when ANDed with anything else,
+ * since SQL binds AND tighter — `a OR b AND c` means `a OR (b AND c)`, so a
+ * condition added after an `or` would silently attach to one side of it.
+ * Everything else is left bare, because a WHERE clause wrapped in brackets it
+ * does not need is one more thing to read past in a log.
+ *
+ * Values are always bound, never inlined, so no string literal can contain the
+ * word this looks for.
+ */
+function bracketed(sql: string): string {
+  return /\bor\b/i.test(sql) ? `(${sql})` : sql;
+}
+
+function joinClauses(clauses: WhereClause[]): { sql: string; bindings: unknown[] } | undefined {
+  if (clauses.length === 0) return undefined;
+
+  return {
+    sql: clauses.map((clause) => `(${clause.sql})`).join(" AND "),
+    bindings: clauses.flatMap((clause) => clause.bindings),
+  };
 }
 
 export class Relation<T> implements PromiseLike<T[]> {
@@ -172,19 +211,20 @@ export class Relation<T> implements PromiseLike<T[]> {
       const quoted = this.#quoteColumn(column);
 
       if (value === null) {
-        next.#wheres.push({ sql: `${quoted} IS NULL`, bindings: [] });
+        next.#wheres.push({ sql: `${quoted} IS NULL`, bindings: [], column });
       } else if (Array.isArray(value)) {
         if (value.length === 0) {
           // Rails: an empty IN matches nothing rather than erroring.
-          next.#wheres.push({ sql: "1 = 0", bindings: [] });
+          next.#wheres.push({ sql: "1 = 0", bindings: [], column });
         } else {
           next.#wheres.push({
             sql: `${quoted} IN (${value.map(() => "?").join(", ")})`,
             bindings: value,
+            column,
           });
         }
       } else {
-        next.#wheres.push({ sql: `${quoted} = ?`, bindings: [value] });
+        next.#wheres.push({ sql: `${quoted} = ?`, bindings: [value], column });
       }
     }
     return next;
@@ -207,6 +247,99 @@ export class Relation<T> implements PromiseLike<T[]> {
       }
     }
     return next;
+  }
+
+  /**
+   * Either set of conditions. Rails' `or`.
+   *
+   *     Post.where({ draft: 1 }).or(Post.where({ author_id: me }))
+   *     // WHERE (draft = ?) OR (author_id = ?)
+   *
+   * Both sides are bracketed, because `a AND b OR c` is not what anybody who
+   * wrote this meant — SQL binds AND tighter than OR, so leaving the brackets
+   * off changes the query into a different one that still runs.
+   */
+  or(other: Relation<T>): Relation<T> {
+    this.#assertCompatible(other, "or");
+
+    const mine = joinClauses(this.#wheres);
+    const theirs = joinClauses(other.#wheres);
+
+    const next = this.#clone();
+
+    // One side with no conditions matches every row, and anything OR true is
+    // true — so the result is unconditional rather than the other side's
+    // conditions. Getting this wrong silently narrows the query.
+    if (!mine || !theirs) {
+      next.#wheres = [];
+      return next;
+    }
+
+    next.#wheres = [
+      {
+        sql: `(${mine.sql}) OR (${theirs.sql})`,
+        bindings: [...mine.bindings, ...theirs.bindings],
+      },
+    ];
+
+    return next;
+  }
+
+  /**
+   * Folds another relation's conditions into this one. Rails' `merge`.
+   *
+   * A merged condition on a column *replaces* an earlier one rather than being
+   * ANDed with it, which is Rails' behaviour and the only useful one: merging
+   * `{ status: "published" }` onto `{ status: "draft" }` should mean published,
+   * not a query that matches nothing.
+   *
+   * That only works for conditions written in the object form, since a raw SQL
+   * fragment has no one column to replace. Those are kept and ANDed.
+   */
+  merge(other: Relation<T>): Relation<T> {
+    const next = this.#clone();
+
+    const replaced = new Set(
+      other.#wheres.map((clause) => clause.column).filter((column): column is string => !!column),
+    );
+
+    next.#wheres = [
+      ...next.#wheres.filter((clause) => !clause.column || !replaced.has(clause.column)),
+      ...other.#wheres,
+    ];
+
+    // Rails takes the other relation's ordering and paging when it has any.
+    if (other.#orders.length > 0) next.#orders = [...other.#orders];
+    if (other.#limit !== undefined) next.#limit = other.#limit;
+    if (other.#offset !== undefined) next.#offset = other.#offset;
+    if (other.#includes.length > 0) next.#includes = [...other.#includes];
+
+    return next;
+  }
+
+  /**
+   * Rails refuses to `or` two relations that differ in anything but their
+   * conditions, and so does this.
+   *
+   * The alternative is quietly dropping one side's `limit` or `joins`, which
+   * produces a query that runs and answers something else.
+   */
+  #assertCompatible(other: Relation<T>, method: string): void {
+    const differences: string[] = [];
+
+    if (this.#limit !== other.#limit) differences.push("limit");
+    if (this.#offset !== other.#offset) differences.push("offset");
+    if (this.#distinct !== other.#distinct) differences.push("distinct");
+    if (this.#joins.length !== other.#joins.length) differences.push("joins");
+    if (this.#groups.join() !== other.#groups.join()) differences.push("group");
+    if (this.#havings.length !== other.#havings.length) differences.push("having");
+
+    if (differences.length > 0) {
+      throw new Error(
+        `Relations passed to \`${method}\` must differ only in their conditions. ` +
+          `These differ in: ${differences.join(", ")}.`,
+      );
+    }
   }
 
   order(column: string, direction: Direction = "asc"): Relation<T> {
@@ -361,7 +494,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     if (this.#wheres.length > 0) {
       const clauses = this.#wheres.map((clause) => {
         bindings.push(...clause.bindings);
-        return clause.sql;
+        return bracketed(clause.sql);
       });
       sql += ` WHERE ${clauses.join(" AND ")}`;
     }
@@ -682,7 +815,7 @@ export class Relation<T> implements PromiseLike<T[]> {
 
     const clauses = this.#wheres.map((clause) => {
       bindings.push(...clause.bindings);
-      return clause.sql;
+      return bracketed(clause.sql);
     });
     return { sql: ` WHERE ${clauses.join(" AND ")}`, bindings };
   }
