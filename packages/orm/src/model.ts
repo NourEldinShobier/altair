@@ -831,11 +831,34 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return definition;
     }
 
+    /**
+     * Rails' `where`, in both of its forms.
+     *
+     * The string form takes its bindings, and used not to: the class-level
+     * `where` accepted only an object, so `Post.where("views > ?", 35)`
+     * silently dropped the 35 and produced a statement with a placeholder and
+     * nothing to fill it. The relation had always supported it; only the way
+     * in from a model did not.
+     */
     static where<M extends typeof BaseModel>(
       this: M,
       conditions: Conditions,
+    ): Relation<InstanceType<M>>;
+    static where<M extends typeof BaseModel>(
+      this: M,
+      sql: string,
+      ...bindings: unknown[]
+    ): Relation<InstanceType<M>>;
+    static where<M extends typeof BaseModel>(
+      this: M,
+      conditionsOrSql: Conditions | string,
+      ...bindings: unknown[]
     ): Relation<InstanceType<M>> {
-      return this.all().where(conditions);
+      if (typeof conditionsOrSql === "string") {
+        return this.all().where(conditionsOrSql, ...bindings);
+      }
+
+      return this.all().where(conditionsOrSql);
     }
 
     static order<M extends typeof BaseModel>(
@@ -1910,6 +1933,7 @@ export interface ModelClass<A extends object> {
   joinFor(name: string): JoinSpec;
   unscoped<T>(this: ModelConstructor<A, T>): Relation<T>;
   where<T>(this: ModelConstructor<A, T>, conditions: Conditions): Relation<T>;
+  where<T>(this: ModelConstructor<A, T>, sql: string, ...bindings: unknown[]): Relation<T>;
   order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
   limit<T>(this: ModelConstructor<A, T>, count: number): Relation<T>;
   find<T>(this: ModelConstructor<A, T>, id: unknown): Promise<T>;
