@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,357** | 26,775    | 8.8% |
+| **Total** | **2,370** | 26,775    | 8.9% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -30,7 +30,7 @@ one that needs no server.
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                       |
 | `@altair/storage`    | 116   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
-| `@altair/view`       | 182   | TSX rendering, layouts, Inertia protocol, form builders                    |
+| `@altair/view`       | 195   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 60    | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 87    | Config, boot lifecycle, request handler, credentials, logging              |
@@ -113,6 +113,7 @@ Rails: 21,159 lines · 2,699 tests
 | Helpers (form, tag, asset, number) | 13,926    | **done** | Imports, not a mixin; Intl does the formatting        |
 | Form builders                      | —         | **done** | A component and a builder, not 3,000 lines of helpers |
 | Vite integration                   | —         | **done** | Manifest, import-graph CSS, dev server, nonce-aware   |
+| Fragment caching                   | 1,120     | **done** | `<Cached on={record}>`, nested, keyed on `cacheKey`   |
 
 ## Everything else
 
