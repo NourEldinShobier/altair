@@ -73,10 +73,17 @@ function format(value: unknown): string {
 export type Sink = (line: string, entry: LogEntry) => void;
 
 export const consoleSink: Sink = (line, entry) => {
+  // Written to the stream rather than through `console`. Bun wraps
+  // `console.error` output in its own red escape, which lands in front of ours
+  // and repaints the timestamp — found by piping a real application's output
+  // through `od`. Writing the line as given also skips the inspect machinery
+  // `console` runs on every argument.
+  //
   // Errors to stderr, everything else to stdout: a process whose output is
   // piped somewhere should not have its failures swallowed by the pipe.
-  if (SEVERITY[entry.level] >= SEVERITY.error) console.error(line);
-  else console.log(line);
+  const stream = SEVERITY[entry.level] >= SEVERITY.error ? process.stderr : process.stdout;
+  stream.write(`${line}
+`);
 };
 
 export interface LoggerOptions {

@@ -177,8 +177,13 @@ describe("new", () => {
       "app/controllers/home_controller.ts",
       "bin/server.ts",
       "config/console.ts",
+      "config/environments/development.ts",
+      "config/environments/production.ts",
+      "config/environments/test.ts",
+      "config/initializers/.gitkeep",
       "config/routes.ts",
       "db/.gitkeep",
+      "db/seeds.ts",
       "package.json",
       "tsconfig.json",
     ]);

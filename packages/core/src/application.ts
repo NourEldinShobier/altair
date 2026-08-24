@@ -13,8 +13,8 @@ import {
   errors,
   jsonFormatter,
   Logger,
+  prettyFormatter,
   Secrets,
-  textFormatter,
   type Subscription,
 } from "@altair/support";
 import { Current } from "@altair/support";
@@ -69,6 +69,11 @@ export class Application {
 
   controllers: ControllerRegistry = {};
   providers: Provider[] = [];
+  /**
+   * Run once at boot, after the database is connected. Rails'
+   * `config/initializers`, loaded by `loadApplication`.
+   */
+  initializers: ((app: Application) => void | Promise<void>)[] = [];
   readonly middleware = new MiddlewareStack();
 
   #credentials: Credentials | undefined;
@@ -85,7 +90,7 @@ export class Application {
     this.secrets = new Secrets(this.config.secretKeyBase);
     this.logger = new Logger({
       level: this.config.log.level,
-      formatter: this.config.log.format === "text" ? textFormatter : jsonFormatter,
+      formatter: this.config.log.format === "text" ? prettyFormatter() : jsonFormatter,
     });
     this.controllers = controllers ?? {};
     this.providers = providers ?? [];
@@ -174,6 +179,11 @@ export class Application {
     }
 
     for (const provider of this.providers) await provider.boot?.(this);
+
+    // After the providers, so an initializer can use what they registered, and
+    // after the connection, since configuring storage or a cache is the usual
+    // reason to write one.
+    for (const initializer of this.initializers) await initializer(this);
 
     this.#booted = true;
     return this;
