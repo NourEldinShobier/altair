@@ -297,6 +297,7 @@ export interface BaseModelInstance<A> {
   toJSON(): A;
   toParam(): string;
   cacheKey(): string;
+  touch(...columns: string[]): Promise<void>;
   serializableHash(options?: SerializationOptions): Record<string, unknown>;
   toPartialPath(): string;
   readonly modelName: ModelName;
@@ -651,6 +652,30 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       });
 
       if (options.counterCache) this.defineCounterCache(name, options.counterCache);
+      if (options.touch) this.defineTouch(name, options.touch);
+    }
+
+    /**
+     * Moves the parent's clock whenever a child changes. Rails'
+     * `belongs_to :post, touch: true`.
+     *
+     * This is what makes caching a parent by its `cacheKey` safe: a page
+     * cached under `posts/1-...` would otherwise keep showing yesterday's
+     * comment count, because adding a comment does not change the post's own
+     * `updated_at`.
+     *
+     * On destroy as well as save, since a removed comment changes the rendered
+     * post exactly as much as an added one.
+     */
+    private static defineTouch(name: string, option: true | string): void {
+      const columns = typeof option === "string" ? [option] : [];
+
+      const run = async function (this: BaseModel) {
+        await touchParent(this, name, columns);
+      };
+
+      this.setCallback("save", "after", run);
+      this.setCallback("destroy", "after", run);
     }
 
     /**
@@ -1024,6 +1049,57 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     toParam(): string {
       const klass = this.constructor as typeof BaseModel;
       return String(this[ATTRIBUTES][klass.primaryKey] ?? "");
+    }
+
+    /**
+     * Sets `updated_at` to now and writes it. Rails' `touch`.
+     *
+     *     await post.touch()
+     *     await post.touch("published_at")
+     *
+     * No validations, and only the timestamp columns are written — the point
+     * is to move the clock on a row without saving whatever else is half-
+     * edited in memory. It pairs with `cacheKey`: touching a record changes
+     * its key, so anything cached under that key becomes unreachable.
+     *
+     * A record that was never saved has nothing to touch, and says so rather
+     * than quietly doing nothing.
+     */
+    async touch(...columns: string[]): Promise<void> {
+      const klass = this.constructor as typeof BaseModel;
+
+      if (!this[PERSISTED]) {
+        throw new Error(`Cannot touch ${klass.name}: it has not been saved yet.`);
+      }
+
+      checkWritable("update");
+
+      const present = await klass.columnNames();
+      const now = new Date();
+
+      const touched = [...(present.includes("updated_at") ? ["updated_at"] : []), ...columns];
+      if (touched.length === 0) return;
+
+      for (const column of touched) {
+        if (!present.includes(column)) {
+          throw new Error(`Cannot touch ${klass.table}.${column}: there is no such column.`);
+        }
+      }
+
+      const connection = klass.connection;
+      const assignments = touched
+        .map((column, index) => `${connection.quote(column)} = ${connection.placeholder(index)}`)
+        .join(", ");
+
+      await connection.execute(
+        `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(touched.length)}`,
+        [...touched.map(() => serialize(now, connection)), this[ATTRIBUTES][klass.primaryKey]],
+      );
+
+      // The record in memory follows the row, or its own cache key would still
+      // be the old one.
+      for (const column of touched) this[ATTRIBUTES][column] = now;
+      this[ORIGINAL] = { ...this[ATTRIBUTES] };
     }
 
     /**
@@ -1669,6 +1745,33 @@ function castValue(value: unknown, type: ColumnType | undefined): unknown {
 }
 
 /** Moves a parent's counter cache by one when a child is created or destroyed. */
+/**
+ * Touches the record a `belongs_to` points at.
+ *
+ * Loaded and touched rather than updated in place, so the parent's own
+ * `touch: true` runs too — a comment on a post in a thread should move the
+ * thread's clock as well, which is the whole reason the option chains.
+ */
+async function touchParent(record: object, name: string, columns: string[]): Promise<void> {
+  const klass = (record as { constructor: unknown }).constructor as {
+    associationFor(name: string): AssociationDefinition;
+  };
+
+  const definition = klass.associationFor(name);
+  const target = definition.target() as ModelLike & {
+    where(conditions: Record<string, unknown>): { first(): Promise<{ touch?: Function } | null> };
+  };
+
+  const foreignKey = definition.foreignKey ?? defaultForeignKey(target.name);
+  const id = (record as { [ATTRIBUTES]: Record<string, unknown> })[ATTRIBUTES][foreignKey];
+
+  // A child with no parent has no clock to move.
+  if (id === null || id === undefined) return;
+
+  const parent = await target.where({ [target.primaryKey]: id }).first();
+  if (parent?.touch) await (parent.touch as (...args: string[]) => Promise<void>)(...columns);
+}
+
 async function adjustCounter(
   record: object,
   name: string,

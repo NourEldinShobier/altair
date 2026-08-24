@@ -14,6 +14,8 @@
 
 import type { Connection, Row } from "./connection.js";
 import { checkWritable } from "./databases.js";
+// Used inside a method, long after both modules have finished loading.
+import { serialize } from "./model.js";
 
 export type Direction = "asc" | "desc";
 
@@ -710,8 +712,12 @@ export class Relation<T> implements PromiseLike<T[]> {
 
     const statement = `UPDATE ${this.connection.quote(this.#source.tableName)} SET ${assignments}${where.sql}`;
 
+    // Serialized the same way a single save serializes. Without this a Date
+    // reaches the driver as an object and is refused outright — so
+    // `updateAll({ published_at: new Date() })`, which is the obvious use for
+    // a bulk update, threw.
     await this.connection.execute(this.#renumber(statement), [
-      ...entries.map(([, value]) => value),
+      ...entries.map(([, value]) => serialize(value, this.connection)),
       ...where.bindings,
     ]);
   }

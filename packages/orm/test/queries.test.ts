@@ -17,6 +17,7 @@ interface PostAttributes {
   category: string;
   views: number;
   published: number;
+  published_at: Date | null;
 }
 
 class Post extends Model<PostAttributes>("posts") {}
@@ -32,6 +33,7 @@ beforeEach(async () => {
     t.string("category");
     t.integer("views", { default: 0 });
     t.integer("published", { default: 0 });
+    t.datetime("published_at");
   });
 
   await Post.create({ title: "A", category: "tech", views: 10, published: 1 });
@@ -158,6 +160,18 @@ describe("bulk writes", () => {
   it("updates everything when unscoped", async () => {
     await Post.all().updateAll({ views: 0 });
     expect(await Post.all().sum("views")).toBe(0);
+  });
+
+  // A Date reached the driver as an object and was refused outright, so
+  // `updateAll({ published_at: new Date() })` — the obvious use for a bulk
+  // update — threw. Found while writing the touch tests, which needed exactly
+  // this to backdate a row.
+  it("writes a value the driver cannot bind on its own", async () => {
+    const when = new Date("2020-01-01T00:00:00Z");
+    await Post.all().updateAll({ published_at: when });
+
+    const post = await Post.first();
+    expect(new Date(post?.published_at as Date).getTime()).toBe(when.getTime());
   });
 
   it("rejects an invalid column", async () => {
