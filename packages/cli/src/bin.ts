@@ -6,6 +6,7 @@
  * it calls returns data, which is what makes the commands testable.
  */
 
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,7 +23,14 @@ import {
 } from "./commands.js";
 import { editCredentials, ignoreMasterKey, showCredentials } from "./credentials.js";
 import { loadMigrations } from "./loader.js";
-import { Connection, dumpSchema, dumpTypes, introspect, loadSchema } from "@altair/orm";
+import {
+  Connection,
+  dumpSchema,
+  dumpTypes,
+  introspect,
+  loadSchema,
+  setConnection,
+} from "@altair/orm";
 import type { Environment } from "@altair/core";
 
 /**
@@ -250,6 +258,32 @@ switch (command) {
   case "secret":
     console.log(generateSecret());
     break;
+
+  case "db:seed": {
+    const seeds = join(process.cwd(), "db", "seeds.ts");
+
+    if (!existsSync(seeds)) {
+      console.error("No db/seeds.ts. Create one that exports a default function.");
+      process.exit(1);
+    }
+
+    const connection = await connect();
+    const loaded = (await import(pathToFileURL(seeds).href)) as {
+      default?: () => unknown | Promise<unknown>;
+    };
+
+    if (typeof loaded.default !== "function") {
+      console.error("db/seeds.ts must export a default function.");
+      process.exit(1);
+    }
+
+    setConnection(connection);
+    await loaded.default();
+    await connection.close();
+
+    console.log("      seeded  db/seeds.ts");
+    break;
+  }
 
   case "credentials:edit": {
     const environment = environmentArgument(args);

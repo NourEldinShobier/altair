@@ -250,6 +250,59 @@ SECRET_KEY_BASE=
 `,
     },
     {
+      path: "config/environments/development.ts",
+      contents: `import type { ApplicationConfig } from "@altair/core";
+
+// What changes in development. Everything else comes from the defaults.
+export default {
+  showDetailedErrors: true,
+  log: { level: "debug", format: "text", queries: true },
+} satisfies Partial<ApplicationConfig>;
+`,
+    },
+    {
+      path: "config/environments/production.ts",
+      contents: `import type { ApplicationConfig } from "@altair/core";
+
+// The strict settings are the defaults; this is where to relax or tighten
+// them. A function gets the defaults, for anything that depends on them.
+export default {
+  forceSsl: true,
+  showDetailedErrors: false,
+  log: { level: "info", format: "json", queries: false },
+} satisfies Partial<ApplicationConfig>;
+`,
+    },
+    {
+      path: "config/environments/test.ts",
+      contents: `import type { ApplicationConfig } from "@altair/core";
+
+export default {
+  database: { url: "sqlite://:memory:" },
+  log: { level: "fatal", format: "json", queries: false },
+} satisfies Partial<ApplicationConfig>;
+`,
+    },
+    {
+      path: "config/initializers/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "db/seeds.ts",
+      contents: `// Run with \`altair db:seed\`. Written to be safe to run twice: seeding is
+// something people do on a whim, and a script that duplicates every row when
+// it runs again is a script nobody dares run.
+//
+//   import { User } from "#models/user"
+//
+//   export default async function seed(): Promise<void> {
+//     await User.findOrCreateBy({ email: "admin@example.com" }, { name: "Admin" })
+//   }
+
+export default async function seed(): Promise<void> {}
+`,
+    },
+    {
       path: "db/.gitkeep",
       contents: "",
     },
@@ -297,6 +350,7 @@ export function helpText(): string {
     "  db:migrate                Run pending migrations",
     "  db:rollback [STEPS]       Roll back the last migration",
     "  db:status                 Show which migrations have run",
+    "  db:seed                   Run db/seeds.ts",
     "  routes                    List the route table",
     "  routes:types              Generate typed path helpers into config/paths.ts",
     "  server, s                 Run the application with reloading",
