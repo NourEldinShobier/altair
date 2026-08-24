@@ -77,6 +77,17 @@ export interface AssociationOptions {
    */
   as?: string;
 
+  /**
+   * Moves the parent's `updated_at` whenever a child changes. Rails'
+   * `belongs_to :post, touch: true`.
+   *
+   * What makes caching a parent by its `cacheKey` safe: without it a page
+   * cached under `posts/1-…` keeps showing yesterday's comment count, because
+   * adding a comment does not change the post's own timestamp. A string names
+   * a second column to move alongside `updated_at`.
+   */
+  touch?: true | string;
+
   polymorphic?: boolean;
   /** Resolves a polymorphic type name to a model class. */
   types?: Record<string, () => ModelLike>;
