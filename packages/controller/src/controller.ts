@@ -87,6 +87,7 @@ import {
   notModified,
   type FreshnessOptions,
 } from "./conditional_get.js";
+import { negotiateFormat } from "./mime.js";
 
 /** A copy of a response with extra headers. Response headers are immutable. */
 function withHeaders(response: Response, extra: Record<string, string>): Response {
@@ -244,6 +245,9 @@ export class Controller extends Callbacks {
   /** Cache headers set before the body was rendered. */
   #pendingCacheHeaders: Record<string, string> | undefined;
 
+  /** The format `respondTo` settled on. */
+  #format: string | undefined;
+
   #setResponse(response: Response): Response {
     if (this.#response) {
       throw new Error(
@@ -318,6 +322,56 @@ export class Controller extends Callbacks {
         headers: { location },
       }),
     );
+  }
+
+  /**
+   * The format this request is being answered in, once one has been chosen.
+   *
+   * Rails' `request.format`. Undefined until `respondTo` has run, since before
+   * that nothing has decided.
+   */
+  get format(): string | undefined {
+    return this.#format;
+  }
+
+  /**
+   * One action, several representations. Rails' `respond_to`.
+   *
+   *     await this.respondTo({
+   *       html: () => this.render.html(<Show post={post} />),
+   *       json: () => this.render.json(post),
+   *     })
+   *
+   * The keys are declared in preference order, so the first is what a client
+   * with no opinion gets. Nothing acceptable answers 406 rather than guessing:
+   * sending HTML to something that asked for JSON is a failure that surfaces
+   * far from here.
+   */
+  async respondTo(handlers: Record<string, () => unknown | Promise<unknown>>): Promise<void> {
+    const available = Object.keys(handlers);
+    const asked = this.params.get("format");
+
+    const chosen = negotiateFormat(this.request, {
+      available,
+      // A `format` parameter is whatever arrived in the query string, so it is
+      // only useful when it is a string.
+      parameter: typeof asked === "string" ? asked : null,
+    });
+
+    // Sent whether or not a format was found, and before anything is rendered.
+    // A response that varies by Accept and does not say so is one a shared
+    // cache will hand to the next client whatever that client asked for —
+    // which is how an API response ends up served to a browser.
+    this.#pendingCacheHeaders = { ...this.#pendingCacheHeaders, vary: "Accept" };
+
+    if (!chosen) {
+      this.#format = undefined;
+      this.head(406);
+      return;
+    }
+
+    this.#format = chosen;
+    await handlers[chosen]?.();
   }
 
   /**
