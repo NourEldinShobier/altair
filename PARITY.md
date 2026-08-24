@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,233** | 26,775    | 8.3% |
+| **Total** | **2,270** | 26,775    | 8.5% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,8 +24,8 @@ one that needs no server.
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 450   | Connection, migrations, models, relations, associations, ActiveModel       |
-| `@altair/controller` | 198   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
+| `@altair/orm`        | 452   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/controller` | 233   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 116   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                       |
@@ -98,6 +98,7 @@ Rails: 30,329 lines · 3,828 tests
 | Middleware stack          | 4,749     | **done** | Functions; cors, ssl, security headers, id              |
 | Content Security Policy   | 842       | **done** | Directive builder, per-request nonce, report-only       |
 | Rate limiting             | —         | **done** | Fixed window over the cache store, 429 with retry-after |
+| HTTP caching              | 620       | **done** | ETags, `freshWhen`/`stale`, 304, `Cache-Control`        |
 
 ## ActionView → `@altair/view`
 

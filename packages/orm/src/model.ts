@@ -295,6 +295,7 @@ export interface BaseModelInstance<A> {
   runValidations(): Promise<void>;
   toJSON(): A;
   toParam(): string;
+  cacheKey(): string;
   serializableHash(options?: SerializationOptions): Record<string, unknown>;
   toPartialPath(): string;
   readonly modelName: ModelName;
@@ -982,6 +983,33 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     toParam(): string {
       const klass = this.constructor as typeof BaseModel;
       return String(this[ATTRIBUTES][klass.primaryKey] ?? "");
+    }
+
+    /**
+     * Rails' `cache_key_with_version`: `posts/1-20260815120000`.
+     *
+     * The timestamp is the version, which is what makes this usable as an
+     * etag: the key changes the moment the record does, so a cached copy
+     * expires by being unreachable rather than by being swept. A record with
+     * no `updated_at` gets a key with no version, and the caller should know
+     * that such a key cannot detect a change.
+     */
+    cacheKey(): string {
+      const klass = this.constructor as typeof BaseModel;
+      const id = String(this[ATTRIBUTES][klass.primaryKey] ?? "new");
+      const stamp = this[ATTRIBUTES].updated_at;
+
+      if (stamp === undefined || stamp === null) return `${klass.table}/${id}`;
+
+      const at = stamp instanceof Date ? stamp : new Date(String(stamp));
+      const version = Number.isNaN(at.getTime())
+        ? String(stamp)
+        : at
+            .toISOString()
+            .replaceAll(/[-:TZ.]/g, "")
+            .slice(0, 14);
+
+      return `${klass.table}/${id}-${version}`;
     }
 
     assign(values: Partial<A>): void {
