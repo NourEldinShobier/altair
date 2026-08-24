@@ -143,7 +143,12 @@ describe("the encrypted file", () => {
     const file = withKey();
     file.write("a: 1");
 
-    const tampered = readFileSync(paths().contentPath, "utf8").replace(/^./, "Z");
+    // Changed to something the first character definitely is not. Replacing
+    // it with a fixed letter left the file untouched whenever the ciphertext
+    // already began with that letter — a one-in-sixty-four flake, which CI
+    // duly found.
+    const stored = readFileSync(paths().contentPath, "utf8");
+    const tampered = (stored.startsWith("Z") ? "Y" : "Z") + stored.slice(1);
     writeFileSync(paths().contentPath, tampered);
 
     expect(() => file.read()).toThrow(InvalidKey);

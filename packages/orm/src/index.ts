@@ -12,3 +12,4 @@ export * from "./encryption.js";
 export * from "./rich_text.js";
 export * from "./secure_password.js";
 export * from "./active_model.js";
+export * from "./bulk.js";
