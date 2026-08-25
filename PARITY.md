@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,370** | 26,775    | 8.9% |
+| **Total** | **2,401** | 26,775    | 9.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,7 +24,7 @@ one that needs no server.
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 510   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/orm`        | 527   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 262   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 116   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
@@ -68,7 +68,7 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Attributes & dirty tracking   | 1,144     | **done** | Typed via an attributes interface                               |
 | Persistence                   | 1,006     | **done** | save, update, destroy, create, reload                           |
 | Migrations                    | 2,705     | **done** | DSL, versions, rollback, opt-in foreign keys                    |
-| Callbacks                     | —         | **done** | save/create/update/destroy/validation                           |
+| Callbacks                     | —         | **done** | save/create/update/destroy/validation, `afterCommit`            |
 | Validations                   | —         | **done** | presence, length, format, uniqueness, and the rest              |
 | Associations                  | 6,031     | **done** | All kinds, both polymorphic directions, `includes`, `dependent` |
 | Relation / query interface    | 5,579     | **done** | where/order/group/aggregates/scopes/bulk writes, joins          |

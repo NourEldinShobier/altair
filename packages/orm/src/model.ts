@@ -29,6 +29,12 @@ import { checkWritable, currentScope, database, hasDatabases, type Role } from "
 import type { ColumnType } from "./schema.js";
 import { runBulk, type BulkContext, type BulkOptions, type BulkResult } from "./bulk.js";
 import {
+  afterCommit,
+  afterRollback,
+  type CommitAction,
+  type CommitCallback,
+} from "./after_commit.js";
+import {
   humanAttributeName,
   modelNameFor,
   serializableHash,
@@ -267,6 +273,9 @@ const ORIGINAL = Symbol("altair.model.original");
 // `this.#field` inside a getter would throw "invalid private field".
 const PERSISTED = Symbol("altair.model.persisted");
 const NESTED = Symbol("altair.model.nested");
+// Whether the last save was an insert. Read by the commit callbacks, which
+// run after both kinds and have no other way to tell them apart.
+const WAS_NEW = Symbol("altair.model.wasNew");
 
 export interface ModelOptions {
   primaryKey?: string;
@@ -527,6 +536,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     declare [PERSISTED]: boolean;
     declare [NESTED]: Record<string, unknown>;
+    /** Whether the save that just ran was an insert. Read by commit callbacks. */
+    declare [WAS_NEW]: boolean;
     readonly errors = new ValidationErrors();
 
     constructor(values: Partial<A> = {}, persisted = false) {
@@ -698,6 +709,52 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       this.setCallback("destroy", "after", async function (this: BaseModel) {
         await adjustCounter(this, name, column, -1);
       });
+    }
+
+    /**
+     * Work deferred until the transaction commits. Rails' `after_commit`.
+     *
+     *     static { this.afterCommit(async function () {
+     *       await SendWelcome.later(this.id)
+     *     }, { on: "create" }) }
+     *
+     * Use this and not `after_create` for anything the outside world can see —
+     * a job, an email, a webhook. A job enqueued inside the transaction is
+     * enqueued whether or not it commits, so a rollback leaves a worker
+     * holding the id of a row that never existed; and it can be picked up
+     * before the commit lands, when the row genuinely is not there yet.
+     *
+     * Outside a transaction the callback runs at once, so the same code is
+     * right either way — a model cannot know whether its caller opened one.
+     */
+    static afterCommit(callback: CommitCallback, options: { on?: CommitAction } = {}): void {
+      const phases: CommitAction[] = options.on ? [options.on] : ["create", "update", "destroy"];
+
+      for (const phase of phases) {
+        // `create` and `update` both finish through save; the callback checks
+        // which happened, since only the record knows.
+        const event = phase === "destroy" ? "destroy" : "save";
+
+        this.setCallback(event, "after", async function (this: BaseModel) {
+          if (phase === "create" && !this[WAS_NEW]) return;
+          if (phase === "update" && this[WAS_NEW]) return;
+
+          await afterCommit(async () => {
+            await (callback as (this: unknown) => unknown | Promise<unknown>).call(this);
+          });
+        });
+      }
+    }
+
+    /** Rails' `after_rollback`. Never runs when there is no transaction. */
+    static afterRollback(callback: CommitCallback): void {
+      for (const event of ["save", "destroy"] as const) {
+        this.setCallback(event, "after", function (this: BaseModel) {
+          afterRollback(async () => {
+            await (callback as (this: unknown) => unknown | Promise<unknown>).call(this);
+          });
+        });
+      }
     }
 
     /** Rails' `has_many :comments`. */
@@ -1463,6 +1520,10 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
       const result = await runCallbacks(this, "save", async () => {
         await runCallbacks(this, creating ? "create" : "update", async () => {
+          // Remembered for the commit callbacks, which run after the save and
+          // cannot otherwise tell an insert from an update.
+          this[WAS_NEW] = creating;
+
           if (creating) await this.insertRecord(klass);
           else await this.updateRecord(klass);
         });
@@ -1962,6 +2023,11 @@ export interface ModelClass<A extends object> {
 
   count(): Promise<number>;
   exists(conditions?: Conditions): Promise<boolean>;
+  /** Rails' `after_commit`: deferred until the transaction actually commits. */
+  afterCommit(callback: CommitCallback, options?: { on?: CommitAction }): void;
+  /** Rails' `after_rollback`. */
+  afterRollback(callback: CommitCallback): void;
+
   insertAll(rows: readonly Record<string, unknown>[], options?: BulkOptions): Promise<BulkResult>;
   insertAllOrFail(
     rows: readonly Record<string, unknown>[],
