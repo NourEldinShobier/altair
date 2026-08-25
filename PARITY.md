@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,425** | 26,775    | 9.1% |
+| **Total** | **2,447** | 26,775    | 9.1% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,7 +24,7 @@ one that needs no server.
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 533   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/orm`        | 555   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 265   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 124   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
@@ -76,6 +76,7 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Schema dump & type emission   | —         | **done** | Types generated from the database itself                        |
 | Nested attributes             | 1,146     | **done** | Collections, to-one, to-many, `_destroy`, limit, rejectIf       |
 | Single-table inheritance      | —         | **done** | Subclass queries, typed instantiation, `unscoped`               |
+| Enums                         | 291       | **done** | Words in the app, integers in the column, mapped in queries     |
 | Counter cache                 | —         | **done** | Adjusted on create and destroy                                  |
 | Touch / cache invalidation    | —         | **done** | `touch`, `belongsTo(touch: true)`, keyed off `cacheKey`         |
 | Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                |
