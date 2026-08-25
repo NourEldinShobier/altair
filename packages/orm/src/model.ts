@@ -26,6 +26,15 @@ import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./rela
 import { columnTypeFor } from "./dump.js";
 import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
+import {
+  defineEnum,
+  labelFor,
+  memberName,
+  storedValueFor,
+  type EnumDefinition,
+  type EnumMapping,
+  type EnumOptions,
+} from "./enum.js";
 import type { ColumnType } from "./schema.js";
 import { runBulk, type BulkContext, type BulkOptions, type BulkResult } from "./bulk.js";
 import {
@@ -397,6 +406,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     /** Columns held as ciphertext. Rails' `encrypts`. */
     static encryptedAttributes: Record<string, EncryptedAttributeOptions> = {};
+    static enums: Record<string, EnumDefinition> = {};
 
     /**
      * Encrypts a column. Rails' `encrypts :ssn`.
@@ -405,6 +415,86 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * the ciphertext. A deterministic column can be queried, at the cost of
      * revealing which rows share a value.
      */
+    /**
+     * Maps a column of integers onto words. Rails' `enum`.
+     *
+     *     static { this.enum("status", { draft: 0, published: 1 }) }
+     *
+     * The column keeps the integer, so the index stays small; everything that
+     * reads the record sees the word, so nothing else has to keep its own copy
+     * of what 1 meant.
+     */
+    static enum(attribute: string, mapping: EnumMapping, options: EnumOptions = {}): void {
+      if (!Object.hasOwn(this, "enums")) this.enums = { ...this.enums };
+
+      const definition = defineEnum(attribute, mapping, options);
+      this.enums[attribute] = definition;
+
+      // An accessor on the prototype, so the Proxy resolves it rather than
+      // reaching for the raw attribute — the same way a secure password does.
+      Object.defineProperty(this.prototype, attribute, {
+        configurable: true,
+        get(this: BaseModel) {
+          return labelFor(definition, this[ATTRIBUTES][attribute]);
+        },
+        set(this: BaseModel, value: unknown) {
+          this[ATTRIBUTES][attribute] = storedValueFor(definition, value);
+        },
+      });
+
+      for (const label of Object.keys(mapping)) {
+        const member = memberName(definition, label);
+
+        // `post.isPublished`
+        Object.defineProperty(this.prototype, `is${member[0]?.toUpperCase()}${member.slice(1)}`, {
+          configurable: true,
+          get(this: BaseModel) {
+            return this[ATTRIBUTES][attribute] === mapping[label];
+          },
+        });
+
+        // `await post.published()` — Rails' `published!`, which saves.
+        Object.defineProperty(this.prototype, member, {
+          configurable: true,
+          value: async function (this: BaseModel & { save(): Promise<boolean> }) {
+            this[ATTRIBUTES][attribute] = mapping[label];
+            return await this.save();
+          },
+        });
+
+        // `Post.published()` — the scope.
+        Object.defineProperty(this, member, {
+          configurable: true,
+          value: function (this: typeof BaseModel) {
+            return this.where({ [attribute]: mapping[label] });
+          },
+        });
+      }
+    }
+
+    /** Rewrites `{ status: "draft" }` into what the column holds. */
+    static enumConditions(conditions: Conditions): Conditions {
+      if (Object.keys(this.enums).length === 0) return conditions;
+
+      const prepared: Record<string, unknown> = {};
+
+      for (const [column, value] of Object.entries(conditions)) {
+        const definition = this.enums[column];
+
+        if (!definition) {
+          prepared[column] = value;
+          continue;
+        }
+
+        // An array is an IN, so every member maps.
+        prepared[column] = Array.isArray(value)
+          ? value.map((one) => storedValueFor(definition, one))
+          : storedValueFor(definition, value);
+      }
+
+      return prepared;
+    }
+
     static encrypts(name: string, options: EncryptedAttributeOptions = {}): void {
       if (!Object.hasOwn(this, "encryptedAttributes")) {
         this.encryptedAttributes = { ...this.encryptedAttributes };
@@ -635,7 +725,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         prepare: async () => {
           await this.columnTypes();
         },
-        prepareConditions: (conditions) => this.encryptConditions(conditions),
+        prepareConditions: (conditions) => this.encryptConditions(this.enumConditions(conditions)),
         joinFor: (name) => this.joinFor(name),
         preload: async (records, names) => {
           for (const name of names) {
@@ -1119,7 +1209,26 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     attributes(): A {
-      return { ...this[ATTRIBUTES] } as A;
+      const klass = this.constructor as typeof BaseModel;
+      const enums = Object.keys(klass.enums);
+
+      if (enums.length === 0) return { ...this[ATTRIBUTES] } as A;
+
+      // Enums come back as their word here too, not just through the accessor.
+      // Otherwise `toJSON` and `serializableHash` — which is to say every JSON
+      // response — would hand out the integer, and the caller would need its
+      // own copy of the mapping to read it. The raw value is still what the
+      // insert and the update write, since those read the attribute bag
+      // directly.
+      const mapped: Record<string, unknown> = { ...this[ATTRIBUTES] };
+
+      for (const attribute of enums) {
+        if (attribute in mapped) {
+          mapped[attribute] = labelFor(klass.enums[attribute] as EnumDefinition, mapped[attribute]);
+        }
+      }
+
+      return mapped as A;
     }
 
     toJSON(): A {
@@ -2029,6 +2138,9 @@ export interface ModelClass<A extends object> {
   castRow(row: Row, options?: { encrypted?: boolean }): Row;
   encryptedAttributes: Record<string, EncryptedAttributeOptions>;
   encrypts(name: string, options?: EncryptedAttributeOptions): void;
+  /** Rails' `enum`: a column of integers the application reads as words. */
+  enum(attribute: string, mapping: EnumMapping, options?: EnumOptions): void;
+  enums: Record<string, EnumDefinition>;
   associations: Record<string, AssociationDefinition>;
   readonly table: string;
   readonly connection: Connection;
