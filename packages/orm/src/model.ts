@@ -1100,6 +1100,31 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     /**
+     * Rails' `has_one :account, through: :subscription`.
+     *
+     * The same two hops as `hasManyThrough`, keeping the first record it
+     * reaches rather than all of them — for the case where the chain happens
+     * to be one-to-one, like a user's address through their profile.
+     */
+    static hasOneThrough(
+      name: string,
+      through: string,
+      options: AssociationOptions & { source?: string } = {},
+    ): void {
+      this.defineAssociation({
+        name,
+        kind: "hasOne",
+        // A through association never queries the target directly, so the
+        // target resolver is only reached if something misuses it.
+        target: () => {
+          throw new Error(`"${name}" is a through association; it loads via "${through}".`);
+        },
+        through,
+        ...options,
+      });
+    }
+
+    /**
      * A polymorphic belongsTo, whose target class is named by a companion
      * `<name>_type` column. Rails' `belongs_to :commentable, polymorphic: true`.
      */
@@ -1166,12 +1191,21 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           // A through association has no single relation to hand back, so it
           // is loaded on demand and returned as an already-resolved one.
           if (definition.through) {
-            if (Array.isArray(cached)) {
+            const singular = definition.kind === "hasOne";
+
+            // A loaded singular association can legitimately be null, so
+            // "already loaded" is `!== undefined` rather than "is an array" —
+            // otherwise a chain that reaches nothing is looked up again on
+            // every read.
+            if (singular ? cached !== undefined : Array.isArray(cached)) {
               return Promise.resolve(cached);
             }
+
             return (async () => {
               await preloadAssociation([this], definition, resolveAssociation);
-              return (this[cacheKey(definition.name)] as InstanceLike[]) ?? [];
+              const loaded = this[cacheKey(definition.name)];
+
+              return singular ? (loaded ?? null) : ((loaded as InstanceLike[]) ?? []);
             })();
           }
 
@@ -2595,6 +2629,12 @@ export interface ModelClass<A extends object> {
     options?: AssociationOptions,
   ): void;
   hasManyThrough<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
+    through: string,
+    options?: AssociationOptions & { source?: string },
+  ): void;
+  hasOneThrough<M extends AnyModel>(
     this: M,
     name: AssociationName<M>,
     through: string,
