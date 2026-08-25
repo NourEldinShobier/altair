@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Mailer, type DeliveryQueue } from "../src/mailer.js";
 import {
+  HeaderInjection,
   LogDelivery,
   TestDelivery,
   UnconfiguredDelivery,
@@ -258,5 +259,113 @@ describe("deliverLater", () => {
     }
 
     await expect(Anonymous.hello().deliverLater()).rejects.toThrow("has no from address");
+  });
+});
+
+/**
+ * Header injection.
+ *
+ * A header ends at a line break, so a value holding one stops being a value.
+ * `"Ada\r\nBcc: attacker@example.com"` in a display name is a second header,
+ * and the message goes somewhere the sender never named — or, with a
+ * `Content-Type`, arrives as something other than what was written.
+ *
+ * This is live wherever a name reaches a header from outside, and
+ * "Message from {user.name}" is the usual way in. Five of these got through
+ * before the guard existed, found by formatting them and looking rather than
+ * by reading the function.
+ */
+describe("a header value that tries to start another header", () => {
+  const address = "ada@example.com";
+
+  it("is refused in a display name", () => {
+    expect(() => formatAddress({ name: `Ada\r\nBcc: attacker@evil.com`, address })).toThrow(
+      HeaderInjection,
+    );
+  });
+
+  // A bare newline counts too: which character ends a line is exactly the
+  // disagreement between parsers that an attacker is looking for.
+  it("is refused however the break is spelled", () => {
+    for (const name of [`Ada\r\nx`, `Ada\nx`, `Ada\rx`, `Ada\u0000x`]) {
+      expect(() => formatAddress({ name, address })).toThrow(HeaderInjection);
+    }
+  });
+
+  it("is refused in the address itself", () => {
+    expect(() =>
+      formatAddress({ name: "Ada", address: `${address}\r\nBcc: attacker@evil.com` }),
+    ).toThrow(HeaderInjection);
+  });
+
+  it("is refused in a bare string address", () => {
+    expect(() => formatAddress(`${address}\r\nBcc: attacker@evil.com`)).toThrow(HeaderInjection);
+  });
+
+  it("is refused anywhere in a list", () => {
+    expect(() => formatAddresses(["fine@example.com", { name: `A\r\nBcc: x@y`, address }])).toThrow(
+      HeaderInjection,
+    );
+  });
+
+  it("says which field it refused, and what was in it", () => {
+    expect(() => formatAddress({ name: `Ada\r\nBcc: x`, address })).toThrow(/address name/);
+    expect(() => formatAddress(`x\r\ny`)).toThrow(/cannot contain a line break/);
+  });
+
+  // Refused rather than stripped: stripping turns an attack into a slightly
+  // odd name and delivers it anyway.
+  it("does not quietly clean the value up", () => {
+    expect(() => formatAddress({ name: `Ada\r\nBcc: x`, address })).toThrow();
+  });
+
+  it("leaves an ordinary address alone", () => {
+    expect(formatAddress(address)).toBe(address);
+    expect(formatAddress({ name: "Ada Lovelace", address })).toBe(`Ada Lovelace <${address}>`);
+  });
+
+  // The quoting that was already there has to keep working.
+  it("still quotes a name that needs it", () => {
+    expect(formatAddress({ name: "Lovelace, Ada", address })).toBe(`"Lovelace, Ada" <${address}>`);
+  });
+});
+
+describe("a subject or a custom header", () => {
+  class Injected extends Mailer {
+    static override defaults = { from: "noreply@example.com" };
+
+    static withSubject(subject: string) {
+      return this.mail({ to: "ada@example.com", subject, text: "hello" });
+    }
+
+    static withHeader(headers: Record<string, string>) {
+      return this.mail({ to: "ada@example.com", subject: "Hi", text: "hello", headers });
+    }
+  }
+
+  // A subject carries a user's words as often as a display name does.
+  it("is refused in a subject", () => {
+    expect(Injected.withSubject(`Hi\r\nBcc: attacker@evil.com`).toMessage()).rejects.toThrow(
+      HeaderInjection,
+    );
+  });
+
+  it("is refused in a custom header value", () => {
+    expect(
+      Injected.withHeader({ "X-Ticket": `1\r\nBcc: attacker@evil.com` }).toMessage(),
+    ).rejects.toThrow(HeaderInjection);
+  });
+
+  it("is refused in a custom header name", () => {
+    expect(Injected.withHeader({ [`X-A\r\nBcc`]: "1" }).toMessage()).rejects.toThrow(
+      HeaderInjection,
+    );
+  });
+
+  // Checked where every message passes through, so queueing is covered too.
+  it("lets an ordinary subject through", async () => {
+    const message = await Injected.withSubject("Your receipt").toMessage();
+
+    expect(message.subject).toBe("Your receipt");
   });
 });
