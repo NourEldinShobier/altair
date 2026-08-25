@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { Cache, MemoryStore } from "@altair/support";
+import { Cache, i18n, MemoryStore } from "@altair/support";
 import { renderToString } from "../src/render.js";
 import { Cached, configureFragmentCache, fragmentCache } from "../src/cache.js";
 
@@ -162,7 +162,7 @@ describe("caching a fragment", () => {
       </Cached>,
     );
 
-    expect(await cache.read(["views", subject])).not.toBeNull();
+    expect(await cache.read(["views", i18n.locale, subject])).not.toBeNull();
   });
 
   // For the request where an editor should see their own unsaved change.
@@ -186,6 +186,54 @@ describe("caching a fragment", () => {
 
   it("uses a store of its own when none is configured", async () => {
     expect(fragmentCache()).toBeInstanceOf(Cache);
+  });
+});
+
+// Found by running a real application: a fragment rendered in English and
+// stored under the record alone was handed to the next French reader, and
+// nothing about that looks like a bug until somebody reports the wrong
+// language.
+describe("locales", () => {
+  it("does not serve one language's fragment in another", async () => {
+    fresh();
+    i18n.store("fr", {});
+    const subject = post(1, "Hello");
+
+    const english = await i18n.withLocale("en", async () =>
+      renderToString(
+        <Cached on={subject}>
+          <Body post={subject} />
+        </Cached>,
+      ),
+    );
+
+    await i18n.withLocale("fr", async () =>
+      renderToString(
+        <Cached on={subject}>
+          <Body post={subject} />
+        </Cached>,
+      ),
+    );
+
+    expect(english).toBe("<p>Hello</p>");
+    expect(renders).toBe(2);
+  });
+
+  it("still reuses within one language", async () => {
+    fresh();
+    const subject = post(1, "Hello");
+
+    for (let index = 0; index < 2; index += 1) {
+      await i18n.withLocale("fr", async () =>
+        renderToString(
+          <Cached on={subject}>
+            <Body post={subject} />
+          </Cached>,
+        ),
+      );
+    }
+
+    expect(renders).toBe(1);
   });
 });
 

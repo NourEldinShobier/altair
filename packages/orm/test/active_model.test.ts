@@ -452,7 +452,7 @@ describe("a database-backed model has the same API", () => {
     });
 
     const record = await Stamped.create({ title: "Hello", updated_at: new Date() });
-    expect(record.cacheKey()).toMatch(/^stampeds\/\d+-\d{14}$/);
+    expect(record.cacheKey()).toMatch(/^stampeds\/\d+-\d{17}$/);
 
     // Assigned rather than saved: `updated_at` is managed on write, so a save
     // would stamp the current time and this asserts the key follows the
@@ -461,7 +461,7 @@ describe("a database-backed model has the same API", () => {
     record.updated_at = new Date("2030-06-01T09:08:07Z");
 
     expect(record.cacheKey()).not.toBe(before);
-    expect(record.cacheKey()).toEndWith("-20300601090807");
+    expect(record.cacheKey()).toEndWith("-20300601090807000");
   });
 
   // A table with no `updated_at` gets a key with no version — the same as

@@ -23,6 +23,10 @@
  * the board's, while every sibling fragment is reused. Rebuilding the outer
  * shell is then cheap, because the expensive parts of it are themselves hits.
  *
+ * The current locale is part of every key, so a fragment rendered in one
+ * language is never served in another. That is one axis the framework knows
+ * about and can handle; the rest it cannot.
+ *
  * **Do not cache anything that differs per person.** A fragment is stored
  * under its key and served to everyone who asks for that key, so a CSRF token,
  * a "welcome back, Ada", or a delete button that only admins see will be
@@ -30,7 +34,7 @@
  * answer: put the per-person part outside the block.
  */
 
-import { Cache, type CacheEntryOptions } from "@altair/support";
+import { Cache, i18n, type CacheEntryOptions } from "@altair/support";
 import { RawHtml, renderToString, type Node } from "./render.js";
 
 let configured: Cache | undefined;
@@ -80,7 +84,13 @@ export async function Cached(props: CachedProps): Promise<Node> {
 
   const cache = fragmentCache();
 
-  const html = await cache.fetch(["views", on], options, async () => {
+  // The locale is part of the key, always. A fragment rendered in English and
+  // stored under the record alone is handed to the next French reader, and
+  // nothing about that failure looks like a bug until somebody reports the
+  // wrong language. Rails leaves this to the application and it is a
+  // well-worn way to lose an afternoon; the framework ships i18n, so the
+  // framework can pay the one extra path segment.
+  const html = await cache.fetch(["views", i18n.locale, on], options, async () => {
     return await renderToString(children ?? null);
   });
 
