@@ -15,3 +15,4 @@ export * from "./active_model.js";
 export * from "./bulk.js";
 export * from "./after_commit.js";
 export * from "./enum.js";
+export * from "./query_cache.js";

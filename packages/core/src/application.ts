@@ -28,7 +28,7 @@ import {
   type ControllerContext,
   type ControllerRegistry,
 } from "@altair/controller";
-import { connect, type Connection } from "@altair/orm";
+import { connect, withQueryCache, type Connection } from "@altair/orm";
 import { buildConfig, type ApplicationConfig } from "./config.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
 import { logQueries, requestLogging } from "./logging.js";
@@ -218,7 +218,12 @@ export class Application {
       // is invisible to the requests running beside it.
       return await Current.run(
         { request, requestId: request.headers.get("x-request-id") ?? crypto.randomUUID() },
-        async () => await stack(request),
+        // A query cache per request, and only per request. A page built from
+        // partials asks for the current user in the header, the sidebar and
+        // the footer, and none of the three can see the other two; held any
+        // longer than the request, the same cache is a stale-read waiting for
+        // a slow page.
+        async () => await withQueryCache(async () => await stack(request)),
       );
     };
   }
