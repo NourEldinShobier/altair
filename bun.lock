@@ -99,7 +99,11 @@
       "name": "@altair/testing",
       "version": "0.0.0",
       "dependencies": {
+        "@altair/controller": "workspace:*",
+        "@altair/core": "workspace:*",
         "@altair/orm": "workspace:*",
+        "@altair/support": "workspace:*",
+        "@altair/view": "workspace:*",
       },
     },
     "packages/view": {

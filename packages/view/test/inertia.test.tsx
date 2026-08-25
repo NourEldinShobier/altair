@@ -98,7 +98,7 @@ describe("visits", () => {
 
   it("carries the asset version", async () => {
     const response = await renderInertia(visit(), "Posts/Index", {}, { version: "abc123" });
-    expect((await response.json()).version).toBe("abc123");
+    expect(((await response.json()) as { version: string }).version).toBe("abc123");
   });
 
   it("merges shared props under page props", async () => {
@@ -109,7 +109,10 @@ describe("visits", () => {
       { shared: { user: "ada", total: 0 } },
     );
 
-    expect((await response.json()).props).toEqual({ user: "ada", total: 3 });
+    expect(((await response.json()) as { props: unknown }).props).toEqual({
+      user: "ada",
+      total: 3,
+    });
   });
 
   it("awaits promised props", async () => {
@@ -117,7 +120,9 @@ describe("visits", () => {
       posts: Promise.resolve([{ id: 1 }]),
     });
 
-    expect((await response.json()).props).toEqual({ posts: [{ id: 1 }] });
+    expect(((await response.json()) as { props: unknown }).props).toEqual({
+      posts: [{ id: 1 }],
+    });
   });
 });
 
