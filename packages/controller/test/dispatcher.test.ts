@@ -11,6 +11,13 @@ import { Controller, beforeAction } from "../src/controller.js";
 import { MissingController, createDispatcher, parseBody } from "../src/dispatcher.js";
 
 class PostsController extends Controller {
+  // These build a controller directly rather than through an application, so
+  // the test environment's setting never reaches them. They are about dispatch
+  // and request scope, not forgery.
+  static {
+    this.skipForgeryProtection();
+  }
+
   index(): void {
     this.render.json({ action: "index" });
   }

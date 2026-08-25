@@ -46,6 +46,15 @@ export interface ApplicationConfig {
   showDetailedErrors: boolean;
   /** Forces https and marks cookies Secure. */
   forceSsl: boolean;
+  /**
+   * Requires a valid CSRF token on every unsafe request.
+   *
+   * Off in test, as Rails' generated test environment is: a controller test
+   * asserting on a redirect should not have to carry a token to get there.
+   * On everywhere else, including development, so the first time anybody sees
+   * it fail is on their own machine and not in production.
+   */
+  forgeryProtection: boolean;
   /** Directory the app was loaded from, used to resolve app files. */
   root: string;
   log: LogConfig;
@@ -88,6 +97,7 @@ export function defaultsFor(
     },
     showDetailedErrors: !production,
     forceSsl: production,
+    forgeryProtection: env !== "test",
     log: {
       // Quiet in tests: a suite that prints a line per request buries the one
       // assertion failure anybody cares about.

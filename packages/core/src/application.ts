@@ -159,6 +159,7 @@ export class Application {
    */
   #defaultMiddleware(): void {
     if (this.config.forceSsl) this.middleware.use("ssl", forceSsl());
+
     this.middleware.use("requestId", requestId());
     // Outside the dispatcher, so a request that fails in another middleware is
     // still logged with the id the response carries.
@@ -301,6 +302,7 @@ export class Application {
       request,
       secrets: this.secrets,
       session: { secure: this.config.forceSsl },
+      forgeryProtection: this.config.forgeryProtection,
       ...extra,
     };
   }
