@@ -15,5 +15,5 @@
     "jsx": "react-jsx",
     "jsxImportSource": "@altair/view"
   },
-  "include": ["packages/**/*.ts", "tools/**/*.ts"]
+  "include": ["packages/**/*.ts", "packages/**/*.tsx", "tools/**/*.ts"]
 }

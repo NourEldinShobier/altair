@@ -6,6 +6,10 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@altair/orm": "workspace:*"
+    "@altair/controller": "workspace:*",
+    "@altair/core": "workspace:*",
+    "@altair/orm": "workspace:*",
+    "@altair/support": "workspace:*",
+    "@altair/view": "workspace:*"
   }
 }
