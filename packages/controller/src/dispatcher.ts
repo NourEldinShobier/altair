@@ -11,6 +11,7 @@
 
 import type { Router } from "@altair/router";
 import { Controller, type ControllerContext } from "./controller.js";
+import { parseNestedParams } from "./nested_params.js";
 
 export type ControllerClass = new (context: ControllerContext) => Controller;
 
@@ -67,18 +68,9 @@ export async function parseBody(request: Request): Promise<Record<string, unknow
       contentType.includes("application/x-www-form-urlencoded") ||
       contentType.includes("multipart/form-data")
     ) {
-      const form = await request.clone().formData();
-      const out: Record<string, unknown> = {};
-      for (const [key, value] of form.entries()) {
-        // Rails' `tags[]` convention: repeated keys collect into an array.
-        if (key.endsWith("[]")) {
-          const name = key.slice(0, -2);
-          ((out[name] ??= []) as unknown[]).push(value);
-        } else {
-          out[key] = value;
-        }
-      }
-      return out;
+      // `post[title]` is the shape every form Rails generates posts in, and
+      // what `params.require("post")` needs to find.
+      return parseNestedParams((await request.clone().formData()).entries());
     }
   } catch {
     // A malformed body is not a crash; the action sees no params and can
