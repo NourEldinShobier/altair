@@ -28,4 +28,12 @@ if ! echo "$OUT" | grep -qE "^ 0 fail"; then
   exit 1
 fi
 
+# The public claim about how far along this is, checked against the suite that
+# produced it. It had drifted three times before anything checked.
+if ! PARITY=$(bun run tools/check-parity.ts 2>&1); then
+  echo "FAILED: parity numbers"
+  echo "$PARITY"
+  exit 1
+fi
+
 echo "ALL GREEN"
