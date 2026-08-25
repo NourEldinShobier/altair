@@ -6,9 +6,9 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 **Totals to beat:** 206,760 lines of library code across 1,502 files, covered by
 **26,775 test methods across 1,871 files.**
 
-|           | Tests     | of Rails' |      |
-| --------- | --------- | --------- | ---- |
-| **Total** | **2,658** | 26,775    | 9.9% |
+|           | Tests     | of Rails' |       |
+| --------- | --------- | --------- | ----- |
+| **Total** | **2,676** | 26,775    | 10.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -32,7 +32,7 @@ one that needs no server.
 | `@altair/storage`    | 116   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
 | `@altair/view`       | 197   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 70    | Jobs, queues, retries, worker                                              |
-| `@altair/testing`    | 40    | Transactional tests, fixtures, factories, test databases                   |
+| `@altair/testing`    | 58    | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 98    | Config, boot lifecycle, request handler, credentials, logging              |
 | `@altair/mailer`     | 87    | Messages, TSX bodies, delivery methods                                     |
 
@@ -62,30 +62,30 @@ Rails: 36,129 lines · 3,670 tests
 
 Rails: 71,873 lines · 10,602 tests — the largest remaining block
 
-| Subsystem                     | Rails LOC | Status   | Notes                                                           |
-| ----------------------------- | --------- | -------- | --------------------------------------------------------------- |
-| Connection adapters           | 21,714    | **n/a**  | `Bun.sql`                                                       |
-| Attributes & dirty tracking   | 1,144     | **done** | Typed via an attributes interface                               |
-| Persistence                   | 1,006     | **done** | save, update, destroy, create, reload                           |
-| Migrations                    | 2,705     | **done** | DSL, versions, rollback, opt-in foreign keys                    |
-| Callbacks                     | —         | **done** | save/create/update/destroy/validation, `afterCommit`            |
-| Validations                   | —         | **done** | presence, length, format, uniqueness, associated, and the rest  |
-| Associations                  | 6,031     | **done** | All kinds, both polymorphic directions, `includes`, `dependent` |
-| Relation / query interface    | 5,579     | **done** | where/order/group/aggregates/scopes/bulk writes, joins          |
-| Fixtures & test helpers       | 860       | **done** | Transactional tests, savepoint nesting, fixtures, factories     |
-| Schema dump & type emission   | —         | **done** | Types generated from the database itself                        |
-| Nested attributes             | 1,146     | **done** | Collections, to-one, to-many, `_destroy`, limit, rejectIf       |
-| Single-table inheritance      | —         | **done** | Subclass queries, typed instantiation, `unscoped`               |
-| Enums                         | 291       | **done** | Words in the app, integers in the column, mapped in queries     |
-| Normalization                 | 180       | **done** | `normalizes`, applied on write and in the lookups               |
-| Default scopes & tokens       | 420       | **done** | `defaultScope` (reads only), `hasSecureToken`                   |
-| Serialized columns            | 640       | **done** | `serialize`/`store`, dirty tracking sees an in-place edit       |
-| Counter cache                 | —         | **done** | Adjusted on create and destroy                                  |
-| Touch / cache invalidation    | —         | **done** | `touch`, `belongsTo(touch: true)`, keyed off `cacheKey`         |
-| Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                |
-| Pessimistic locking           | —         | **done** | `lock()`, `withLock`, per-adapter; SQLite needs none            |
-| Multiple databases & sharding | —         | **done** | Named databases, roles, read-only guard, horizontal shards      |
-| Encryption                    | 2,046     | **done** | Deterministic and random-nonce, queryable when deterministic    |
+| Subsystem                     | Rails LOC | Status   | Notes                                                            |
+| ----------------------------- | --------- | -------- | ---------------------------------------------------------------- |
+| Connection adapters           | 21,714    | **n/a**  | `Bun.sql`                                                        |
+| Attributes & dirty tracking   | 1,144     | **done** | Typed via an attributes interface                                |
+| Persistence                   | 1,006     | **done** | save, update, destroy, create, reload                            |
+| Migrations                    | 2,705     | **done** | DSL, versions, rollback, opt-in foreign keys                     |
+| Callbacks                     | —         | **done** | save/create/update/destroy/validation, `afterCommit`             |
+| Validations                   | —         | **done** | presence, length, format, uniqueness, associated, and the rest   |
+| Associations                  | 6,031     | **done** | All kinds, both polymorphic directions, `includes`, `dependent`  |
+| Relation / query interface    | 5,579     | **done** | where/order/group/aggregates/scopes/bulk writes, joins           |
+| Fixtures & test helpers       | 860       | **done** | Transactional tests, fixtures, factories, time travel, job spies |
+| Schema dump & type emission   | —         | **done** | Types generated from the database itself                         |
+| Nested attributes             | 1,146     | **done** | Collections, to-one, to-many, `_destroy`, limit, rejectIf        |
+| Single-table inheritance      | —         | **done** | Subclass queries, typed instantiation, `unscoped`                |
+| Enums                         | 291       | **done** | Words in the app, integers in the column, mapped in queries      |
+| Normalization                 | 180       | **done** | `normalizes`, applied on write and in the lookups                |
+| Default scopes & tokens       | 420       | **done** | `defaultScope` (reads only), `hasSecureToken`                    |
+| Serialized columns            | 640       | **done** | `serialize`/`store`, dirty tracking sees an in-place edit        |
+| Counter cache                 | —         | **done** | Adjusted on create and destroy                                   |
+| Touch / cache invalidation    | —         | **done** | `touch`, `belongsTo(touch: true)`, keyed off `cacheKey`          |
+| Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                 |
+| Pessimistic locking           | —         | **done** | `lock()`, `withLock`, per-adapter; SQLite needs none             |
+| Multiple databases & sharding | —         | **done** | Named databases, roles, read-only guard, horizontal shards       |
+| Encryption                    | 2,046     | **done** | Deterministic and random-nonce, queryable when deterministic     |
 
 ## ActionPack → `@altair/router`, `@altair/controller`
 
