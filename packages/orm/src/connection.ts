@@ -12,6 +12,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
 import { collectingCommitCallbacks } from "./after_commit.js";
+import { cachingQuery, clearQueryCache } from "./query_cache.js";
 
 export type Adapter = "sqlite" | "postgres" | "mysql";
 
@@ -97,14 +98,25 @@ export class Connection {
    * is.
    */
   async query<T = Row>(sql: string, bindings: readonly unknown[] = []): Promise<T[]> {
-    return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      const result = await this.#run(sql, bindings);
-      return (Array.isArray(result) ? result : []) as T[];
-    });
+    // The cache wraps the instrumentation rather than the other way round, so
+    // a statement answered from memory reports nothing on the bus. A hit is
+    // not a query, and counting it as one would make the request log say four
+    // queries where the database saw one.
+    return await cachingQuery(sql, bindings, async () =>
+      notifications.instrument("sql.altair", { sql, bindings }, async () => {
+        const result = await this.#run(sql, bindings);
+        return (Array.isArray(result) ? result : []) as T[];
+      }),
+    );
   }
 
   /** Runs a statement for its effect. */
   async execute(sql: string, bindings: readonly unknown[] = []): Promise<void> {
+    // Every write empties the cache. A read after a write has to see the
+    // write, and an entry that survived an INSERT would answer with the rows
+    // from before it — worse than having no cache at all.
+    clearQueryCache();
+
     await notifications.instrument("sql.altair", { sql, bindings }, async () => {
       await this.#run(sql, bindings);
     });
@@ -138,6 +150,8 @@ export class Connection {
    * someone else saved first.
    */
   async executeCount(sql: string, bindings: readonly unknown[] = []): Promise<number> {
+    clearQueryCache();
+
     return await notifications.instrument("sql.altair", { sql, bindings }, async () => {
       const result = await this.#run(sql, bindings);
       // Drivers disagree, and not only in naming: MySQL sets `count` to 0 and
