@@ -11,3 +11,6 @@ export * from "./locale.js";
 export * from "./conditional_get.js";
 export * from "./mime.js";
 export * from "./streaming.js";
+export * from "./client_ip.js";
+export * from "./send.js";
+export * from "./basic_auth.js";
