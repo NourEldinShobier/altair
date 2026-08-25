@@ -19,6 +19,7 @@
  * stated once as an interface instead and the accessors follow from it.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { t, tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
@@ -282,6 +283,14 @@ export class ValidationErrors {
     this.#errors.clear();
   }
 }
+
+/**
+ * The records being validated right now, for the cycle guard.
+ *
+ * Scoped to the call rather than kept on the record, so two requests
+ * validating the same rows at once cannot see each other's progress.
+ */
+const validating = new AsyncLocalStorage<Set<object>>();
 
 const ATTRIBUTES = Symbol("altair.model.attributes");
 const ORIGINAL = Symbol("altair.model.original");
@@ -652,6 +661,34 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         this.nestedAttributes = { ...this.nestedAttributes };
       }
       this.nestedAttributes[name] = options;
+    }
+
+    /** Associations whose records are validated with this one. */
+    static associatedValidations: string[] = [];
+
+    /**
+     * Validates the records an association holds. Rails'
+     * `validates_associated`.
+     *
+     *     static { this.validatesAssociated("comments") }
+     *
+     * For the case where saving the parent is meant to save the children with
+     * it — nested attributes, most often. Without it a form builds three
+     * comments, one of them blank, and the save reports success while the
+     * blank one is silently dropped or written empty.
+     *
+     * Only what is already loaded is checked. Reaching for the association
+     * would turn every validation of every record into a query, and the
+     * records a form just built are in memory anyway — which is the case this
+     * exists for.
+     */
+    static validatesAssociated(...names: string[]): void {
+      // Copy on write, so a subclass adding one leaves its parent alone.
+      if (!Object.hasOwn(this, "associatedValidations")) {
+        this.associatedValidations = [...this.associatedValidations];
+      }
+
+      this.associatedValidations.push(...names);
     }
 
     /**
@@ -1515,7 +1552,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      */
     async runValidations(): Promise<void> {
       const klass = this.constructor as typeof BaseModel;
-      if (klass.validations.length === 0) return;
+
+      // Not an early return on `validations` alone: a model whose only rule is
+      // `validatesAssociated` has no attribute validations, and returning here
+      // skipped the one thing it declared.
+      if (klass.validations.length === 0) {
+        await this.validateAssociated(klass);
+        return;
+      }
 
       const probe = {
         isPersisted: this.isPersisted,
@@ -1531,6 +1575,43 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       for (const declaration of klass.validations) {
         await runValidation(this as unknown as ValidationTarget, declaration, probe);
       }
+
+      await this.validateAssociated(klass);
+    }
+
+    /**
+     * Validates the loaded records of every association declared associated.
+     *
+     * Guarded against cycles. Two models that validate each other — a post its
+     * comments and a comment its post — would otherwise recurse until the
+     * stack ran out, and a stack overflow during a save is a much worse way to
+     * learn about a typo in a model than a validation error.
+     */
+    protected async validateAssociated(klass: typeof BaseModel): Promise<void> {
+      if (klass.associatedValidations.length === 0) return;
+
+      const visiting = validating.getStore();
+      if (visiting?.has(this)) return;
+
+      const seen = visiting ?? new Set<object>();
+      seen.add(this);
+
+      await validating.run(seen, async () => {
+        for (const name of klass.associatedValidations) {
+          const loaded = (this as unknown as Record<string, unknown>)[name];
+          const records = Array.isArray(loaded) ? loaded : loaded === undefined ? [] : [loaded];
+
+          for (const record of records) {
+            const associated = record as { validate?: () => Promise<boolean> } | null;
+            if (!associated || typeof associated.validate !== "function") continue;
+
+            if (!(await associated.validate())) {
+              this.errors.add(name, "is invalid");
+              break;
+            }
+          }
+        }
+      });
     }
 
     async validate(): Promise<boolean> {
@@ -2291,6 +2372,9 @@ export interface ModelClass<A extends object> {
 
   validations: ValidationDeclaration[];
   validates(attribute: string, options: ValidationOptions): void;
+  /** Rails' `validates_associated`. */
+  validatesAssociated(...names: string[]): void;
+  associatedValidations: string[];
 
   belongsTo<M extends AnyModel>(
     this: M,
