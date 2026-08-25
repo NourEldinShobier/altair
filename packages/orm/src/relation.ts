@@ -183,6 +183,7 @@ export class Relation<T> implements PromiseLike<T[]> {
   #havings: WhereClause[] = [];
   #distinct = false;
   #lock: LockMode | undefined;
+  #annotations: string[] = [];
   #joins: JoinClause[] = [];
   /**
    * Records handed over by `includes`. Chaining clears this — `#clone` does not
@@ -207,6 +208,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#havings = [...this.#havings];
     next.#distinct = this.#distinct;
     next.#lock = this.#lock;
+    next.#annotations = [...this.#annotations];
     next.#joins = [...this.#joins];
     return next;
   }
@@ -485,6 +487,46 @@ export class Relation<T> implements PromiseLike<T[]> {
     return next;
   }
 
+  /**
+   * Attaches a comment to the statement. Rails' `annotate`.
+   *
+   *     Post.all().annotate("dashboard#index")
+   *     // SELECT … /* dashboard#index *\/
+   *
+   * A slow query log names the statement and not the code that sent it, so the
+   * usual way to find the caller is to grep the application for something that
+   * looks like it. A comment carries the answer along with the query, and
+   * every database's slow log and `pg_stat_statements` keeps it.
+   *
+   * `*\/` is stripped rather than escaped, because there is no escape for it:
+   * the sequence ends the comment, and whatever followed would be SQL. This is
+   * the one place a relation puts caller-supplied text into a statement
+   * without a binding, so it is the one place that could be an injection.
+   */
+  annotate(...comments: string[]): Relation<T> {
+    const next = this.#clone();
+
+    for (const comment of comments) {
+      next.#annotations.push(comment.replaceAll("*/", "").replaceAll(String.fromCharCode(0), ""));
+    }
+
+    return next;
+  }
+
+  /**
+   * Asks the database what it would do with this query. Rails' `explain`.
+   *
+   * Returns the plan as rows rather than a formatted string, since what each
+   * adapter reports differs enough that pretending otherwise would lose the
+   * detail somebody ran this for.
+   */
+  async explain(): Promise<Row[]> {
+    const { sql, bindings } = this.toSql();
+    const keyword = this.connection.adapter === "sqlite" ? "EXPLAIN QUERY PLAN" : "EXPLAIN";
+
+    return await this.connection.query<Row>(`${keyword} ${sql}`, bindings);
+  }
+
   select(...columns: string[]): Relation<T> {
     const next = this.#clone();
     next.#selects = columns;
@@ -576,6 +618,8 @@ export class Relation<T> implements PromiseLike<T[]> {
     if (this.#offset !== undefined) sql += ` OFFSET ${Number(this.#offset)}`;
 
     if (this.#lock) sql += lockClause(connection.adapter, this.#lock);
+
+    for (const comment of this.#annotations) sql += ` /* ${comment} */`;
 
     return { sql: this.#renumber(sql), bindings };
   }
