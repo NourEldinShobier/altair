@@ -14,6 +14,13 @@ import { Controller } from "../src/controller.js";
 const secrets = new Secrets("a".repeat(64));
 
 class PostsController extends Controller {
+  // These build a controller directly rather than through an application, so
+  // the test environment's setting never reaches them. They are about dispatch
+  // and request scope, not forgery.
+  static {
+    this.skipForgeryProtection();
+  }
+
   create(): void {
     this.flash.now("notice", "Saved");
     this.render.json({ ok: true });

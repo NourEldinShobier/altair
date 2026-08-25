@@ -26,13 +26,18 @@ import { Parameters } from "./parameters.js";
 import { parseNestedParams } from "./nested_params.js";
 import { CookieJar } from "./cookies.js";
 import { Flash, Session, type SessionOptions } from "./session.js";
-import { InvalidAuthenticityToken, isVerifiedRequest, maskedToken } from "./csrf.js";
+import { InvalidAuthenticityToken, isSafeMethod, isVerifiedRequest, maskedToken } from "./csrf.js";
 import { Current, type Secrets } from "@altair/support";
 import { renderDocument, renderInertia, type InertiaOptions, type Node } from "@altair/view";
 
 export type ActionName = string;
 
 export interface ControllerContext {
+  /**
+   * Whether unsafe requests need a token. Comes from the application config,
+   * which defaults it off in test and on everywhere else.
+   */
+  forgeryProtection?: boolean;
   request: Request;
   params?: Record<string, unknown>;
   /** Route params from recognition, merged over query and body. */
@@ -168,6 +173,7 @@ export class Controller extends Callbacks {
     });
   }
 
+  readonly #context: ControllerContext;
   readonly request: Request;
   readonly params: Parameters;
   readonly url: URL;
@@ -180,6 +186,7 @@ export class Controller extends Callbacks {
 
   constructor(context: ControllerContext) {
     super();
+    this.#context = context;
     this.request = context.request;
     this.url = new URL(context.request.url);
 
@@ -214,14 +221,59 @@ export class Controller extends Callbacks {
   }
 
   /**
+   * Whether unsafe requests must carry a valid token. Rails'
+   * `protect_from_forgery`, which Rails has had on by default since 5.2.
+   *
+   * On by default here for the same reason: protection nobody remembers to
+   * turn on is protection an application ships without. It was opt-in, and
+   * nothing in the framework — no middleware, no template, no generated
+   * controller — turned it on, so every application was open until somebody
+   * wrote the filter by hand.
+   *
+   * Copy-on-write per class, so turning it off for one controller does not
+   * turn it off for its siblings.
+   */
+  static forgeryProtection: "exception" | "none" = "exception";
+
+  /**
+   * Whether this request must carry a token.
+   *
+   * The application's setting is read from the context rather than written
+   * onto the base class at boot: two applications booting in one process —
+   * which is every test suite — would otherwise leave whichever booted last
+   * deciding for both. A controller that opted out stays opted out either way.
+   */
+  get #forgeryProtected(): boolean {
+    if ((this.constructor as typeof Controller).forgeryProtection === "none") return false;
+
+    return this.#context.forgeryProtection !== false;
+  }
+
+  /**
+   * Turns it off for this controller and its subclasses.
+   *
+   * For an endpoint authenticated by something a browser will not attach on
+   * its own — a bearer token, an HMAC signature — where a session cookie is
+   * not what is trusted. Rails' `skip_forgery_protection`.
+   */
+  static skipForgeryProtection(): void {
+    this.forgeryProtection = "none";
+  }
+
+  /**
    * Rails' `protect_from_forgery`, as a filter.
    *
-   *     class ApplicationController extends Controller {
-   *       @beforeAction
-   *       verifyAuthenticity() { this.verifyAuthenticityToken() }
-   *     }
+   * Called for every unsafe request unless the class opted out, so an
+   * application does not have to remember. Still public, because an action
+   * that opted its controller out may want it back for one request.
    */
   verifyAuthenticityToken(): void {
+    // The safe-method check comes first because `this.session` is an argument,
+    // and an argument is evaluated whether the function needs it or not — so
+    // asking `isVerifiedRequest` to decide would build a session for every GET
+    // in the application before finding out it did not need one.
+    if (isSafeMethod(this.request.method)) return;
+
     if (isVerifiedRequest(this.request, this.params, this.session)) return;
     throw new InvalidAuthenticityToken();
   }
@@ -293,6 +345,11 @@ export class Controller extends Callbacks {
     }
 
     try {
+      // Before the filters, not among them: a `beforeAction` that writes
+      // anything — touching a last-seen column, recording an audit row — would
+      // otherwise have run on a request that turns out to be forged.
+      if (this.#forgeryProtected) this.verifyAuthenticityToken();
+
       await this.runCallbacks("action", async () => {
         await (action as () => unknown | Promise<unknown>).call(this);
       });
