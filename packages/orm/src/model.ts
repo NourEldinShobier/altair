@@ -2096,11 +2096,34 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const klass = this.constructor as typeof BaseModel;
       const connection = klass.connection;
 
+      // Optimistic locking applies to a delete as much as to an update, and
+      // for the same reason: somebody opened this record, somebody else
+      // changed it, and the first is now acting on a version they never saw.
+      // Without the version in the WHERE clause the row goes regardless.
+      const locking = await klass.lockingEnabled();
+      const readVersion = Number(this[ORIGINAL][klass.lockingColumn] ?? 0);
+
       const result = await runCallbacks(this, "destroy", async () => {
-        await connection.execute(
-          `DELETE FROM ${connection.quote(klass.table)} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(0)}`,
-          [this[ATTRIBUTES][klass.primaryKey]],
-        );
+        const bindings: unknown[] = [this[ATTRIBUTES][klass.primaryKey]];
+        let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(0)}`;
+
+        if (locking) {
+          where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(1)}`;
+          bindings.push(readVersion);
+        }
+
+        const sql = `DELETE FROM ${connection.quote(klass.table)} WHERE ${where}`;
+
+        if (locking) {
+          const affected = await connection.executeCount(sql, bindings);
+
+          if (affected === 0) {
+            throw new StaleObjectError(klass.name, this[ATTRIBUTES][klass.primaryKey]);
+          }
+        } else {
+          await connection.execute(sql, bindings);
+        }
+
         this[PERSISTED] = false;
         return true;
       });
