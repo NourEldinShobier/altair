@@ -1126,7 +1126,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     /**
-     * Rails' `cache_key_with_version`: `posts/1-20260815120000`.
+     * Rails' `cache_key_with_version`: `posts/1-20260815120000123`.
      *
      * The timestamp is the version, which is what makes this usable as an
      * etag: the key changes the moment the record does, so a cached copy
@@ -1142,12 +1142,28 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       if (stamp === undefined || stamp === null) return `${klass.table}/${id}`;
 
       const at = stamp instanceof Date ? stamp : new Date(String(stamp));
+
+      // Milliseconds, not seconds. Rails carries microseconds here for a
+      // reason that took an integration test to see: a record touched twice
+      // in the same second produced the same key both times, so a cached
+      // fragment and a conditional GET both went on serving the old content.
+      // Two comments arriving together is not an unusual thing to happen.
+      //
+      // Milliseconds is where it stops: JS timestamps carry nothing finer, so
+      // two writes inside one millisecond still share a key. That is a
+      // thousand times narrower than a second and is the limit of what can be
+      // read off a Date.
+      //
+      // A column with no sub-second precision — MySQL's DATETIME without one —
+      // gives whole seconds back on reload, and the wider collision returns.
+      // Declare such a column with a precision if its records change that
+      // fast.
       const version = Number.isNaN(at.getTime())
         ? String(stamp)
         : at
             .toISOString()
             .replaceAll(/[-:TZ.]/g, "")
-            .slice(0, 14);
+            .slice(0, 17);
 
       return `${klass.table}/${id}-${version}`;
     }

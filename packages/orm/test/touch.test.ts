@@ -170,6 +170,30 @@ describe("keeping a cache key honest", () => {
 
     expect((await reload(post)).cacheKey()).not.toBe(before);
   });
+
+  // Found by running a real application rather than by testing a unit: the key
+  // was cut to whole seconds, so a record touched twice in the same second
+  // kept the same key and every cache downstream went on serving the old
+  // content. Two comments arriving together is not unusual.
+  it("changes even when touched twice in the same second", async () => {
+    const post = await Post.create({ title: "Hello" });
+    const before = post.cacheKey();
+
+    // A couple of milliseconds, because that is the resolution the key has and
+    // the resolution it claims. Two writes inside one millisecond still
+    // collide; JS timestamps carry nothing finer, and this is a thousand times
+    // narrower than the whole second it used to be.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await post.touch();
+
+    expect(post.cacheKey()).not.toBe(before);
+  });
+
+  it("carries milliseconds, which is what makes that possible", async () => {
+    const post = await Post.create({ title: "Hello" });
+
+    expect(post.cacheKey()).toMatch(/^posts\/\d+-\d{17}$/);
+  });
 });
 
 describe("touch: true on belongsTo", () => {

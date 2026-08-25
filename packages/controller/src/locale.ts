@@ -104,6 +104,32 @@ export function setLocale(options: LocaleOptions = {}): Middleware {
 
     const locale = negotiateLocale(asked, available) ?? fallback;
 
-    return await i18n.withLocale(locale, async () => await next(request));
+    const response = await i18n.withLocale(locale, async () => await next(request));
+
+    // The response depends on the header, so it has to say so. Without this a
+    // shared cache stores the English page and hands it to the next French
+    // reader — the same failure the fragment cache has when the locale is left
+    // out of its key, one layer further out and much harder to see, because
+    // the application it happens in front of is behaving perfectly.
+    return withVary(response, "Accept-Language");
   };
+}
+
+/** Adds to `Vary` without dropping what is already there. */
+function withVary(response: Response, value: string): Response {
+  const headers = new Headers(response.headers);
+  const existing = headers
+    .get("vary")
+    ?.split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const merged = new Set([...(existing ?? []), value]);
+  headers.set("vary", [...merged].join(", "));
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

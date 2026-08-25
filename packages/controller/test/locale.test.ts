@@ -150,6 +150,31 @@ describe("the middleware", () => {
     expect(await localeOf(response)).toBe("fr");
   });
 
+  // The response depends on the header, so it has to say so — otherwise a
+  // shared cache stores the English page and hands it to the next French
+  // reader, in front of an application behaving perfectly.
+  it("says the response varies by Accept-Language", async () => {
+    const response = await run(get("http://test/", { "accept-language": "fr" }), { available });
+
+    expect(response.headers.get("vary")).toBe("Accept-Language");
+  });
+
+  it("adds to a Vary the action already set rather than replacing it", async () => {
+    const response = await setLocale({ available })(get("http://test/"), async () =>
+      Response.json({}, { headers: { vary: "Accept" } }),
+    );
+
+    expect(response.headers.get("vary")).toBe("Accept, Accept-Language");
+  });
+
+  it("does not repeat itself", async () => {
+    const response = await setLocale({ available })(get("http://test/"), async () =>
+      Response.json({}, { headers: { vary: "Accept-Language" } }),
+    );
+
+    expect(response.headers.get("vary")).toBe("Accept-Language");
+  });
+
   it("does not leak the locale past the request", async () => {
     await run(get("http://test/?locale=fr"), { available });
     expect(i18n.locale).toBe("en");
