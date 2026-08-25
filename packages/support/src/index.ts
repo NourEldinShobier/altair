@@ -13,3 +13,4 @@ export * from "./logger.js";
 export * from "./error_reporter.js";
 export * from "./pretty.js";
 export * from "./time_travel.js";
+export * from "./sanitize.js";

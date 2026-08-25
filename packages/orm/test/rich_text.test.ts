@@ -142,15 +142,41 @@ describe("storing and rendering", () => {
     expect(await post.content.toHtml()).toBe("<P>HI</P>");
   });
 
-  // Rendering a stored body with no sanitizer is how a stored cross-site
-  // scripting bug works, so it refuses rather than guessing.
-  it("refuses to render with no sanitizer", async () => {
+  // Rendering a stored body unsanitized is how a stored cross-site scripting
+  // bug works. Refusing outright was the safe failure, but it made Action Text
+  // unusable until an application wired something up — and the thing most
+  // likely to be wired up in a hurry is worse than the one that ships.
+  it("sanitizes with nothing configured", async () => {
     resetRichText();
 
     const post = await Post.create({ title: "Hello" });
     await post.content.update("<p>Hi</p>");
 
-    await expect(post.content.toHtml()).rejects.toThrow("no sanitizer");
+    expect(await post.content.toHtml()).toBe("<p>Hi</p>");
+  });
+
+  it("uses the shared sanitizer's policy, not a weaker one", async () => {
+    resetRichText();
+
+    const post = await Post.create({ title: "Hello" });
+    await post.content.update(
+      '<p>Hi<script>alert(1)</script><a href="javascript:alert(1)">x</a></p>',
+    );
+
+    const html = await post.content.toHtml();
+
+    expect(html).not.toContain("script");
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain("Hi");
+  });
+
+  it("still prefers one that was configured", async () => {
+    configureRichText({ sanitizer: async () => "replaced" });
+
+    const post = await Post.create({ title: "Hello" });
+    await post.content.update("<p>Hi</p>");
+
+    expect(await post.content.toHtml()).toBe("replaced");
   });
 });
 
