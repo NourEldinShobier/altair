@@ -11,6 +11,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
+import { collectingCommitCallbacks } from "./after_commit.js";
 
 export type Adapter = "sqlite" | "postgres" | "mysql";
 
@@ -165,18 +166,24 @@ export class Connection {
   async transaction<T>(body: (connection: Connection) => Promise<T>): Promise<T> {
     if (this.#inTransaction) return await this.#withSavepoint(body);
 
-    return (await this.sql.begin(async (tx: SQL) => {
-      const scoped = new Connection(this.url, tx);
-      scoped.#inTransaction = true;
+    // Deferred work is collected around the whole transaction, not inside the
+    // driver's block: `after_commit` has to run once the COMMIT has landed,
+    // and the block returns before that.
+    return await collectingCommitCallbacks(
+      async () =>
+        (await this.sql.begin(async (tx: SQL) => {
+          const scoped = new Connection(this.url, tx);
+          scoped.#inTransaction = true;
 
-      // Everything the block reaches, not just the caller, has to run on the
-      // transaction's connection. On SQLite the pool is one connection so it
-      // happened anyway; on a pooled adapter the second model in a block would
-      // quietly write outside the transaction, and its writes would survive a
-      // rollback. The scope follows the async call chain, so concurrent
-      // requests each see their own.
-      return await inTransaction.run(scoped, async () => await body(scoped));
-    })) as T;
+          // Everything the block reaches, not just the caller, has to run on the
+          // transaction's connection. On SQLite the pool is one connection so it
+          // happened anyway; on a pooled adapter the second model in a block would
+          // quietly write outside the transaction, and its writes would survive a
+          // rollback. The scope follows the async call chain, so concurrent
+          // requests each see their own.
+          return await inTransaction.run(scoped, async () => await body(scoped));
+        })) as T,
+    );
   }
 
   async #withSavepoint<T>(body: (connection: Connection) => Promise<T>): Promise<T> {
