@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,535** | 26,775    | 9.5% |
+| **Total** | **2,546** | 26,775    | 9.5% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -33,7 +33,7 @@ one that needs no server.
 | `@altair/view`       | 197   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 70    | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 40    | Transactional tests, fixtures, factories, test databases                   |
-| `@altair/core`       | 87    | Config, boot lifecycle, request handler, credentials, logging              |
+| `@altair/core`       | 98    | Config, boot lifecycle, request handler, credentials, logging              |
 | `@altair/mailer`     | 87    | Messages, TSX bodies, delivery methods                                     |
 
 ---
@@ -126,7 +126,7 @@ Rails: 21,159 lines · 2,699 tests
 | ActionCable                      | 4,496     | 220         | `@altair/cable`               | **done**                               |
 | ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | **done** — previews and attachments    |
 | ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | **done** — waits for the transaction   |
-| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **done** — environments, initializers  |
+| Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **done** — environments, health check  |
 | ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **done** — tableless models and naming |
 | ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **done** — variants and direct uploads |
 | ActionText                       | 2,617     | 318         | `@altair/orm`, `@altair/view` | **done** — rich text and sanitizing    |
