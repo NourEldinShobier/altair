@@ -523,6 +523,77 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       });
     }
 
+    /** Columns holding a serialized structure. */
+    static serializedColumns: Record<string, { parse: (raw: string) => unknown }> = {};
+
+    /**
+     * A column that holds a structure rather than a value. Rails' `serialize`.
+     *
+     *     static { this.serialize("preferences") }
+     *
+     *     user.preferences.theme      // read as an object
+     *     user.preferences = { … }    // written as JSON
+     *
+     * A text column comes back from every driver as a string, so without this
+     * the application gets `'{"theme":"dark"}'` and reaches for `.theme` on
+     * it. Writing already worked — a value the database cannot store is
+     * serialized on the way in — so this is mostly the other half.
+     */
+    static serialize(column: string, coder: { parse: (raw: string) => unknown } = JSON): void {
+      // Copy on write, so a subclass adding one leaves its parent alone.
+      if (!Object.hasOwn(this, "serializedColumns")) {
+        this.serializedColumns = { ...this.serializedColumns };
+      }
+
+      this.serializedColumns[column] = coder;
+
+      Object.defineProperty(this.prototype, column, {
+        configurable: true,
+        get(this: BaseModel) {
+          const raw = this[ATTRIBUTES][column];
+          if (typeof raw !== "string") return raw;
+
+          try {
+            const parsed = coder.parse(raw);
+            // Kept, so reading twice gives the same object and a change made
+            // through the first read is visible through the second.
+            this[ATTRIBUTES][column] = parsed;
+            return parsed;
+          } catch {
+            // A row someone edited by hand should not take down a page.
+            return null;
+          }
+        },
+        set(this: BaseModel, value: unknown) {
+          this[ATTRIBUTES][column] = value;
+        },
+      });
+    }
+
+    /**
+     * A serialized column with named accessors. Rails' `store`.
+     *
+     *     static { this.store("settings", ["theme", "locale"]) }
+     *     user.theme = "dark"
+     */
+    static store(column: string, accessors: string[] = []): void {
+      this.serialize(column);
+
+      for (const key of accessors) {
+        Object.defineProperty(this.prototype, key, {
+          configurable: true,
+          get(this: Record<string, Record<string, unknown> | null>) {
+            return this[column]?.[key] ?? null;
+          },
+          set(this: Record<string, Record<string, unknown> | null>, value: unknown) {
+            const held = this[column] ?? {};
+            held[key] = value;
+            this[column] = held;
+          },
+        });
+      }
+    }
+
     /** Runs a value through this model's normalizer for a column, if it has one. */
     static normalizeValueFor(attribute: string, value: unknown): unknown {
       const definition = this.normalizers[attribute];
@@ -1547,10 +1618,25 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     /** The attributes whose values differ from the last load or save. */
     changedAttributes(): Partial<A> {
+      const klass = this.constructor as typeof BaseModel;
+      const serialized = klass.serializedColumns;
       const changes: Record<string, unknown> = {};
+
       for (const [key, value] of Object.entries(this[ATTRIBUTES])) {
-        if (!Object.is(value, this[ORIGINAL][key])) changes[key] = value;
+        const before = this[ORIGINAL][key];
+
+        // A serialized column is compared by its contents. `preferences.theme
+        // = "dark"` mutates the object in place, so both sides are the same
+        // reference and `Object.is` says nothing changed — the save would then
+        // write nothing and the edit would vanish without an error.
+        if (key in serialized) {
+          if (stableJson(value) !== stableJson(before)) changes[key] = value;
+          continue;
+        }
+
+        if (!Object.is(value, before)) changes[key] = value;
       }
+
       return changes as Partial<A>;
     }
 
@@ -2294,6 +2380,28 @@ function hasSetter(object: object, key: string): boolean {
   return false;
 }
 
+/**
+ * A stable string for comparing two structures.
+ *
+ * Keys are sorted, so a structure rebuilt in a different order is not read as
+ * a change — which would make every save of an untouched record write.
+ */
+function stableJson(value: unknown): string {
+  if (typeof value === "string") return value;
+
+  try {
+    return JSON.stringify(value, (_key, held: unknown) => {
+      if (held === null || typeof held !== "object" || Array.isArray(held)) return held;
+
+      return Object.fromEntries(
+        Object.entries(held as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+      );
+    });
+  } catch {
+    return String(value);
+  }
+}
+
 /** Values the database cannot store directly are serialized on the way in. */
 export function serialize(value: unknown, connection?: Connection): unknown {
   if (value instanceof Date) {
@@ -2358,6 +2466,11 @@ export interface ModelClass<A extends object> {
   ): void;
   normalizeValueFor(attribute: string, value: unknown): unknown;
   normalizers: Record<string, NormalizeDefinition>;
+  /** Rails' `serialize`: a column holding a structure. */
+  serialize(column: string, coder?: { parse: (raw: string) => unknown }): void;
+  /** Rails' `store`: a serialized column with named accessors. */
+  store(column: string, accessors?: string[]): void;
+  serializedColumns: Record<string, { parse: (raw: string) => unknown }>;
   associations: Record<string, AssociationDefinition>;
   readonly table: string;
   readonly connection: Connection;
