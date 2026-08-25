@@ -171,6 +171,31 @@ function lockClause(adapter: string, mode: LockMode): string {
   return " FOR UPDATE";
 }
 
+/**
+ * Checks a row count before it reaches the SQL.
+ *
+ * `LIMIT` and `OFFSET` cannot be bound as parameters, so the number is
+ * interpolated — through `Number`, which is what stops a string being SQL. A
+ * value that is not a number survives that as the text `NaN`:
+ *
+ *     Post.all().limit(Number(params.get("per_page")))
+ *     -> SELECT ... LIMIT NaN
+ *
+ * With no `per_page` in the query string that is what a pagination call
+ * produces, and the failure arrives from the database as a syntax error
+ * pointing at generated SQL. Refusing it here means the message names the
+ * call that was wrong.
+ */
+function countFor(what: string, count: number): number {
+  if (!Number.isInteger(count) || count < 0) {
+    throw new TypeError(
+      `${what} needs a whole number of rows, and was given ${JSON.stringify(count)}.`,
+    );
+  }
+
+  return count;
+}
+
 export class Relation<T> implements PromiseLike<T[]> {
   #source: RelationSource<T>;
   #wheres: WhereClause[] = [];
@@ -379,13 +404,13 @@ export class Relation<T> implements PromiseLike<T[]> {
 
   limit(count: number): Relation<T> {
     const next = this.#clone();
-    next.#limit = count;
+    next.#limit = countFor("limit", count);
     return next;
   }
 
   offset(count: number): Relation<T> {
     const next = this.#clone();
-    next.#offset = count;
+    next.#offset = countFor("offset", count);
     return next;
   }
 
