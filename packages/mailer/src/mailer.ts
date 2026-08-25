@@ -29,6 +29,7 @@
 
 import { renderToString, type Node } from "@altair/view";
 import {
+  assertHeaderSafe,
   UnconfiguredDelivery,
   type Address,
   type DeliveryMethod,
@@ -91,6 +92,17 @@ export class MailMessage {
       ...rest,
       headers: { ...defaults.headers, ...rest.headers },
     };
+
+    // Checked here because this is the one place every message passes through,
+    // whether it is delivered now or queued. The addresses are checked as they
+    // are formatted; these two are not, and a subject is as likely to carry a
+    // user's words as a display name is.
+    if (message.subject) assertHeaderSafe(message.subject, "Subject");
+
+    for (const [name, value] of Object.entries(message.headers ?? {})) {
+      assertHeaderSafe(name, "header name");
+      assertHeaderSafe(String(value), `${name} header`);
+    }
 
     if (html !== undefined) {
       message.html = typeof html === "string" ? html : await renderToString(html);

@@ -33,9 +33,57 @@ export interface DeliveryMethod {
   sendMail(message: MessageFields): Promise<unknown>;
 }
 
+/** Raised when a value would end a header and start another one. */
+export class HeaderInjection extends Error {
+  constructor(
+    readonly field: string,
+    readonly value: string,
+  ) {
+    super(
+      `Refusing to build the ${field} header from ${JSON.stringify(value)}: a header value cannot contain a line break or a null.`,
+    );
+    this.name = "HeaderInjection";
+  }
+}
+
+/**
+ * Refuses a value that would break out of its header.
+ *
+ * A header ends at a line break, so a value holding one does not stay a value:
+ * `"Ada\r\nBcc: attacker@example.com"` in a display name is a second header,
+ * and the message goes to somewhere the sender never named. This is live
+ * wherever a name reaches a header from outside — "Message from {user.name}"
+ * is the usual way in.
+ *
+ * Refused rather than stripped. Stripping turns an attack into a slightly odd
+ * name and delivers it; a caller that has built a header out of unchecked
+ * input wants to hear about it.
+ */
+export function assertHeaderSafe(value: string, field: string): void {
+  if (HEADER_BREAK.test(value)) throw new HeaderInjection(field, value);
+}
+
+/**
+ * A line break in any of its spellings, plus a null.
+ *
+ * A bare CR and a bare LF both count: agreement between parsers on what ends a
+ * line is exactly what an attacker is looking for, so neither is allowed
+ * through on the grounds that the other is the real terminator.
+ */
+const HEADER_BREAK = new RegExp(
+  `[${String.fromCodePoint(13)}${String.fromCodePoint(10)}${String.fromCodePoint(0)}${String.fromCodePoint(0x0b)}${String.fromCodePoint(0x0c)}]`,
+);
+
 /** Formats an address for a header, quoting a display name that needs it. */
 export function formatAddress(address: Address): string {
-  if (typeof address === "string") return address;
+  if (typeof address === "string") {
+    assertHeaderSafe(address, "address");
+    return address;
+  }
+
+  assertHeaderSafe(address.address, "address");
+  if (address.name) assertHeaderSafe(address.name, "address name");
+
   if (!address.name) return address.address;
 
   // A name containing a comma or quote would otherwise split the header.
