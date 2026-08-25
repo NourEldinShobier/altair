@@ -101,6 +101,12 @@ function withHeaders(response: Response, extra: Record<string, string>): Respons
   });
 }
 
+/** One `rescue_from` registration. */
+export interface RescueHandler {
+  kind: new (...args: never[]) => Error;
+  handler: (this: Controller, error: Error) => unknown | Promise<unknown>;
+}
+
 export class Controller extends Callbacks {
   static {
     this.defineCallbacks<Controller>("action", {
@@ -168,6 +174,48 @@ export class Controller extends Callbacks {
     throw new InvalidAuthenticityToken();
   }
 
+  /**
+   * Handlers for exceptions raised while processing an action. Rails'
+   * `rescue_from`.
+   */
+  static rescueHandlers: RescueHandler[] = [];
+
+  /**
+   * Turns an exception into a response. Rails' `rescue_from`.
+   *
+   *     static {
+   *       this.rescueFrom(RecordNotFound, function () { this.head(404) })
+   *     }
+   *
+   * Declared on a base controller and inherited, which is the point: without
+   * it every action needs its own try/catch, and the one that forgets returns
+   * a stack trace to a stranger.
+   *
+   * Handlers are searched in reverse order of declaration, as Rails does, so a
+   * subclass can narrow what its parent already handles.
+   */
+  static rescueFrom<E extends Error>(
+    kind: new (...args: never[]) => E,
+    handler: (this: Controller, error: E) => unknown | Promise<unknown>,
+  ): void {
+    // Copy on write, so a subclass adding a handler leaves its parent alone.
+    if (!Object.hasOwn(this, "rescueHandlers")) this.rescueHandlers = [...this.rescueHandlers];
+
+    this.rescueHandlers.push({ kind, handler: handler as RescueHandler["handler"] });
+  }
+
+  /** The handler for an error, or undefined. */
+  static handlerFor(error: unknown): RescueHandler | undefined {
+    // Reverse, so the most recently declared wins — the same rule Rails uses,
+    // and the one that lets a subclass narrow its parent's handling.
+    for (let index = this.rescueHandlers.length - 1; index >= 0; index -= 1) {
+      const candidate = this.rescueHandlers[index];
+      if (candidate && error instanceof candidate.kind) return candidate;
+    }
+
+    return undefined;
+  }
+
   /** Rails' `performed?`: whether a response has already been produced. */
   performed(): boolean {
     return this.#response !== undefined;
@@ -192,9 +240,18 @@ export class Controller extends Callbacks {
       throw new Error(`The action "${name}" could not be found for ${this.constructor.name}`);
     }
 
-    await this.runCallbacks("action", async () => {
-      await (action as () => unknown | Promise<unknown>).call(this);
-    });
+    try {
+      await this.runCallbacks("action", async () => {
+        await (action as () => unknown | Promise<unknown>).call(this);
+      });
+    } catch (error) {
+      // Filters are inside the try as well as the action: an authorisation
+      // filter that raises is exactly the thing a handler is for.
+      const rescued = (this.constructor as typeof Controller).handlerFor(error);
+      if (!rescued) throw error;
+
+      await rescued.handler.call(this, error as Error);
+    }
 
     // Flash is swept and the session written back before the response leaves,
     // so a redirect carries what the action set.
