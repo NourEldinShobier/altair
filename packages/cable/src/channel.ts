@@ -57,6 +57,40 @@ export interface ChannelContext {
  * Namespaced so an application's stream name cannot collide with an internal
  * topic, and so a broadcaster shared with the job queue stays separable.
  */
+/**
+ * Names a record for a stream.
+ *
+ * A record is `Model/id`; anything else is its own string. The model name
+ * comes from the constructor, so two records with id 1 from different tables
+ * do not share a stream — which is the failure that would look like one user
+ * receiving another's messages.
+ *
+ * A record with no id is refused rather than named `Room/undefined`, which
+ * every unsaved record would share.
+ */
+export function identify(model: unknown): string {
+  if (model === null || model === undefined) {
+    throw new TypeError("Cannot build a stream name from null or undefined.");
+  }
+
+  if (typeof model !== "object") return String(model);
+
+  const id = (model as { id?: unknown }).id;
+
+  if (id === null || id === undefined || id === "") {
+    throw new TypeError(
+      `Cannot build a stream name from an unsaved ${model.constructor.name}: it has no id, and every unsaved record would share the stream.`,
+    );
+  }
+
+  // `modelName` when the record has one: it is what the rest of the framework
+  // calls a model, and unlike a constructor name it survives minification.
+  const named = (model.constructor as { modelName?: { name?: unknown } }).modelName;
+  const name = typeof named?.name === "string" ? named.name : model.constructor.name;
+
+  return `${name}/${String(id)}`;
+}
+
 export function topicFor(stream: string): string {
   return `cable:${stream}`;
 }
@@ -119,6 +153,31 @@ export class Channel {
     void data;
   }
 
+  /**
+   * The stream name a record broadcasts on. Rails' `broadcasting_for`.
+   *
+   * Rails encodes a GlobalID here, which is opaque by design because it also
+   * travels in URLs. A cable stream name never leaves the server, so this
+   * stays readable — `ChatChannel:Room/1` is something you can find in a log.
+   *
+   * The channel name is part of it so two channels streaming the same record
+   * do not deliver each other's messages.
+   */
+  static broadcastingFor(model: unknown): string {
+    return `${this.channelName}:${identify(model)}`;
+  }
+
+  /**
+   * Subscribes this socket to a record's stream. Rails' `stream_for`.
+   *
+   *     override async subscribed() {
+   *       this.streamFor(await Room.find(this.params.id))
+   *     }
+   */
+  streamFor(model: unknown): void {
+    this.streamFrom((this.constructor as typeof Channel).broadcastingFor(model));
+  }
+
   /** Subscribes this socket to a stream. Rails' `stream_from`. */
   streamFrom(stream: string): void {
     const topic = topicFor(stream);
@@ -153,6 +212,11 @@ export class Channel {
   /** Broadcasts to a stream from inside a channel. */
   broadcast(stream: string, message: unknown): void {
     Channel.broadcastTo(this.#broadcaster, stream, message);
+  }
+
+  /** Broadcasts to a record's stream from inside a channel. */
+  broadcastToRecord(model: unknown, message: unknown): void {
+    this.broadcast((this.constructor as typeof Channel).broadcastingFor(model), message);
   }
 
   /**
