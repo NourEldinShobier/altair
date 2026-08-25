@@ -12,6 +12,7 @@
  * ship no client framework.
  */
 
+import { isExecutableUrl } from "@altair/support";
 export type Attributes = Record<string, unknown>;
 
 export interface Element {
@@ -137,6 +138,43 @@ function renderStyle(style: Record<string, unknown>): string {
     .join(";");
 }
 
+/** Raised when a name or a URL would change the markup around it. */
+export class UnsafeMarkup extends Error {
+  constructor(what: string, value: string, reason: string) {
+    super(`Refusing to render ${what} ${JSON.stringify(value)}: ${reason}.`);
+    this.name = "UnsafeMarkup";
+  }
+}
+
+/**
+ * An HTML attribute name: anything but the characters that end one.
+ *
+ * The value is escaped and the name was not, so a name carrying a quote
+ * closed the attribute and started another:
+ *
+ *     <div {...{ 'x" onmouseover="alert(1)': "y" }} />
+ *     -> <p x" onmouseover="alert(1)="y">
+ *
+ * Which a browser reads as a live handler. Spreading props built from data —
+ * a CMS payload, a form schema — is the ordinary way that gets reached.
+ */
+const ATTRIBUTE_NAME = /^[^\s"'>/=]+$/;
+
+/** A tag name, per the HTML parser: a letter then letters and digits. */
+const TAG_NAME = /^[a-zA-Z][a-zA-Z0-9-]*$/;
+
+/** Attributes a browser follows, and so may not carry a scheme that runs. */
+const URL_ATTRIBUTES = new Set([
+  "href",
+  "src",
+  "action",
+  "formaction",
+  "poster",
+  "cite",
+  "data",
+  "srcdoc",
+]);
+
 function renderAttributes(props: Attributes): string {
   const parts: string[] = [];
 
@@ -147,6 +185,14 @@ function renderAttributes(props: Attributes): string {
     if (value === null || value === undefined || value === false) continue;
 
     const name = ATTRIBUTE_ALIASES[rawName] ?? rawName;
+
+    if (!ATTRIBUTE_NAME.test(name)) {
+      throw new UnsafeMarkup(
+        "an attribute named",
+        name,
+        "an attribute name cannot contain whitespace, a quote, a slash, an equals sign or a closing bracket",
+      );
+    }
 
     // An event handler cannot cross to the server; silently dropping it is
     // better than writing `onclick="function () {...}"` into the page.
@@ -165,6 +211,17 @@ function renderAttributes(props: Attributes): string {
     if (value === true) {
       parts.push(name);
       continue;
+    }
+
+    // The value is escaped, which stops it ending the attribute — and does
+    // nothing about a scheme, because `javascript:alert(1)` needs no special
+    // characters at all.
+    if (URL_ATTRIBUTES.has(name.toLowerCase()) && isExecutableUrl(String(value))) {
+      throw new UnsafeMarkup(
+        `a ${name}`,
+        String(value),
+        "it names a scheme that runs code rather than fetching something",
+      );
     }
 
     parts.push(`${name}="${escapeHtml(String(value))}"`);
@@ -201,6 +258,14 @@ export async function renderToString(node: Node): Promise<string> {
 
   // The Fragment marker renders its children with no wrapper.
   if (type === "") return await renderToString(props.children as Node);
+
+  if (!TAG_NAME.test(type)) {
+    throw new UnsafeMarkup(
+      "a tag named",
+      type,
+      "a tag name is a letter followed by letters, digits or dashes",
+    );
+  }
 
   const attributes = renderAttributes(props);
 

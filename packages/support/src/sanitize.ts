@@ -190,6 +190,47 @@ function decodeEntities(value: string): string {
   });
 }
 
+/** Schemes that run code rather than fetch something. */
+const EXECUTABLE_SCHEMES = new Set(["javascript", "vbscript", "livescript", "mocha"]);
+
+/**
+ * Inline data a browser cannot run: an image or a font, and not an SVG.
+ *
+ * `data:` as a whole is not executable — `data:image/png` is a picture, and
+ * refusing it would break every inlined icon and every emailed logo, which is
+ * how a guard gets removed instead of kept. `data:text/html` is a document,
+ * and SVG is a document wearing an image's content type: harmless in an
+ * `<img>`, script-bearing in an `<object>`, and this cannot see which it is.
+ */
+const INERT_DATA = /^data:(image\/(?!svg)[a-z0-9.+-]+|font\/[a-z0-9.+-]+);/;
+
+/**
+ * Whether a URL would run code if a browser followed it.
+ *
+ * Shares the normalising with `isAllowedUrl` for the reason that matters: a
+ * browser decodes entities and drops control characters before deciding what
+ * a URL means, so `&#106;avascript:` and `java\tscript:` are both live, and a
+ * check reading the raw string is reading a different string than the browser.
+ *
+ * `data:` is in the list because a top-level navigation to `data:text/html`
+ * used to run script in the opener's origin. Browsers block that now, and it
+ * costs nothing to keep barring it from a link.
+ */
+export function isExecutableUrl(value: string): boolean {
+  const cleaned = decodeEntities(value)
+    // eslint-disable-next-line no-control-regex
+    .replaceAll(/[\u0000-\u0020\u007f-\u00a0]/gu, "")
+    .toLowerCase();
+
+  if (INERT_DATA.test(cleaned)) return false;
+
+  const scheme = /^([a-z][a-z0-9+.-]*):/.exec(cleaned);
+  if (!scheme) return false;
+
+  // Any other `data:` is a document, and a document can carry script.
+  return EXECUTABLE_SCHEMES.has(scheme[1]!) || scheme[1] === "data";
+}
+
 export function isAllowedUrl(value: string, schemes: ReadonlySet<string>): boolean {
   // Control characters and whitespace are dropped by a browser before it
   // reads the scheme, so a check that does not drop them too is checking a

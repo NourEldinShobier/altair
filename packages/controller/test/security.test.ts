@@ -121,7 +121,20 @@ describe("message encryptor", () => {
   it("rejects a tampered payload", () => {
     const message = encryptor.encrypt("value");
     const parts = message.split(".");
-    parts[0] = `${parts[0]!.slice(0, -2)}AA`;
+
+    // Tampered in the decoded bytes rather than in the base64 text, so the
+    // ciphertext is certainly different.
+    //
+    // Two ways of doing this by hand were not. Overwriting the last two
+    // characters with "AA" leaves a payload already ending in them untouched,
+    // which failed about once in fourteen hundred runs. Changing the last
+    // character to a different one looks airtight and is not: the final base64
+    // character carries padding bits that decode to nothing, so six per cent
+    // of those "tampered" payloads decoded to the same bytes and decrypted
+    // fine. Measured, both of them, rather than reasoned about.
+    const bytes = Buffer.from(parts[0]!, "base64url");
+    bytes[0]! ^= 0xff;
+    parts[0] = bytes.toString("base64url");
 
     expect(encryptor.decrypt(parts.join("."))).toBeNull();
   });
