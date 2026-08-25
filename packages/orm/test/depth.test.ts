@@ -381,6 +381,18 @@ describe("a model with a secure password", () => {
     expect(user.errors.on("password")[0]).toContain(String(MINIMUM_PASSWORD_LENGTH));
   });
 
+  // `assign` used to write past the prototype setter, so the plain password
+  // would have been written as its own column beside its hash — the same bug
+  // the constructor was fixed for, still open on this path.
+  it("hashes a password given to update", async () => {
+    const user = await User.create({ email: "a@b.com", password: "correct horse" } as never);
+    await user.update({ password: "a different one" } as never);
+
+    const reloaded = await User.find(user.id);
+    expect(reloaded.attributes()).not.toHaveProperty("password");
+    expect(await reloaded.authenticate("a different one")).not.toBeNull();
+  });
+
   it("checks a confirmation when one is given", async () => {
     const user = User.build({ email: "a@b.com", password: "correct horse" } as never);
     user.passwordConfirmation = "different horse";
