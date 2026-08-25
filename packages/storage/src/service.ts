@@ -70,6 +70,60 @@ export class FileNotFound extends Error {
   }
 }
 
+/** Control characters, built from code points so no escape can be mangled. */
+const CONTROL = new RegExp(`[${String.fromCodePoint(0)}-${String.fromCodePoint(0x1f)}]`);
+
+/** Raised when a key would name something outside the service's root. */
+export class UnsafeKey extends Error {
+  constructor(
+    readonly key: string,
+    reason: string,
+  ) {
+    super(`Refusing to build a disk path from ${JSON.stringify(key)}: ${reason}.`);
+    this.name = "UnsafeKey";
+  }
+}
+
+/**
+ * Checks that a key names something inside the service's root.
+ *
+ * A key may nest — a variant is stored under `variants/<blob key>/<digest>`,
+ * so barring separators outright is wrong, and a first version of this broke
+ * every variant in the suite. What it may not do is climb: no segment may be
+ * `..`, which is what makes escaping impossible rather than merely unlikely.
+ *
+ * Worth checking even though every key the framework generates is safe and
+ * every key `serveDisk` reads is signed. An application that keeps its own
+ * keys and calls `download(key)` with one it was handed is doing an ordinary
+ * thing, and the failure there is reading any file the process can reach.
+ */
+export function assertSafeKey(key: string): void {
+  if (key.length === 0) throw new UnsafeKey(key, "a key cannot be empty");
+  if (key.length > 1024) throw new UnsafeKey(key, "a key cannot be longer than 1024 characters");
+
+  // Backslash separates on Windows, so a key holding one would nest there and
+  // not here — and `..\` would climb. Checked before the path is built, so
+  // the platform gets no say.
+  if (key.includes("\\")) throw new UnsafeKey(key, "a key cannot contain a backslash");
+
+  // A newline or a NUL in a path is nobody's key and every logger's problem.
+  // eslint-disable-next-line no-control-regex
+  if (CONTROL.test(key)) throw new UnsafeKey(key, "a key cannot contain a control character");
+
+  if (key.startsWith("/")) throw new UnsafeKey(key, "a key cannot be absolute");
+
+  // The one that still escaped after separators were barred: the path nests by
+  // the key's first two characters, so a key beginning `..` makes `..` a
+  // directory — `root/../` — without holding a separator at all.
+  if (key.startsWith(".")) throw new UnsafeKey(key, "a key cannot start with a dot");
+
+  for (const segment of key.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new UnsafeKey(key, `"${segment}" is not a path segment a key may contain`);
+    }
+  }
+}
+
 /**
  * Where a key lives on disk.
  *
@@ -77,7 +131,12 @@ export class FileNotFound extends Error {
  * million files in it is a directory some filesystems will not list.
  */
 export function diskPath(key: string): string {
-  return `${key.slice(0, 2)}/${key.slice(2, 4)}/${key}`;
+  assertSafeKey(key);
+
+  // Empty parts dropped rather than joined blindly: a key shorter than four
+  // characters has no second folder, and `ab//ab` is a path with a segment
+  // that names nothing.
+  return [key.slice(0, 2), key.slice(2, 4), key].filter(Boolean).join("/");
 }
 
 export interface DiskServiceOptions {
