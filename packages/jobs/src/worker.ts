@@ -7,7 +7,7 @@
  * rather than dropping it.
  */
 
-import { DEFAULT_RETRY, Job, type JobPayload, type QueueAdapter } from "./job.js";
+import { Job, type JobPayload, type QueueAdapter } from "./job.js";
 
 /**
  * An in-process queue.
@@ -119,7 +119,7 @@ export interface WorkerOptions {
 }
 
 export interface RunResult {
-  status: "completed" | "retried" | "failed";
+  status: "completed" | "retried" | "failed" | "discarded";
   payload: JobPayload;
   error?: unknown;
 }
@@ -139,8 +139,15 @@ export async function runJob(payload: JobPayload, adapter: QueueAdapter): Promis
     );
     return { status: "completed", payload };
   } catch (error) {
-    const policy = klass.retryPolicy ?? DEFAULT_RETRY;
+    const policy = klass.policyFor(error);
     const attempts = payload.attempts + 1;
+
+    // Null means a rule said this failure will not come right. Reported apart
+    // from a failure on purpose: a discard is the job working as intended, and
+    // counting it as a failure trains people to ignore the failure count.
+    if (policy === null) {
+      return { status: "discarded", payload: { ...payload, attempts }, error };
+    }
 
     if (attempts >= policy.attempts) {
       return { status: "failed", payload: { ...payload, attempts }, error };
