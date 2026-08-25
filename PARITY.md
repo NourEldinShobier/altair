@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,516** | 26,775    | 9.4% |
+| **Total** | **2,535** | 26,775    | 9.5% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -27,7 +27,7 @@ one that needs no server.
 | `@altair/orm`        | 590   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 299   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 124   | Generators, db tasks, file loading, encrypted credentials                  |
-| `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
+| `@altair/router`     | 85    | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                       |
 | `@altair/storage`    | 116   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
 | `@altair/view`       | 197   | TSX rendering, layouts, Inertia protocol, form builders                    |
@@ -94,6 +94,7 @@ Rails: 30,329 lines · 3,828 tests
 | Routing DSL & recognition | 4,816     | **done** | resources, nesting, member/collection, scope            |
 | Journey (route matcher)   | 2,190     | **done** | Compiled regex per route, verb-bucketed                 |
 | Typed path helpers        | —         | **done** | Generated from the route table, arity and all           |
+| Polymorphic paths         | 380       | **done** | `polymorphicPath(record)`, new vs saved, nesting        |
 | Controllers & filters     | 9,508     | **done** | only/except, halting, inheritance                       |
 | Strong parameters         | —         | **done** | Plus schema validation via Standard Schema              |
 | Cookies & sessions        | —         | **done** | Plain/signed/encrypted jars, flash                      |
