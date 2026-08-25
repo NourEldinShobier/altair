@@ -29,6 +29,7 @@ import {
   type ControllerRegistry,
 } from "@altair/controller";
 import { connect, withQueryCache, type Connection } from "@altair/orm";
+import { configFor } from "./config_for.js";
 import { buildConfig, type ApplicationConfig } from "./config.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
 import { logQueries, requestLogging } from "./logging.js";
@@ -294,6 +295,17 @@ export class Application {
         async () => await withQueryCache(async () => await stack(request)),
       );
     };
+  }
+
+  /**
+   * Settings from `config/<name>.yml` for this environment.
+   *
+   * Rails' `Rails.application.config_for`. The environment and root come from
+   * the application's own config, which is the whole reason to reach for it
+   * here rather than calling `configFor` directly.
+   */
+  async configFor(name: string): Promise<Record<string, unknown>> {
+    return await configFor(name, { env: this.config.env, root: this.config.root });
   }
 
   /** The context every controller is built with. Used by the dispatcher. */
