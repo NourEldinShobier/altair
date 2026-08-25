@@ -14,6 +14,9 @@ import {
   generateController,
   generateMigration,
   generateModel,
+  generateChannel,
+  generateJob,
+  generateMailer,
   generateScaffold,
   parseFields,
   type GeneratedFile,
@@ -147,9 +150,15 @@ export function generate(
       return [generateMigration(name, fields, now)];
     case "scaffold":
       return generateScaffold(name, fields, now);
+    case "mailer":
+      return generateMailer(name, fieldArgs);
+    case "job":
+      return generateJob(name);
+    case "channel":
+      return generateChannel(name);
     default:
       throw new Error(
-        `Unknown generator "${kind}". Available: model, controller, migration, scaffold.`,
+        `Unknown generator "${kind}". Available: model, controller, migration, scaffold, mailer, job, channel.`,
       );
   }
 }
@@ -346,7 +355,7 @@ export function helpText(): string {
     "",
     "Commands:",
     "  new NAME                  Create a new application",
-    "  generate KIND NAME        Generate model, controller, migration or scaffold",
+    "  generate KIND NAME        model, controller, migration, scaffold, mailer, job, channel",
     "  db:migrate                Run pending migrations",
     "  db:rollback [STEPS]       Roll back the last migration",
     "  db:status                 Show which migrations have run",

@@ -17,6 +17,7 @@ import {
   parseFields,
   tsTypeFor,
 } from "../src/generators.js";
+import { generate } from "../src/commands.js";
 
 const NOW = new Date(Date.UTC(2026, 7, 22, 14, 30, 5));
 
@@ -235,5 +236,69 @@ describe("generated code shape", () => {
   it("still writes a body when there are associations", () => {
     const file = generateModel("Comment", parseFields(["post:references"]));
     expect(file.contents).toContain("static {");
+  });
+});
+
+// Generated code that does not compile, or whose own generated test fails, is
+// worse than no generator. Each of these was found by generating into a real
+// directory and running `tsc` and `bun test` over the output.
+describe("mailer, job and channel generators", () => {
+  const files = (kind: string, name: string, extra: string[] = []) =>
+    Object.fromEntries(generate(kind, name, extra).map((file) => [file.path, file.contents]));
+
+  it("generates a mailer and its test", () => {
+    const written = files("mailer", "User", ["welcome", "password_reset"]);
+
+    expect(Object.keys(written)).toEqual([
+      "app/mailers/user_mailer.tsx",
+      "test/mailers/user_mailer.test.ts",
+    ]);
+    expect(written["app/mailers/user_mailer.tsx"]).toContain("static passwordReset(");
+  });
+
+  // Without a default sender `toMessage()` throws, so the generated test
+  // failed the moment it was run.
+  it("gives the mailer a sender, or its own test cannot pass", () => {
+    expect(files("mailer", "User")["app/mailers/user_mailer.tsx"]).toContain("from:");
+  });
+
+  // `message.html()` is not a method; the fields come off `toMessage()`.
+  it("writes a mailer test against the API that exists", () => {
+    const test = files("mailer", "User")["test/mailers/user_mailer.test.ts"] as string;
+
+    expect(test).toContain("toMessage()");
+    expect(test).not.toContain("message.html()");
+  });
+
+  it("generates a job and its test", () => {
+    const written = files("job", "CleanupImages");
+
+    expect(Object.keys(written)).toEqual([
+      "app/jobs/cleanup_images_job.ts",
+      "test/jobs/cleanup_images_job.test.ts",
+    ]);
+  });
+
+  // `singularize` is right for a model and wrong for a job: it turned
+  // CleanupImages into cleanup_image_job.
+  it("does not fold a plural in a job name", () => {
+    expect(Object.keys(files("job", "CleanupImages"))[0]).toContain("cleanup_images");
+    expect(Object.keys(files("mailer", "Notifications"))[0]).toContain("notifications");
+  });
+
+  it("does not double the suffix when the name already has it", () => {
+    expect(Object.keys(files("job", "CleanupJob"))[0]).toBe("app/jobs/cleanup_job.ts");
+    expect(Object.keys(files("channel", "ChatChannel"))[0]).toBe("app/channels/chat_channel.ts");
+  });
+
+  it("generates a channel that streams", () => {
+    const written = files("channel", "Chat");
+
+    expect(written["app/channels/chat_channel.ts"]).toContain("streamFrom");
+    expect(written["app/channels/chat_channel.ts"]).toContain("override async subscribed");
+  });
+
+  it("still refuses a generator it does not have", () => {
+    expect(() => generate("nonsense", "Thing")).toThrow(/Available:/);
   });
 });
