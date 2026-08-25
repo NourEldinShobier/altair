@@ -51,8 +51,64 @@ export function parseCookieHeader(header: string | null): Record<string, string>
   return jar;
 }
 
+/** Raised when a cookie's name or attributes would write a different cookie. */
+export class UnsafeCookie extends Error {
+  constructor(
+    readonly field: string,
+    readonly value: string,
+  ) {
+    super(
+      `Refusing to write a cookie whose ${field} is ${JSON.stringify(value)}: it would change what the header says.`,
+    );
+    this.name = "UnsafeCookie";
+  }
+}
+
+/**
+ * A cookie name, per RFC 6265: an HTTP token and nothing else.
+ *
+ * The characters left out are the ones that mean something in the header —
+ * `;` separates cookies from attributes, `=` separates a name from a value —
+ * so a name containing them stops being a name.
+ */
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~\dA-Za-z]+$/;
+
+/**
+ * Refuses a name or attribute that would write a cookie other than the one
+ * asked for.
+ *
+ * The value needs no guarding: it is percent-encoded, so a `;` in it stays a
+ * `;` in it. The name is not, and a name of `sess=stolen; x` sets a cookie
+ * called `sess` — any cookie, the session included, from a call that appears
+ * to write something harmless. `path` and `domain` are interpolated too, and
+ * a `;` in either does the same thing one attribute later.
+ *
+ * Refused rather than escaped: there is no encoding for a cookie name, and a
+ * caller building one out of user input has a bug worth hearing about.
+ */
+export function assertCookieSafe(record: { name: string; path?: string; domain?: string }): void {
+  if (!COOKIE_NAME.test(record.name)) throw new UnsafeCookie("name", record.name);
+
+  for (const [field, value] of [
+    ["path", record.path],
+    ["domain", record.domain],
+  ] as const) {
+    if (value === undefined) continue;
+    if (ATTRIBUTE_BREAK.test(value)) throw new UnsafeCookie(field, value);
+  }
+}
+
+/** A separator or a control character — either ends the attribute it is in. */
+const ATTRIBUTE_BREAK = new RegExp(
+  `[;,${String.fromCodePoint(0)}-${String.fromCodePoint(0x1f)}${String.fromCodePoint(0x7f)}]`,
+);
+
 /** Renders one `Set-Cookie` header value. */
 export function serializeCookie(record: CookieRecord): string {
+  // Checked here as well as at `set`, because this is the chokepoint every
+  // outgoing cookie passes through however it was written.
+  assertCookieSafe(record);
+
   const parts = [`${record.name}=${encodeURIComponent(record.value)}`];
 
   parts.push(`Path=${record.path ?? "/"}`);
@@ -115,6 +171,8 @@ export class CookieJar {
   }
 
   set(name: string, value: string, options: CookieOptions = {}): void {
+    assertCookieSafe({ name, ...options });
+
     this.#outgoing.set(name, { name, value, ...options });
   }
 
