@@ -25,14 +25,14 @@ one that needs no server.
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
 | `@altair/orm`        | 527   | Connection, migrations, models, relations, associations, ActiveModel       |
-| `@altair/controller` | 262   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
+| `@altair/controller` | 265   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 116   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 43    | Action Cable, protocol-compatible with Rails' client                       |
 | `@altair/storage`    | 116   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
-| `@altair/view`       | 195   | TSX rendering, layouts, Inertia protocol, form builders                    |
+| `@altair/view`       | 197   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 70    | Jobs, queues, retries, worker                                              |
-| `@altair/testing`    | 31    | Transactional tests, fixtures, factories, test databases                   |
+| `@altair/testing`    | 40    | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 87    | Config, boot lifecycle, request handler, credentials, logging              |
 | `@altair/mailer`     | 87    | Messages, TSX bodies, delivery methods                                     |
 
@@ -185,5 +185,12 @@ What remains everywhere is depth: 8% of Rails' test count, not 8% of Rails.
 
 ## How to update this file
 
-When you finish a subsystem: flip its status, update the shipped table, and
-update the total. `bun test` prints the current number.
+Flip a subsystem's status when you finish it. The numbers look after
+themselves:
+
+    bun run tools/check-parity.ts --fix
+
+`verify.sh` runs the same script without `--fix` and fails if a row disagrees
+with the suite, because these numbers had drifted three times before anything
+was checking them — and a wrong number here is worse than a wrong number
+anywhere else in the repository, since this file is the claim people read.
