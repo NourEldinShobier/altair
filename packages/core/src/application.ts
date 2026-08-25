@@ -45,6 +45,40 @@ export interface Provider {
   terminate?: (app: Application) => void | Promise<void>;
 }
 
+/**
+ * What `Bun.serve` gives the fetch handler for upgrading a request.
+ *
+ * Narrowed to the one method used, so a test can hand in a plain object rather
+ * than a running server.
+ */
+export interface UpgradeServer {
+  upgrade(request: Request, options?: { data?: unknown }): boolean;
+}
+
+/**
+ * Something that answers WebSocket upgrades — `Cable`, in practice.
+ *
+ * Structural on purpose. Core has no business depending on `@altair/cable`,
+ * and an application that speaks its own protocol should be able to attach
+ * without one existing.
+ */
+export interface UpgradeHandler {
+  /** Whether this request is for the socket rather than for a controller. */
+  handles(request: Request): boolean;
+  /** What to hang off the socket, or null to refuse the connection. */
+  upgradeData(request: Request): Promise<unknown | null>;
+  /** The handlers `Bun.serve({ websocket })` takes. */
+  handlers(): unknown;
+}
+
+/**
+ * Returned when a request became a socket.
+ *
+ * `Bun.serve` wants no response once `upgrade` has succeeded, but the type
+ * says a Response comes back, so this stands in for one that is never sent.
+ */
+const UPGRADED = new Response(null, { status: 101 });
+
 export interface ApplicationOptions extends Partial<ApplicationConfig> {
   routes?: (r: Mapper) => void;
   controllers?: ControllerRegistry;
@@ -69,6 +103,7 @@ export class Application {
 
   controllers: ControllerRegistry = {};
   providers: Provider[] = [];
+  #upgrade: UpgradeHandler | undefined;
   /**
    * Run once at boot, after the database is connected. Rails'
    * `config/initializers`, loaded by `loadApplication`.
@@ -195,7 +230,23 @@ export class Application {
    * Every controller is constructed with the application's secrets, which is
    * what makes signed cookies and sessions work without per-controller setup.
    */
-  handler(): (request: Request) => Promise<Response> {
+  /**
+   * Attaches something that answers upgrade requests — a cable, in practice.
+   *
+   * Structural rather than a direct dependency: core has no business importing
+   * `@altair/cable`, and the cable already has this shape. Anything else that
+   * speaks WebSocket can be attached the same way.
+   */
+  useWebSocket(handler: UpgradeHandler): this {
+    this.#upgrade = handler;
+    return this;
+  }
+
+  get webSocket(): UpgradeHandler | undefined {
+    return this.#upgrade;
+  }
+
+  handler(): (request: Request, server?: UpgradeServer) => Promise<Response> {
     const dispatch = createDispatcher({
       router: this.router,
       controllers: this.controllers,
@@ -213,7 +264,23 @@ export class Application {
       }
     });
 
-    return async (request: Request) => {
+    return async (request: Request, server?: UpgradeServer) => {
+      // Before the middleware, and before `Current`: an upgrade is not a
+      // request that gets a response, and running it through a stack built to
+      // produce one would have it answered rather than upgraded.
+      if (server && this.#upgrade?.handles(request)) {
+        const data = await this.#upgrade.upgradeData(request);
+
+        // Null means the connection was refused. Rails answers an unauthorized
+        // cable with a 401 rather than upgrading and closing, so a client can
+        // tell "you may not" from "the server went away" and stop retrying.
+        if (data === null) return new Response("Unauthorized", { status: 401 });
+
+        if (server.upgrade(request, { data })) return UPGRADED;
+
+        return new Response("Expected a WebSocket upgrade", { status: 426 });
+      }
+
       // Every request runs inside its own Current scope, so anything it sets
       // is invisible to the requests running beside it.
       return await Current.run(
@@ -274,10 +341,13 @@ export class Application {
     await this.boot();
     for (const provider of this.providers) await provider.start?.(this);
 
+    const fetch = this.handler();
+
     const server = Bun.serve({
       port,
       hostname: this.config.server.hostname,
-      fetch: this.handler(),
+      fetch: (request, server) => fetch(request, server as UpgradeServer),
+      websocket: this.#upgrade?.handlers() as never,
     });
 
     this.#server = server;

@@ -17,6 +17,9 @@
       "dependencies": {
         "@altair/support": "workspace:*",
       },
+      "devDependencies": {
+        "@altair/core": "workspace:*",
+      },
     },
     "packages/cli": {
       "name": "@altair/cli",

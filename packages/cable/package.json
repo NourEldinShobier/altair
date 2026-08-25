@@ -7,5 +7,8 @@
   },
   "dependencies": {
     "@altair/support": "workspace:*"
+  },
+  "devDependencies": {
+    "@altair/core": "workspace:*"
   }
 }
