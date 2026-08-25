@@ -146,8 +146,12 @@ export async function preloadAssociation(
       return loaded ? [loaded as InstanceLike] : [];
     });
 
+    // Nothing in the middle means nothing at the end, and what "nothing" looks
+    // like depends on the shape: an empty list, or no record.
+    const empty = definition.kind === "hasOne" ? null : [];
+
     if (intermediates.length === 0) {
-      for (const owner of owners) owner[cacheKey(definition.name)] = [];
+      for (const owner of owners) owner[cacheKey(definition.name)] = empty;
       return;
     }
 
@@ -163,11 +167,15 @@ export async function preloadAssociation(
           ? [loaded as InstanceLike]
           : [];
 
-      owner[cacheKey(definition.name)] = rows.flatMap((row) => {
+      const reached = rows.flatMap((row) => {
         const value = row[cacheKey(sourceName)];
         if (Array.isArray(value)) return value as InstanceLike[];
         return value ? [value as InstanceLike] : [];
       });
+
+      // The hops are the same either way; only what is kept at the end differs.
+      owner[cacheKey(definition.name)] =
+        definition.kind === "hasOne" ? (reached[0] ?? null) : reached;
     }
     return;
   }
