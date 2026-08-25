@@ -20,6 +20,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { secureToken } from "@altair/support";
 import { t, tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
@@ -789,12 +790,70 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     static all<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
-      const relation = this.unscoped();
+      let relation = this.unscoped();
 
       // A subclass sees only its own rows and its subclasses'. The root sees
       // everything, which is what makes `Vehicle.all()` return cars and trucks.
-      if (this.stiRoot === undefined) return relation;
-      return relation.where({ [this.inheritanceColumn]: this.stiNames() });
+      if (this.stiRoot !== undefined) {
+        relation = relation.where({ [this.inheritanceColumn]: this.stiNames() });
+      }
+
+      for (const scope of this.defaultScopes) {
+        relation = scope(relation as unknown as Relation<unknown>) as unknown as Relation<
+          InstanceType<M>
+        >;
+      }
+
+      return relation;
+    }
+
+    /** Conditions every query on this model starts with. */
+    static defaultScopes: ((relation: Relation<unknown>) => Relation<unknown>)[] = [];
+
+    /**
+     * Narrows every query on this model. Rails' `default_scope`.
+     *
+     *     static { this.defaultScope((posts) => posts.whereNot({ deleted_at: null })) }
+     *
+     * The usual reason is a soft delete: a deleted row is still there, and
+     * every query that forgot to say so would find it. Declaring it once is
+     * the only way that stays true as queries are added.
+     *
+     * One deliberate difference from Rails. There, a default scope also fills
+     * in what `create` writes, so `default_scope { where(archived: true) }`
+     * quietly makes every new record archived — it is the most complained
+     * about behaviour in ActiveRecord, and the reason people are told to
+     * avoid default scopes altogether.
+     *
+     * Here it narrows reads and nothing else. A scope is a statement about
+     * which rows you want to see, and reading that as a statement about what
+     * to write is a second meaning nobody asked for. `create` fills in what it
+     * was given; `unscoped` escapes the reading.
+     */
+    static defaultScope(body: (relation: Relation<unknown>) => Relation<unknown>): void {
+      // Copy on write, so a subclass adding one leaves its parent alone.
+      if (!Object.hasOwn(this, "defaultScopes")) this.defaultScopes = [...this.defaultScopes];
+      this.defaultScopes.push(body);
+    }
+
+    /**
+     * Fills a column with a random token before the row is written. Rails'
+     * `has_secure_token`.
+     *
+     *     static { this.hasSecureToken("invite_token") }
+     *
+     * The length is in bytes of entropy rather than characters of output,
+     * because the second is what people count and the first is what matters. A
+     * token that guards anything is guessable at 8 bytes and is not at 24.
+     */
+    static hasSecureToken(column: string, options: { length?: number } = {}): void {
+      const bytes = options.length ?? 24;
+
+      this.setCallback("create", "before", function (this: BaseModel) {
+        // Only when it is empty, so a token given explicitly — reissuing one,
+        // or a fixture — is kept.
+        this[ATTRIBUTES][column] ??= secureToken(bytes);
+      });
     }
 
     /** Every row in the table, ignoring the inheritance column. */
@@ -2327,6 +2386,11 @@ export interface ModelClass<A extends object> {
   all<T>(this: ModelConstructor<A, T>): Relation<T>;
   joinFor(name: string): JoinSpec;
   unscoped<T>(this: ModelConstructor<A, T>): Relation<T>;
+  /** Rails' `default_scope`. Applies to writes as well as reads. */
+  defaultScope(body: (relation: Relation<unknown>) => Relation<unknown>): void;
+  defaultScopes: ((relation: Relation<unknown>) => Relation<unknown>)[];
+  /** Rails' `has_secure_token`. */
+  hasSecureToken(column: string, options?: { length?: number }): void;
   where<T>(this: ModelConstructor<A, T>, conditions: Conditions): Relation<T>;
   where<T>(this: ModelConstructor<A, T>, sql: string, ...bindings: unknown[]): Relation<T>;
   order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
