@@ -37,17 +37,53 @@ async function client(): Promise<{ ws: WebSocket; frames: Record<string, unknown
   });
 
   await new Promise<void>((resolve, reject) => {
-    ws.addEventListener("open", () => resolve());
-    ws.addEventListener("error", () => reject(new Error("could not connect")));
+    // A timeout with something to say: without one, a connection that never
+    // opens hangs until the runner's own limit and reports as "timed out
+    // after 5000ms", which names the test and not the reason.
+    const giveUp = setTimeout(() => reject(new Error("timed out connecting to the cable")), 5000);
+
+    ws.addEventListener("open", () => {
+      clearTimeout(giveUp);
+      resolve();
+    });
+
+    ws.addEventListener("error", () => {
+      clearTimeout(giveUp);
+      reject(new Error("could not connect"));
+    });
   });
 
   await settle();
   return { ws, frames };
 }
 
-/** Lets the event loop deliver what is in flight. */
+/**
+ * Lets the event loop deliver what is in flight.
+ *
+ * Only for asserting that something did *not* arrive, where there is nothing
+ * to wait for and a pause is the only option. Waiting for something that
+ * should arrive uses `waitFor`: a fixed pause long enough on an idle machine
+ * is not long enough on a loaded one, which is how this file produced a
+ * five-second timeout in a suite run and passed on its own straight after.
+ */
 async function settle(ms = 40): Promise<void> {
   await Bun.sleep(ms);
+}
+
+/** Waits until a frame the test is looking for shows up. */
+async function waitFor(
+  frames: Record<string, unknown>[],
+  matches: (frame: Record<string, unknown>) => boolean,
+  what: string,
+): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const found = frames.find((frame) => matches(frame));
+    if (found) return found;
+
+    await Bun.sleep(10);
+  }
+
+  throw new Error(`Waited for ${what} and it never arrived. Saw: ${JSON.stringify(frames)}`);
 }
 
 beforeEach(() => {
@@ -89,7 +125,7 @@ describe("a real connection", () => {
     const identifier = JSON.stringify({ channel: "RoomChannel", id: 1 });
 
     ws.send(JSON.stringify({ command: "subscribe", identifier }));
-    await settle();
+    await waitFor(frames, (frame) => frame.type === "confirm_subscription", "the confirmation");
 
     expect(frames.at(-1)).toEqual({ identifier, type: "confirm_subscription" });
   });
@@ -99,7 +135,7 @@ describe("a real connection", () => {
     const identifier = JSON.stringify({ channel: "GhostChannel" });
 
     ws.send(JSON.stringify({ command: "subscribe", identifier }));
-    await settle();
+    await waitFor(frames, (frame) => frame.type === "reject_subscription", "the rejection");
 
     expect(frames.at(-1)).toEqual({ identifier, type: "reject_subscription" });
   });
@@ -128,6 +164,9 @@ describe("a real connection", () => {
 
     const said = (frames: Record<string, unknown>[]) =>
       frames.filter((frame) => frame.message).map((frame) => frame.message);
+
+    await waitFor(alice.frames, (frame) => Boolean(frame.message), "alice's copy");
+    await waitFor(bob.frames, (frame) => Boolean(frame.message), "bob's copy");
 
     expect(said(alice.frames)).toEqual([{ said: "hello" }]);
     expect(said(bob.frames)).toEqual([{ said: "hello" }]);
@@ -160,6 +199,11 @@ describe("a real connection", () => {
     );
     await settle();
 
+    // The delivery is waited for; the absence still needs a pause, since
+    // there is no event that means "nothing is coming".
+    await waitFor(one.frames, (frame) => Boolean(frame.message), "room one's message");
+    await settle();
+
     expect(one.frames.some((frame) => frame.message)).toBe(true);
     expect(two.frames.some((frame) => frame.message)).toBe(false);
   });
@@ -174,6 +218,8 @@ describe("a real connection", () => {
     // What a controller or a job would call.
     cable.broadcastTo("room:5", { from: "a job" });
     await settle();
+
+    await waitFor(frames, (frame) => Boolean(frame.message), "the broadcast");
 
     expect(frames.at(-1)).toEqual({ identifier, message: { from: "a job" } });
   });
@@ -220,6 +266,8 @@ describe("a real connection", () => {
     const identifier = JSON.stringify({ channel: "RoomChannel", id: 1 });
     ws.send(JSON.stringify({ command: "subscribe", identifier }));
     await settle();
+
+    await waitFor(frames, (frame) => frame.type === "confirm_subscription", "the confirmation");
 
     expect(frames.at(-1)?.type).toBe("confirm_subscription");
   });
