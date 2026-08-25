@@ -131,6 +131,28 @@ describe("predicates", () => {
     expect(post.isArchived).toBe(false);
   });
 
+  // `assign` wrote straight into the attribute bag, past every accessor — so
+  // it stored the word where the column wants an integer. Found through
+  // `normalizes`, but it defeated enums and secure passwords the same way.
+  it("maps a value given to assign", async () => {
+    const post = await Post.create({ title: "A", status: "draft" });
+    post.assign({ status: "published" });
+
+    expect(post.isPublished).toBe(true);
+    await post.save();
+
+    const [row] = await connection.query<{ status: number }>("SELECT status FROM posts");
+    expect(row?.status).toBe(1);
+  });
+
+  it("maps a value given to update", async () => {
+    const post = await Post.create({ title: "A", status: "draft" });
+    await post.update({ status: "archived" });
+
+    const [row] = await connection.query<{ status: number }>("SELECT status FROM posts");
+    expect(row?.status).toBe(2);
+  });
+
   it("follows an assignment", async () => {
     const post = await Post.create({ title: "A", status: "draft" });
     post.status = "archived";

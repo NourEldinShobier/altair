@@ -35,6 +35,14 @@ import {
   type EnumMapping,
   type EnumOptions,
 } from "./enum.js";
+import {
+  defineNormalizer,
+  normalizeConditions,
+  normalizeValue,
+  type NormalizeDefinition,
+  type Normalizer,
+  type NormalizeOptions,
+} from "./normalizes.js";
 import type { ColumnType } from "./schema.js";
 import { runBulk, type BulkContext, type BulkOptions, type BulkResult } from "./bulk.js";
 import {
@@ -407,6 +415,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     /** Columns held as ciphertext. Rails' `encrypts`. */
     static encryptedAttributes: Record<string, EncryptedAttributeOptions> = {};
     static enums: Record<string, EnumDefinition> = {};
+    static normalizers: Record<string, NormalizeDefinition> = {};
 
     /**
      * Encrypts a column. Rails' `encrypts :ssn`.
@@ -470,6 +479,44 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           },
         });
       }
+    }
+
+    /**
+     * Tidies a value on the way in, and in the lookups. Rails' `normalizes`.
+     *
+     *     static { this.normalizes("email", (value) => value.trim().toLowerCase()) }
+     *
+     * Both halves matter. Normalizing only on write leaves a table of tidy
+     * values that a signup form can still duplicate, because the uniqueness
+     * check went looking for the untidy version and found nothing.
+     */
+    static normalizes<V = string>(
+      attribute: string,
+      normalize: (value: V) => unknown,
+      options: NormalizeOptions = {},
+    ): void {
+      if (!Object.hasOwn(this, "normalizers")) this.normalizers = { ...this.normalizers };
+
+      const definition = defineNormalizer(attribute, normalize as Normalizer, options);
+      this.normalizers[attribute] = definition;
+
+      // An accessor on the prototype, so an assignment is normalized wherever
+      // it comes from — the constructor, `assign`, or a bare `record.email =`.
+      Object.defineProperty(this.prototype, attribute, {
+        configurable: true,
+        get(this: BaseModel) {
+          return this[ATTRIBUTES][attribute];
+        },
+        set(this: BaseModel, value: unknown) {
+          this[ATTRIBUTES][attribute] = normalizeValue(definition, value);
+        },
+      });
+    }
+
+    /** Runs a value through this model's normalizer for a column, if it has one. */
+    static normalizeValueFor(attribute: string, value: unknown): unknown {
+      const definition = this.normalizers[attribute];
+      return definition ? normalizeValue(definition, value) : value;
     }
 
     /** Rewrites `{ status: "draft" }` into what the column holds. */
@@ -725,7 +772,10 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         prepare: async () => {
           await this.columnTypes();
         },
-        prepareConditions: (conditions) => this.encryptConditions(this.enumConditions(conditions)),
+        prepareConditions: (conditions) =>
+          this.encryptConditions(
+            this.enumConditions(normalizeConditions(this.normalizers, conditions)),
+          ),
         joinFor: (name) => this.joinFor(name),
         preload: async (records, names) => {
           for (const name of names) {
@@ -1386,7 +1436,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const klass = this.constructor as typeof BaseModel;
 
       if (Object.keys(klass.nestedAttributes).length === 0) {
-        Object.assign(this[ATTRIBUTES], values);
+        assignThrough(this, values as Record<string, unknown>);
         return;
       }
 
@@ -1395,7 +1445,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         klass.nestedAttributes,
       );
 
-      Object.assign(this[ATTRIBUTES], attributes);
+      assignThrough(this, attributes);
       Object.assign(this[NESTED], nested);
     }
 
@@ -2077,6 +2127,25 @@ function formatTimestamp(connection: Connection, date: Date): string {
  * attributes, and `attributes` or `save` arriving as a column name should
  * still be treated as a column.
  */
+/**
+ * Assigns values, routing anything the class defines a setter for through it.
+ *
+ * `Object.assign` onto the attribute bag writes past every accessor a model
+ * declared — a normalized column would keep its untidy value, an enum would
+ * store the word where the column wants an integer, and a plain password would
+ * be written as a column of its own beside its hash. The constructor already
+ * had this; `assign` did not, so `record.assign(...)` and `record.update(...)`
+ * quietly behaved differently from `Model.create(...)`.
+ */
+function assignThrough(record: object, values: Record<string, unknown>): void {
+  const bag = (record as { [ATTRIBUTES]: Record<string, unknown> })[ATTRIBUTES];
+
+  for (const [key, value] of Object.entries(values)) {
+    if (hasSetter(record, key)) (record as Record<string, unknown>)[key] = value;
+    else bag[key] = value;
+  }
+}
+
 function hasSetter(object: object, key: string): boolean {
   for (let current: object | null = object; current; current = Object.getPrototypeOf(current)) {
     const descriptor = Object.getOwnPropertyDescriptor(current, key);
@@ -2141,6 +2210,14 @@ export interface ModelClass<A extends object> {
   /** Rails' `enum`: a column of integers the application reads as words. */
   enum(attribute: string, mapping: EnumMapping, options?: EnumOptions): void;
   enums: Record<string, EnumDefinition>;
+  /** Rails' `normalizes`: tidied on the way in and in the lookups. */
+  normalizes<V = string>(
+    attribute: string,
+    normalize: (value: V) => unknown,
+    options?: NormalizeOptions,
+  ): void;
+  normalizeValueFor(attribute: string, value: unknown): unknown;
+  normalizers: Record<string, NormalizeDefinition>;
   associations: Record<string, AssociationDefinition>;
   readonly table: string;
   readonly connection: Connection;
