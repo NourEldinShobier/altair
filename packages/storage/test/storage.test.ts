@@ -19,6 +19,7 @@ import {
   createBlob,
   createStorageTables,
   diskPath,
+  UnsafeKey,
   DiskService,
   FileNotFound,
   generateKey,
@@ -358,5 +359,101 @@ describe("the S3 service", () => {
         "content-md5": "Q2hlY2tzdW0=",
       });
     });
+  });
+});
+
+/**
+ * Keys that name something other than a file in the root.
+ *
+ * A key is a single path segment. Everything the framework generates is 28
+ * alphanumeric characters, and the tokens `serveDisk` reads are signed, so
+ * none of this is reachable through the framework's own paths today. It is
+ * worth holding anyway: an application that keeps its own keys and calls
+ * `download(key)` with one it was handed is doing an ordinary thing, and the
+ * failure there is reading or writing any file the process can reach.
+ *
+ * Both of these were found by building the path and looking at it, not by
+ * reading the function.
+ */
+describe("a key that tries to leave the root", () => {
+  it("cannot climb", () => {
+    for (const key of ["../../../../etc/passwd", "ab/../../../secret", "variants/../../x"]) {
+      expect(() => diskPath(key)).toThrow(UnsafeKey);
+    }
+  });
+
+  // Nesting is legitimate: a variant lives under `variants/<key>/<digest>`, and
+  // a first version of this guard barred separators outright and broke every
+  // variant in the suite. What a key may not do is climb.
+  it("may nest, which is what variants do", () => {
+    expect(() => diskPath("variants/abcdefgh/deadbeef")).not.toThrow();
+  });
+
+  it("cannot use a Windows separator, which would nest there and not here", () => {
+    expect(() => diskPath("a\\b")).toThrow(UnsafeKey);
+    expect(() => diskPath("..\\..\\etc")).toThrow(UnsafeKey);
+  });
+
+  it("cannot be absolute", () => {
+    expect(() => diskPath("/etc/passwd")).toThrow(UnsafeKey);
+  });
+
+  it("cannot hold an empty segment", () => {
+    expect(() => diskPath("variants//x")).toThrow(UnsafeKey);
+  });
+
+  // The first hole: the path nests by the key's first two characters, so a key
+  // beginning `..` makes `..` a directory — `root/../` — without the key ever
+  // containing a separator. `..%2F..%2Fetc` went one level up on that alone.
+  it("cannot start with a dot", () => {
+    for (const key of ["..%2F..%2Fetc", "..", ".", ".hidden", "..abcd"]) {
+      expect(() => diskPath(key)).toThrow(UnsafeKey);
+    }
+  });
+
+  it("cannot be empty", () => {
+    expect(() => diskPath("")).toThrow(UnsafeKey);
+  });
+
+  it("cannot carry a control character", () => {
+    expect(() => diskPath("ab\u0000cd")).toThrow(UnsafeKey);
+    expect(() => diskPath("ab\ncd")).toThrow(UnsafeKey);
+  });
+
+  it("cannot be absurdly long", () => {
+    expect(() => diskPath("a".repeat(2000))).toThrow(UnsafeKey);
+  });
+
+  it("says which key it refused", () => {
+    expect(() => diskPath("../etc")).toThrow(/\.\.\/etc/);
+  });
+
+  // The guard has to leave the keys the framework actually makes alone.
+  it("lets an ordinary key through", () => {
+    expect(diskPath("abcdefgh")).toBe("ab/cd/abcdefgh");
+    expect(diskPath(generateKey())).toContain("/");
+  });
+
+  it("lets a key with a dot inside it through", () => {
+    expect(diskPath("avatar.2024.png")).toBe("av/at/avatar.2024.png");
+  });
+
+  // The second hole: a key shorter than four characters has no second folder,
+  // and joining blindly gave `a//a` — a segment naming nothing.
+  it("leaves no empty segment for a short key", () => {
+    expect(diskPath("a")).toBe("a/a");
+    expect(diskPath("abc")).toBe("ab/c/abc");
+  });
+
+  it("refuses to write outside the root", async () => {
+    expect(disk.upload("../../escaped.txt", bytes("owned"))).rejects.toThrow(UnsafeKey);
+  });
+
+  it("refuses to read outside the root", async () => {
+    expect(disk.download("../../../etc/passwd")).rejects.toThrow(UnsafeKey);
+  });
+
+  it("refuses to delete outside the root", async () => {
+    expect(disk.delete("../../something")).rejects.toThrow(UnsafeKey);
   });
 });
