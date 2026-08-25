@@ -71,6 +71,50 @@ export const DEFAULT_RETRY: RetryPolicy = {
   backoff: (attempt) => attempt ** 4 + 3,
 };
 
+/** Something a `catch` can test against — a class, or a predicate. */
+export type ErrorMatcher = (new (...args: never[]) => Error) | ((error: unknown) => boolean);
+
+/** One rule about what a particular failure means. */
+export interface ErrorRule {
+  matches: ErrorMatcher;
+  /** Absent for a discard: there is nothing to wait for. */
+  policy?: RetryPolicy;
+}
+
+/**
+ * Whether a rule covers this error.
+ *
+ * A class is tested with `instanceof` and anything else is called, so a rule
+ * can key off a status code or a message when the failure does not have a
+ * class of its own — which, for anything that came back over HTTP, it usually
+ * does not.
+ */
+export function matchesError(matcher: ErrorMatcher, error: unknown): boolean {
+  // A class has a prototype it did not inherit; an arrow function does not.
+  // Calling a class without `new` throws, so telling them apart matters.
+  const isClass = typeof matcher === "function" && matcher.prototype !== undefined;
+
+  if (isClass) return error instanceof (matcher as new (...args: never[]) => Error);
+
+  return (matcher as (error: unknown) => boolean)(error);
+}
+
+/**
+ * A class's own rules, copying the parent's on first write.
+ *
+ * Without the copy a subclass pushing a rule would add it to whatever class
+ * declared the array, and every sibling job would inherit it.
+ *
+ * A function rather than a static private method: a static `#member` belongs
+ * to the class that declared it, and `this` inside a subclass's static block
+ * is the subclass — which throws rather than inheriting.
+ */
+function rulesFor(klass: typeof Job): ErrorRule[] {
+  if (!Object.hasOwn(klass, "errorRules")) klass.errorRules = [...klass.errorRules];
+
+  return klass.errorRules;
+}
+
 /** Raised when a job class is enqueued but the worker cannot find it. */
 export class UnknownJob extends Error {
   constructor(name: string) {
@@ -97,6 +141,8 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
   static queueName = "default";
   static retryPolicy: RetryPolicy = DEFAULT_RETRY;
   static adapter: QueueAdapter | undefined;
+  /** Per-error rules, first match wins. Rails' `retry_on` and `discard_on`. */
+  static errorRules: ErrorRule[] = [];
 
   static {
     this.defineCallbacks("perform");
@@ -133,6 +179,57 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       throw new Error("No queue adapter configured. Set Job.adapter before enqueuing.");
     }
     return this.adapter;
+  }
+
+  /**
+   * Retries this error differently from the rest. Rails' `retry_on`.
+   *
+   *     class ChargeCard extends Job {
+   *       static { this.retryOn(RateLimited, { attempts: 10, wait: 60 }) }
+   *     }
+   *
+   * Rules are tried in the order they are declared and the first match wins,
+   * so a specific error goes above a general one.
+   */
+  static retryOn(
+    matches: ErrorMatcher,
+    options: { attempts?: number; wait?: number | ((attempt: number) => number) } = {},
+  ): void {
+    const wait = options.wait ?? DEFAULT_RETRY.backoff;
+
+    rulesFor(this).push({
+      matches,
+      policy: {
+        attempts: options.attempts ?? DEFAULT_RETRY.attempts,
+        backoff: typeof wait === "function" ? wait : () => wait,
+      },
+    });
+  }
+
+  /**
+   * Gives up on this error at once. Rails' `discard_on`.
+   *
+   * For a failure that will not come right on its own: the record was deleted,
+   * the argument no longer deserializes, the remote said 404. Retrying one of
+   * those five times with a growing wait fills the queue and the error
+   * tracker with work that was never going to succeed.
+   */
+  static discardOn(matches: ErrorMatcher): void {
+    rulesFor(this).push({ matches });
+  }
+
+  /**
+   * What to do about a failure: a policy to retry under, or null to discard.
+   *
+   * Falls back to the class's `retryPolicy` when no rule matches, which is the
+   * behaviour every job had before rules existed.
+   */
+  static policyFor(error: unknown): RetryPolicy | null {
+    const rule = this.errorRules.find((candidate) => matchesError(candidate.matches, error));
+
+    if (rule) return rule.policy ?? null;
+
+    return this.retryPolicy ?? DEFAULT_RETRY;
   }
 
   /** Runs the job now, in this process. Rails' `perform_now`. */
