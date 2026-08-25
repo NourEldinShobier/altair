@@ -17,3 +17,4 @@ export * from "./after_commit.js";
 export * from "./enum.js";
 export * from "./query_cache.js";
 export * from "./normalizes.js";
+export * from "./attributes.js";

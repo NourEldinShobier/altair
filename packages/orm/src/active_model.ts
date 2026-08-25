@@ -33,6 +33,14 @@
 import { camelize, humanize, i18n, pluralize, t, tableize, underscore } from "@altair/support";
 import { ValidationErrors } from "./model.js";
 import {
+  defaultFor,
+  defineAttribute,
+  type AttributeDefinition,
+  type AttributeOptions,
+  type AttributeType,
+  type Caster,
+} from "./attributes.js";
+import {
   runValidation,
   type ValidationDeclaration,
   type ValidationOptions,
@@ -144,6 +152,9 @@ export function partialPathFor(record: HasConstructor): string {
 }
 
 const ORIGINAL = Symbol("altair.activeModel.original");
+// Typed attributes live here rather than as own properties, so the accessor
+// on the prototype is what every read and write goes through.
+const TYPED = Symbol("altair.activeModel.typed");
 
 /**
  * A model with no table. Rails' `ActiveModel::Model`.
@@ -159,6 +170,42 @@ export abstract class ActiveModel {
   declare private [ORIGINAL]: Record<string, unknown>;
 
   static validations: ValidationDeclaration[] = [];
+
+  static attributeTypes: Record<string, AttributeDefinition> = {};
+
+  /**
+   * Declares a typed attribute. Rails' `ActiveModel::Attributes`.
+   *
+   *     static { this.attribute("page", "integer", { default: 1 }) }
+   *
+   * A form posts strings — every value arriving from a browser is one,
+   * including the ones that mean a number and the ones that mean no. Without
+   * casting, `page > 1` compares a string to a number and `if (unread)` is
+   * true for the string "0".
+   */
+  static attribute(
+    name: string,
+    type: AttributeType | Caster = "string",
+    options: AttributeOptions = {},
+  ): void {
+    // Copy on write, so a subclass adding one leaves its parent alone.
+    if (!Object.hasOwn(this, "attributeTypes")) this.attributeTypes = { ...this.attributeTypes };
+
+    const definition = defineAttribute(name, type, options);
+    this.attributeTypes[name] = definition;
+
+    Object.defineProperty(this.prototype, name, {
+      configurable: true,
+      enumerable: true,
+      get(this: Record<symbol, Record<string, unknown>>) {
+        return this[TYPED]?.[name];
+      },
+      set(this: Record<symbol, Record<string, unknown>>, value: unknown) {
+        this[TYPED] ??= {};
+        this[TYPED][name] = definition.cast(value);
+      },
+    });
+  }
 
   /** Declares a validation. Rails' `validates`. */
   static validates(attribute: string, options: ValidationOptions): void {
@@ -196,6 +243,16 @@ export abstract class ActiveModel {
     // see the fields and nothing else.
     Object.defineProperty(this, "errors", { value: new ValidationErrors(), enumerable: false });
     Object.defineProperty(this, ORIGINAL, { value: {}, writable: true, enumerable: false });
+    Object.defineProperty(this, TYPED, { value: {}, writable: true, enumerable: false });
+
+    // Defaults first, so an assignment overwrites one rather than the other
+    // way round.
+    const klass = this.constructor as typeof ActiveModel;
+    for (const definition of Object.values(klass.attributeTypes)) {
+      if (definition.options.default !== undefined) {
+        (this as Record<string, unknown>)[definition.name] = defaultFor(definition);
+      }
+    }
 
     Object.assign(this, attributes);
     this.changesApplied();
@@ -205,9 +262,14 @@ export abstract class ActiveModel {
     return modelNameFor(this.constructor);
   }
 
-  /** Every own enumerable property. Rails' `attributes`. */
+  /** Every own enumerable property, plus the declared ones. */
   attributes(): Record<string, unknown> {
-    return { ...this } as Record<string, unknown>;
+    const declared = (this as unknown as Record<symbol, Record<string, unknown>>)[TYPED];
+
+    // The declared ones are not own properties — they live behind an accessor
+    // — so spreading alone would miss exactly the attributes that were
+    // declared most carefully.
+    return { ...declared, ...this } as Record<string, unknown>;
   }
 
   assign(values: Record<string, unknown>): void {

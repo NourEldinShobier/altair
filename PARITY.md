@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,546** | 26,775    | 9.5% |
+| **Total** | **2,571** | 26,775    | 9.6% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,7 +24,7 @@ one that needs no server.
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 590   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/orm`        | 615   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 299   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 124   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 85    | Resourceful routing, typed path helpers                                    |
@@ -127,7 +127,7 @@ Rails: 21,159 lines · 2,699 tests
 | ActionMailer                     | 2,795     | 292         | `@altair/mailer`              | **done** — previews and attachments    |
 | ActiveJob                        | 4,965     | 515         | `@altair/jobs`                | **done** — waits for the transaction   |
 | Railties (boot, generators, CLI) | 16,874    | 2,791       | `@altair/cli`, `@altair/core` | **done** — environments, health check  |
-| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **done** — tableless models and naming |
+| ActiveModel                      | 9,210     | 1,091       | `@altair/orm`                 | **done** — typed attributes and naming |
 | ActiveStorage                    | 4,110     | 626         | `@altair/storage`             | **done** — variants and direct uploads |
 | ActionText                       | 2,617     | 318         | `@altair/orm`, `@altair/view` | **done** — rich text and sanitizing    |
 | ActionMailbox                    | 750       | 123         | `@altair/mailer`              | **done** — routing, ingress, retries   |
