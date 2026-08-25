@@ -23,6 +23,7 @@ import {
   skipCallback,
 } from "@altair/support";
 import { Parameters } from "./parameters.js";
+import { parseNestedParams } from "./nested_params.js";
 import { CookieJar } from "./cookies.js";
 import { Flash, Session, type SessionOptions } from "./session.js";
 import { InvalidAuthenticityToken, isVerifiedRequest, maskedToken } from "./csrf.js";
@@ -142,7 +143,9 @@ export class Controller extends Callbacks {
     this.request = context.request;
     this.url = new URL(context.request.url);
 
-    const query = Object.fromEntries(this.url.searchParams.entries());
+    // Not `Object.fromEntries`: it keeps only the last of a repeated name, so
+    // `?tags[]=a&tags[]=b` would silently arrive as one tag.
+    const query = parseNestedParams(this.url.searchParams.entries());
     this.params = Parameters.from(query, context.params, context.routeParams);
 
     this.cookies = new CookieJar(context.request, context.secrets);
