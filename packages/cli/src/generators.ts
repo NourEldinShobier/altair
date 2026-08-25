@@ -10,7 +10,15 @@
  * behind, and no commented-out examples.
  */
 
-import { camelize, classify, pluralize, singularize, tableize, underscore } from "@altair/support";
+import {
+  camelize,
+  classify,
+  humanize,
+  pluralize,
+  singularize,
+  tableize,
+  underscore,
+} from "@altair/support";
 
 export interface GeneratedFile {
   path: string;
@@ -303,6 +311,135 @@ export class ${controllerName} extends Controller {
 }
 
 /** `altair generate scaffold Post title:string` — model, migration, controller. */
+/**
+ * Rails' `rails g mailer`.
+ *
+ * The methods are static, because that is how a mailer reads at the call site
+ * — `UserMailer.welcome(user).deliverNow()` — and the body is TSX rather than
+ * a template, so there is one file rather than three.
+ */
+export function generateMailer(name: string, actions: string[] = []): GeneratedFile[] {
+  // Not singularized: a mailer name is whatever the person chose, and
+  // `singularize` would turn `Notifications` into `Notification`.
+  const base = underscore(name).replace(/_mailer$/, "");
+  const className = `${camelize(base)}Mailer`;
+  const named = actions.length > 0 ? actions : ["welcome"];
+
+  const methods = named
+    .map(
+      (action) => `  static ${camelize(action, false)}(to: string) {
+    return this.mail({
+      to,
+      subject: ${JSON.stringify(humanize(underscore(action)))},
+      html: <p>Write ${camelize(action, false)} here.</p>,
+    });
+  }`,
+    )
+    .join("\n\n");
+
+  return [
+    {
+      path: `app/mailers/${base}_mailer.tsx`,
+      contents: `import { Mailer } from "@altair/mailer";
+
+export class ${className} extends Mailer {
+  // Every message needs a sender, and a mailer with no default has to be
+  // given one on every call. Change this to yours.
+  static override defaults = { from: "from@example.com" };
+
+${methods}
+}
+`,
+    },
+    {
+      path: `test/mailers/${base}_mailer.test.ts`,
+      contents: `import { describe, expect, it } from "bun:test";
+import { ${className} } from "#mailers/${base}_mailer";
+
+describe("${className}", () => {
+${named
+  .map(
+    (action) => `  it("builds ${camelize(action, false)}", async () => {
+    const message = await ${className}.${camelize(action, false)}(
+      "someone@example.com",
+    ).toMessage();
+
+    expect(message.to).toBe("someone@example.com");
+    expect(message.html).toContain("${camelize(action, false)}");
+  });`,
+  )
+  .join("\n\n")}
+});
+`,
+    },
+  ];
+}
+
+/**
+ * Rails' `rails g job`.
+ *
+ * Enqueued after the transaction that created the work commits, which is the
+ * default and the reason the generated comment says so — a job that runs
+ * against a row the transaction rolled back is the bug this framework goes out
+ * of its way to prevent.
+ */
+export function generateJob(name: string): GeneratedFile[] {
+  // Not singularized — `CleanupImages` is a job name, not a plural to fold.
+  const base = underscore(name).replace(/_job$/, "");
+  const className = `${camelize(base)}Job`;
+
+  return [
+    {
+      path: `app/jobs/${base}_job.ts`,
+      contents: `import { Job } from "@altair/jobs";
+
+export class ${className} extends Job {
+  // Enqueue with \`${className}.performLater(id)\`. Inside a transaction it
+  // waits for the commit, so a worker never sees a row that was rolled back.
+  override async perform(id: number): Promise<void> {
+    void id;
+  }
+}
+`,
+    },
+    {
+      path: `test/jobs/${base}_job.test.ts`,
+      contents: `import { describe, expect, it } from "bun:test";
+import { ${className} } from "#jobs/${base}_job";
+
+describe("${className}", () => {
+  it("performs", async () => {
+    await expect(${className}.performNow(1)).resolves.toBeUndefined();
+  });
+});
+`,
+    },
+  ];
+}
+
+/** Rails' `rails g channel`. */
+export function generateChannel(name: string): GeneratedFile[] {
+  const base = underscore(name).replace(/_channel$/, "");
+  const className = `${camelize(base)}Channel`;
+
+  return [
+    {
+      path: `app/channels/${base}_channel.ts`,
+      contents: `import { Channel } from "@altair/cable";
+
+export class ${className} extends Channel {
+  override async subscribed(): Promise<void> {
+    // Reject anyone who should not be here before streaming anything to them.
+    this.streamFrom("${base}");
+  }
+
+  override async unsubscribed(): Promise<void> {}
+}
+`,
+    },
+  ];
+}
+
 export function generateScaffold(name: string, fields: FieldSpec[], now: Date): GeneratedFile[] {
   return [
     generateMigration(`create_${tableize(name)}`, fields, now),
