@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,642** | 26,775    | 9.9% |
+| **Total** | **2,658** | 26,775    | 9.9% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,7 +24,7 @@ one that needs no server.
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 650   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/orm`        | 666   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 335   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 124   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 85    | Resourceful routing, typed path helpers                                    |
@@ -79,6 +79,7 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Enums                         | 291       | **done** | Words in the app, integers in the column, mapped in queries     |
 | Normalization                 | 180       | **done** | `normalizes`, applied on write and in the lookups               |
 | Default scopes & tokens       | 420       | **done** | `defaultScope` (reads only), `hasSecureToken`                   |
+| Serialized columns            | 640       | **done** | `serialize`/`store`, dirty tracking sees an in-place edit       |
 | Counter cache                 | —         | **done** | Adjusted on create and destroy                                  |
 | Touch / cache invalidation    | —         | **done** | `touch`, `belongsTo(touch: true)`, keyed off `cacheKey`         |
 | Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                |
