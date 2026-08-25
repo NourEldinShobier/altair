@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |       |
 | --------- | --------- | --------- | ----- |
-| **Total** | **2,895** | 26,775    | 10.8% |
+| **Total** | **2,897** | 26,775    | 10.8% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -23,14 +23,14 @@ one that needs no server.
 
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
-| `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 703   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/support`    | 853   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
+| `@altair/orm`        | 705   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 393   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 124   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 85    | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 58    | Action Cable, protocol-compatible with Rails' client                       |
 | `@altair/storage`    | 132   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
-| `@altair/view`       | 226   | TSX rendering, layouts, Inertia protocol, form builders                    |
+| `@altair/view`       | 170   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 87    | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 75    | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 115   | Config, boot lifecycle, request handler, credentials, logging              |

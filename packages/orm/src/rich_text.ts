@@ -16,6 +16,7 @@
  * nothing for what is already in the database.
  */
 
+import { sanitize } from "@altair/support";
 import { Model } from "./model.js";
 import type { SchemaStatements } from "./schema.js";
 
@@ -105,13 +106,11 @@ export class RichTextField {
     const body = await this.body();
     if (body === null) return "";
 
-    if (!sanitizer) {
-      throw new Error(
-        "Rich text has no sanitizer. Call configureRichText({ sanitizer }) with one — rendering a stored body unsanitized is how a stored cross-site scripting bug works.",
-      );
-    }
-
-    return await sanitizer(body);
+    // Falls back to the shared sanitizer rather than refusing to render.
+    // Throwing was the safe failure, but it made Action Text unusable until an
+    // application wired something up — and the thing most likely to be wired
+    // up in a hurry is worse than the one that ships.
+    return sanitizer ? await sanitizer(body) : await sanitize(body);
   }
 
   /** Deletes the body. */
