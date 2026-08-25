@@ -9,6 +9,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { travelTo } from "@altair/support";
 
 interface PostRow {
   id: number;
@@ -175,16 +176,18 @@ describe("keeping a cache key honest", () => {
   // was cut to whole seconds, so a record touched twice in the same second
   // kept the same key and every cache downstream went on serving the old
   // content. Two comments arriving together is not unusual.
+  // Held rather than slept through. The clock is the thing under test, so
+  // moving it is more honest than waiting for it — and it is the difference
+  // between a test that takes a millisecond and one that takes two.
   it("changes even when touched twice in the same second", async () => {
-    const post = await Post.create({ title: "Hello" });
+    const post = await travelTo(new Date("2026-06-01T12:00:00.000Z"), async () =>
+      Post.create({ title: "Hello" }),
+    );
     const before = post.cacheKey();
 
-    // A couple of milliseconds, because that is the resolution the key has and
-    // the resolution it claims. Two writes inside one millisecond still
-    // collide; JS timestamps carry nothing finer, and this is a thousand times
-    // narrower than the whole second it used to be.
-    await new Promise((resolve) => setTimeout(resolve, 2));
-    await post.touch();
+    await travelTo(new Date("2026-06-01T12:00:00.400Z"), async () => {
+      await post.touch();
+    });
 
     expect(post.cacheKey()).not.toBe(before);
   });
