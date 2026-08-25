@@ -51,6 +51,36 @@ export function parseSegments(pattern: string): Segment[] {
     });
 }
 
+/**
+ * Decodes a captured segment the way the rest of the stack expects.
+ *
+ * A path arrives percent-encoded — a browser sends `/posts/caf%C3%A9` for a
+ * slug with an accent in it, and `%20` for one with a space — and without this
+ * the action looked up `"caf%C3%A9"` and found nothing. Every route with a
+ * non-numeric id was affected, which is most of the routes anybody writes.
+ *
+ * A constraint is checked twice and this sits between them. The route's own
+ * pattern has the constraint compiled into it and matches the raw path; the
+ * check after extraction sees the decoded value. That second one is why the
+ * order here matters: a constraint written to keep a slash out of an id passes
+ * the pattern happily, because `%2F` holds no slash, and would hand the action
+ * one anyway if the value reached it undecoded.
+ *
+ * A malformed escape keeps its raw text rather than throwing. `decodeURI`
+ * raises on `%zz`, and a request that cannot be parsed should not become a
+ * stack trace — the same call the cookie parser makes for the same reason. The
+ * value will not match anything, and the request ends as the 404 it is.
+ */
+function decodeSegment(value: string): string {
+  if (!value.includes("%")) return value;
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export class Route {
   readonly method: HttpMethod;
   readonly pattern: string;
@@ -122,7 +152,7 @@ export class Route {
     const params: Record<string, string> = { ...this.defaults };
     this.#captures.forEach((capture, index) => {
       const value = result[index + 1];
-      if (value !== undefined) params[capture] = value;
+      if (value !== undefined) params[capture] = decodeSegment(value);
     });
 
     for (const [key, constraint] of Object.entries(this.constraints)) {
