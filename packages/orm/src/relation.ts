@@ -146,6 +146,31 @@ function joinClauses(clauses: WhereClause[]): { sql: string; bindings: unknown[]
   };
 }
 
+/** What a lock keeps out. Rails' `lock` and `lock("FOR SHARE")`. */
+export type LockMode = "update" | "share";
+
+/**
+ * The clause each adapter wants, or none at all.
+ *
+ * SQLite has no row locking and needs none: a write transaction locks the
+ * whole database, so the read-modify-write this protects is already
+ * serialized. Emitting `FOR UPDATE` there would be a syntax error — so the
+ * same application code is correct on all three, and only the SQL differs.
+ *
+ * MySQL spelled the shared lock `LOCK IN SHARE MODE` until 8.0 and accepts
+ * `FOR SHARE` from 8.0 on; MariaDB accepts both. The older spelling is used
+ * because it is the one every supported version understands.
+ */
+function lockClause(adapter: string, mode: LockMode): string {
+  if (adapter === "sqlite") return "";
+
+  if (mode === "share") {
+    return adapter === "mysql" ? " LOCK IN SHARE MODE" : " FOR SHARE";
+  }
+
+  return " FOR UPDATE";
+}
+
 export class Relation<T> implements PromiseLike<T[]> {
   #source: RelationSource<T>;
   #wheres: WhereClause[] = [];
@@ -157,6 +182,7 @@ export class Relation<T> implements PromiseLike<T[]> {
   #groups: string[] = [];
   #havings: WhereClause[] = [];
   #distinct = false;
+  #lock: LockMode | undefined;
   #joins: JoinClause[] = [];
   /**
    * Records handed over by `includes`. Chaining clears this — `#clone` does not
@@ -180,6 +206,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#groups = [...this.#groups];
     next.#havings = [...this.#havings];
     next.#distinct = this.#distinct;
+    next.#lock = this.#lock;
     next.#joins = [...this.#joins];
     return next;
   }
@@ -432,6 +459,32 @@ export class Relation<T> implements PromiseLike<T[]> {
     return next;
   }
 
+  /**
+   * Locks the rows this reads until the transaction ends. Rails' `lock`.
+   *
+   *     await connection.transaction(async () => {
+   *       const account = await Account.where({ id }).lock().first()
+   *       await account.update({ balance: account.balance - 10 })
+   *     })
+   *
+   * The problem it solves is the one every balance and every counter has:
+   * two requests read the same row, both subtract from what they read, and one
+   * of the two subtractions vanishes. Nothing about that is visible in either
+   * request — both succeeded — and it happens under load and never in a test.
+   *
+   * `"share"` lets other readers in and keeps writers out, which is what a
+   * foreign-key check wants; the default keeps both out.
+   *
+   * Only meaningful inside a transaction: a lock is released when the
+   * transaction ends, and a `SELECT … FOR UPDATE` outside one is released
+   * immediately, which is the same as not taking it.
+   */
+  lock(mode: LockMode = "update"): Relation<T> {
+    const next = this.#clone();
+    next.#lock = mode;
+    return next;
+  }
+
   select(...columns: string[]): Relation<T> {
     const next = this.#clone();
     next.#selects = columns;
@@ -521,6 +574,8 @@ export class Relation<T> implements PromiseLike<T[]> {
 
     if (this.#limit !== undefined) sql += ` LIMIT ${Number(this.#limit)}`;
     if (this.#offset !== undefined) sql += ` OFFSET ${Number(this.#offset)}`;
+
+    if (this.#lock) sql += lockClause(connection.adapter, this.#lock);
 
     return { sql: this.#renumber(sql), bindings };
   }

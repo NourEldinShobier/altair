@@ -307,6 +307,7 @@ export interface BaseModelInstance<A> {
   toParam(): string;
   cacheKey(): string;
   touch(...columns: string[]): Promise<void>;
+  withLock<R>(body: () => Promise<R>): Promise<R>;
   serializableHash(options?: SerializationOptions): Record<string, unknown>;
   toPartialPath(): string;
   readonly modelName: ModelName;
@@ -1129,6 +1130,53 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     toParam(): string {
       const klass = this.constructor as typeof BaseModel;
       return String(this[ATTRIBUTES][klass.primaryKey] ?? "");
+    }
+
+    /**
+     * Reloads this record with a lock held, then runs the block. Rails'
+     * `with_lock`.
+     *
+     *     await account.withLock(async () => {
+     *       await account.update({ balance: Number(account.balance) - 10 })
+     *     })
+     *
+     * The reload is the part that matters and the part people leave out. A
+     * lock taken on a row you read a moment ago protects nothing: the value in
+     * memory is already stale, and subtracting from a stale balance is exactly
+     * the bug the lock was for. Reloading inside the lock is what makes the
+     * read-modify-write atomic.
+     *
+     * Opens a transaction if there is not one, because a lock released
+     * immediately is the same as no lock.
+     */
+    async withLock<R>(body: () => Promise<R>): Promise<R> {
+      const klass = this.constructor as typeof BaseModel;
+
+      return await klass.connection.transaction(async () => {
+        const id = this[ATTRIBUTES][klass.primaryKey];
+
+        const locked = await (
+          klass as unknown as {
+            where(conditions: Record<string, unknown>): {
+              lock(): { first(): Promise<{ attributes(): Record<string, unknown> } | null> };
+            };
+          }
+        )
+          .where({ [klass.primaryKey]: id })
+          .lock()
+          .first();
+
+        if (!locked) {
+          throw new RecordNotFound(`Cannot lock ${klass.name} ${String(id)}: it is gone.`);
+        }
+
+        // The record in hand becomes the locked one, so the block reads what
+        // the database holds rather than what was read before the lock.
+        this[ATTRIBUTES] = locked.attributes();
+        this[ORIGINAL] = { ...this[ATTRIBUTES] };
+
+        return await body();
+      });
     }
 
     /**

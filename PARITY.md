@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |      |
 | --------- | --------- | --------- | ---- |
-| **Total** | **2,411** | 26,775    | 9.0% |
+| **Total** | **2,417** | 26,775    | 9.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -24,7 +24,7 @@ one that needs no server.
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 797   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 527   | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/orm`        | 533   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 265   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 116   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 66    | Resourceful routing, typed path helpers                                    |
@@ -79,6 +79,7 @@ Rails: 71,873 lines · 10,602 tests — the largest remaining block
 | Counter cache                 | —         | **done** | Adjusted on create and destroy                                  |
 | Touch / cache invalidation    | —         | **done** | `touch`, `belongsTo(touch: true)`, keyed off `cacheKey`         |
 | Optimistic locking            | —         | **done** | `lock_version`, StaleObjectError                                |
+| Pessimistic locking           | —         | **done** | `lock()`, `withLock`, per-adapter; SQLite needs none            |
 | Multiple databases & sharding | —         | **done** | Named databases, roles, read-only guard, horizontal shards      |
 | Encryption                    | 2,046     | **done** | Deterministic and random-nonce, queryable when deterministic    |
 
