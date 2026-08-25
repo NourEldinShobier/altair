@@ -17,6 +17,7 @@
  */
 
 import { runCallbacks, Callbacks, callbackDecorators } from "@altair/support";
+import { afterCommit, isDeferring } from "@altair/orm";
 
 const {
   before: beforePerform,
@@ -39,6 +40,15 @@ export interface JobPayload {
 }
 
 export interface EnqueueOptions {
+  /**
+   * Whether to wait for the surrounding transaction before enqueueing.
+   *
+   * On by default, and worth leaving on. Turn it off only for a job that must
+   * be visible to a worker regardless of what the transaction does — which is
+   * rarer than it sounds, since a job that runs against uncommitted data
+   * cannot see it either.
+   */
+  enqueueAfterCommit?: boolean;
   /** Seconds to wait before the job becomes runnable. Rails' `wait`. */
   wait?: number;
   /** Run at a specific time. Rails' `wait_until`. */
@@ -166,6 +176,24 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       attempts: 0,
       enqueuedAt: Date.now(),
     };
+
+    // Deferred until the transaction commits, which Rails made the default in
+    // 7.2 because the alternative kept biting people. A job enqueued inside a
+    // transaction is enqueued whether or not it commits, so a rollback hands a
+    // worker the id of a row that never existed — and a worker can pick it up
+    // before the commit lands, when the row is genuinely not there yet.
+    //
+    // Not routed through `afterCommit`'s own immediate path: outside a
+    // transaction an enqueue that fails has to reach the caller, who is still
+    // there to hear it. Inside one it cannot — they returned long ago — so it
+    // goes to the error reporter instead.
+    if ((options.enqueueAfterCommit ?? true) && isDeferring()) {
+      await afterCommit(async () => {
+        await this.queue.enqueue(payload);
+      });
+
+      return payload;
+    }
 
     await this.queue.enqueue(payload);
     return payload;
