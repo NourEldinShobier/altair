@@ -117,6 +117,46 @@ export interface RescueHandler {
   handler: (this: Controller, error: Error) => unknown | Promise<unknown>;
 }
 
+/** Raised when a redirect would leave the host, and nobody said it could. */
+export class UnsafeRedirect extends Error {
+  constructor(
+    readonly location: string,
+    readonly host: string,
+  ) {
+    super(
+      `Refusing to redirect to ${JSON.stringify(location)}: it leaves ${host}. Pass { allowOtherHost: true } if that is what you meant.`,
+    );
+    this.name = "UnsafeRedirect";
+  }
+}
+
+/**
+ * Whether a redirect stays on this host.
+ *
+ * Relative is always fine — it cannot name a host. Absolute is fine when the
+ * host matches. Everything else is somebody else's site.
+ */
+export function redirectAllowed(location: string, request: Request): boolean {
+  // A browser reads a backslash in a URL as a slash, so `/\evil.example` is
+  // `//evil.example` by the time it matters. Deciding on the raw string would
+  // be deciding about a URL the browser is not going to follow.
+  const normalized = location.replaceAll("\\", "/");
+
+  // Protocol-relative: no scheme, but a host all the same, and `new URL` with
+  // no base rejects it — so it would otherwise pass as "relative".
+  if (normalized.startsWith("//")) return false;
+
+  let target: URL;
+  try {
+    target = new URL(location);
+  } catch {
+    // No scheme, so it is relative and cannot leave the host.
+    return true;
+  }
+
+  return target.host === new URL(request.url).host;
+}
+
 export class Controller extends Callbacks {
   static {
     this.defineCallbacks<Controller>("action", {
@@ -409,7 +449,15 @@ export class Controller extends Callbacks {
   };
 
   /** Rails' `redirect_to`. Defaults to 302, as Rails does. */
-  redirectTo(location: string, init: { status?: number } = {}): Response {
+  redirectTo(location: string, init: { status?: number; allowOtherHost?: boolean } = {}): Response {
+    // Refused unless asked for, as Rails has done since 7.0. The pattern this
+    // protects is `redirectTo(this.params.get("return_to"))`, which is how
+    // "back to where you were" is written everywhere — and how a link from
+    // your own domain ends up delivering someone to a copy of your login page.
+    if (!init.allowOtherHost && !redirectAllowed(location, this.request)) {
+      throw new UnsafeRedirect(location, new URL(this.request.url).host);
+    }
+
     return this.#setResponse(
       new Response(null, {
         status: init.status ?? 302,
