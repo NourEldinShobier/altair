@@ -88,6 +88,12 @@ import {
   type FreshnessOptions,
 } from "./conditional_get.js";
 import { negotiateFormat } from "./mime.js";
+import {
+  eventStreamResponse,
+  streamResponse,
+  type ServerSentEvent,
+  type StreamOptions,
+} from "./streaming.js";
 
 /** A copy of a response with extra headers. Response headers are immutable. */
 function withHeaders(response: Response, extra: Record<string, string>): Response {
@@ -345,6 +351,31 @@ export class Controller extends Callbacks {
           headers: { "content-type": "text/html; charset=utf-8", ...init.headers },
         }),
       ),
+
+    /**
+     * A body produced as it is sent. For an export too large to hold.
+     *
+     *     await this.render.stream(rows(), { contentType: "text/csv" })
+     *
+     * The request's own abort signal is passed on by default, so a client that
+     * closes the tab stops the work rather than leaving it running for nobody.
+     */
+    stream: (
+      source: AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array>,
+      options: StreamOptions = {},
+    ): Response =>
+      this.#setResponse(streamResponse(source, { signal: this.request.signal, ...options })),
+
+    /**
+     * Server-Sent Events. Rails' `ActionController::Live`, without the thread.
+     *
+     *     await this.render.events(updates())
+     */
+    events: (
+      source: AsyncIterable<ServerSentEvent>,
+      options: Omit<StreamOptions, "contentType"> = {},
+    ): Response =>
+      this.#setResponse(eventStreamResponse(source, { signal: this.request.signal, ...options })),
 
     /**
      * Renders TSX to a full HTML document. The hypermedia path: no client
