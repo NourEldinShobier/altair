@@ -94,6 +94,9 @@ import {
   type ServerSentEvent,
   type StreamOptions,
 } from "./streaming.js";
+import { clientIp, type ClientIpOptions } from "./client_ip.js";
+import { sendData, sendFile, type SendOptions } from "./send.js";
+import { decodeBasic, requestAuthentication, type Credentials } from "./basic_auth.js";
 
 /** A copy of a response with extra headers. Response headers are immutable. */
 function withHeaders(response: Response, extra: Record<string, string>): Response {
@@ -512,6 +515,52 @@ export class Controller extends Callbacks {
   /** For anything a cache must never keep at all. */
   noStore(): void {
     this.#pendingCacheHeaders = { "cache-control": "no-store" };
+  }
+
+  /**
+   * The address the request came from. Rails' `request.remote_ip`.
+   *
+   * Reads nothing from `X-Forwarded-For` unless told how many proxies of your
+   * own sit in front — the header is a list a client can write, so trusting
+   * the first entry is how a rate limit gets walked around and an audit log
+   * gets poisoned.
+   */
+  clientIp(options: ClientIpOptions = {}): string | undefined {
+    return clientIp(this.request, options);
+  }
+
+  /** Sends bytes as a download. Rails' `send_data`. */
+  send(data: Uint8Array | ArrayBuffer | string | Blob, options: SendOptions = {}): Response {
+    return this.#setResponse(sendData(data, options));
+  }
+
+  /** Sends a file from disk, without reading it into memory. Rails' `send_file`. */
+  async sendFile(path: string, options: SendOptions = {}): Promise<Response> {
+    return this.#setResponse(await sendFile(path, options));
+  }
+
+  /** The credentials on the request, if it carries any. */
+  basicCredentials(): Credentials | undefined {
+    return decodeBasic(this.request.headers.get("authorization"));
+  }
+
+  /**
+   * Rails' `authenticate_or_request_with_http_basic`.
+   *
+   * Returns whether the request may proceed, and renders the 401 itself when
+   * it may not — so an action or a filter reads as one line and cannot forget
+   * the second half.
+   */
+  authenticateOrRequest(
+    check: (name: string, password: string) => boolean,
+    realm = "Application",
+  ): boolean {
+    const given = this.basicCredentials();
+
+    if (given && check(given.name, given.password)) return true;
+
+    this.#setResponse(requestAuthentication(realm));
+    return false;
   }
 
   /** Rails' `head`: a response with a status and no body. */
