@@ -91,6 +91,21 @@ export interface AssociationOptions {
   polymorphic?: boolean;
   /** Resolves a polymorphic type name to a model class. */
   types?: Record<string, () => ModelLike>;
+
+  /**
+   * Narrows the association. Rails' `has_many :comments, -> { approved }`.
+   *
+   *     this.hasMany("approvedComments", () => Comment, {
+   *       scope: (comments) => comments.where({ approved: true }).order("created_at"),
+   *     })
+   *
+   * Applied on both paths, which is the only thing about this worth being
+   * careful over: if reading `post.comments()` narrowed and preloading did
+   * not, `includes("comments")` would quietly return a different set of
+   * records than the same call without it — the two disagreeing about what
+   * the association means, with only performance appearing to change.
+   */
+  scope?: (relation: Relation<InstanceLike>) => Relation<InstanceLike>;
 }
 
 export interface AssociationDefinition extends AssociationOptions {
@@ -197,7 +212,7 @@ export async function preloadAssociation(
       return;
     }
 
-    const found = await target.where({ [primaryKey]: ids });
+    const found = await scoped(definition, target.where({ [primaryKey]: ids }));
     const byId = new Map(found.map((record) => [String(record[primaryKey]), record]));
 
     for (const owner of owners) {
@@ -216,10 +231,13 @@ export async function preloadAssociation(
   const ids = [...new Set(owners.map((owner) => owner[primaryKey]).filter((id) => id != null))];
   if (ids.length === 0) return;
 
-  const found = await target.where(
-    definition.as
-      ? { [foreignKey]: ids, [`${definition.as}_type`]: ownerClass.name }
-      : { [foreignKey]: ids },
+  const found = await scoped(
+    definition,
+    target.where(
+      definition.as
+        ? { [foreignKey]: ids, [`${definition.as}_type`]: ownerClass.name }
+        : { [foreignKey]: ids },
+    ),
   );
 
   const grouped = new Map<string, InstanceLike[]>();
@@ -288,6 +306,19 @@ export function cacheKey(name: string): string {
 }
 
 /** Builds the relation a to-many association reads through. */
+/**
+ * Applies an association's scope, if it has one.
+ *
+ * A single function used by both the lazy and the preloading path, so the two
+ * cannot drift apart.
+ */
+function scoped(
+  definition: AssociationDefinition,
+  relation: Relation<InstanceLike>,
+): Relation<InstanceLike> {
+  return definition.scope ? definition.scope(relation) : relation;
+}
+
 export function relationFor(
   owner: InstanceLike,
   definition: AssociationDefinition,
@@ -305,7 +336,10 @@ export function relationFor(
 
     const polymorphicTarget = resolver();
     const foreignKey = definition.foreignKey ?? `${definition.name}_id`;
-    return polymorphicTarget.where({ [polymorphicTarget.primaryKey]: owner[foreignKey] });
+    return scoped(
+      definition,
+      polymorphicTarget.where({ [polymorphicTarget.primaryKey]: owner[foreignKey] }),
+    );
   }
 
   const target = definition.target();
@@ -313,7 +347,7 @@ export function relationFor(
   if (definition.kind === "belongsTo") {
     const foreignKey = definition.foreignKey ?? defaultForeignKey(target.name);
     const primaryKey = definition.primaryKey ?? target.primaryKey;
-    return target.where({ [primaryKey]: owner[foreignKey] });
+    return scoped(definition, target.where({ [primaryKey]: owner[foreignKey] }));
   }
 
   const ownerClass = (owner as { constructor: ModelLike }).constructor;
@@ -322,12 +356,15 @@ export function relationFor(
   if (definition.as) {
     // Both columns, always: matching only the id would hand back another
     // table's children whenever the ids happened to collide.
-    return target.where({
-      [`${definition.as}_id`]: owner[primaryKey],
-      [`${definition.as}_type`]: ownerClass.name,
-    });
+    return scoped(
+      definition,
+      target.where({
+        [`${definition.as}_id`]: owner[primaryKey],
+        [`${definition.as}_type`]: ownerClass.name,
+      }),
+    );
   }
 
   const foreignKey = definition.foreignKey ?? defaultForeignKey(ownerClass.name);
-  return target.where({ [foreignKey]: owner[primaryKey] });
+  return scoped(definition, target.where({ [foreignKey]: owner[primaryKey] }));
 }
