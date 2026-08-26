@@ -15,3 +15,4 @@ export * from "./client_ip.js";
 export * from "./send.js";
 export * from "./basic_auth.js";
 export * from "./nested_params.js";
+export * from "./permissions_policy.js";
