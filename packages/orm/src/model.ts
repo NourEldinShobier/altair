@@ -1318,6 +1318,92 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       }
     }
 
+    /**
+     * Rails' `composed_of`.
+     *
+     *     class Customer extends Model<CustomerRow>("customers") {
+     *       static {
+     *         this.composedOf("address", {
+     *           mapping: { address_street: "street", address_city: "city" },
+     *           from: (parts) => new Address(parts.street, parts.city),
+     *           to: (address) => ({ street: address.street, city: address.city }),
+     *         })
+     *       }
+     *     }
+     *
+     * Two columns that only mean something together stop being two columns.
+     * `customer.address` is an Address, assigning one writes both columns, and
+     * the arithmetic or formatting that belongs to an address lives on the
+     * Address rather than being repeated wherever a customer is.
+     *
+     * The value is rebuilt when the columns change and held while they do not,
+     * so reading it twice gives the same object — a value object that changed
+     * identity on every read would make `===` useless and quietly break any
+     * memo keyed on it.
+     */
+    static composedOf<V, P extends Record<string, unknown>>(
+      name: string,
+      options: ComposedOfOptions<V, P>,
+    ): void {
+      const columns = Object.keys(options.mapping);
+      const cache = `__composed_${name}`;
+      const stamp = `__composed_stamp_${name}`;
+
+      Object.defineProperty(this.prototype, name, {
+        configurable: true,
+        enumerable: false,
+
+        get(this: InstanceLike): V | null {
+          const values = columns.map((column) => this[column]);
+
+          // Every mapped column empty means there is nothing to build from.
+          // Rails' `allow_nil`, and the default here: a customer with no
+          // address should answer null rather than an Address of nulls.
+          if ((options.allowNil ?? true) && values.every((value) => value == null)) return null;
+
+          // Held while the columns are unchanged. Compared by value rather
+          // than by a dirty flag, so a write through any path invalidates it.
+          const current = JSON.stringify(values);
+          if (this[stamp] === current) return this[cache] as V;
+
+          const parts = Object.fromEntries(
+            columns.map((column, index) => [
+              options.mapping[column] as string,
+              values[index] as unknown,
+            ]),
+          ) as P;
+
+          const built = options.from(parts);
+
+          Object.defineProperty(this, cache, { value: built, configurable: true, writable: true });
+          Object.defineProperty(this, stamp, {
+            value: current,
+            configurable: true,
+            writable: true,
+          });
+
+          return built;
+        },
+
+        set(this: InstanceLike, value: V | null) {
+          // Null clears every column it maps, rather than leaving half an
+          // address behind for the next read to build something from.
+          const parts = value == null ? null : options.to(value);
+
+          for (const column of columns) {
+            const key = options.mapping[column] as string;
+            this[column] = parts == null ? null : (parts as Record<string, unknown>)[key];
+          }
+
+          Object.defineProperty(this, stamp, {
+            value: undefined,
+            configurable: true,
+            writable: true,
+          });
+        },
+      });
+    }
+
     /** The model class a delegated type name stands for. */
     static delegatedClassFor(name: string, type: string): ModelLike | undefined {
       return this.associations[name]?.types?.[type]?.();
@@ -2847,6 +2933,29 @@ const PROXY_HANDLER: ProxyHandler<{ [ATTRIBUTES]: Record<string, unknown> }> = {
  * rather than the base shape — which is what lets a subclass declare its own
  * association accessors and have them survive a query.
  */
+/**
+ * How a value object maps onto columns. Rails' `composed_of` options.
+ *
+ * `from` and `to` rather than Rails' `constructor` and `converter`: the pair
+ * is a conversion in each direction, and naming them for the direction says
+ * which is which without having to remember the Rails word.
+ */
+export interface ComposedOfOptions<V, P extends Record<string, unknown>> {
+  /** Column name to the name it takes on the value object. */
+  mapping: Record<string, keyof P & string>;
+  /** Builds the value object from the columns. */
+  from: (parts: P) => V;
+  /** Takes it apart again. */
+  to: (value: V) => P;
+  /**
+   * Answers null when every mapped column is empty, rather than building a
+   * value object out of nulls. On by default, as Rails' `allow_nil` is not —
+   * because the alternative is an Address whose every field is null, which is
+   * a thing that has to be checked for anyway and is worse at saying so.
+   */
+  allowNil?: boolean;
+}
+
 export interface ModelClass<A extends object> {
   new (values?: Partial<A>, persisted?: boolean): BaseModelInstance<A> & A;
 
@@ -3014,6 +3123,10 @@ export interface ModelClass<A extends object> {
     options?: AssociationOptions,
   ): void;
   delegatedClassFor(name: string, type: string): unknown;
+  composedOf<V, P extends Record<string, unknown>>(
+    name: string,
+    options: ComposedOfOptions<V, P>,
+  ): void;
   associationFor(name: string): AssociationDefinition;
 
   defineCallbacks(names: string | string[], config?: unknown): void;
