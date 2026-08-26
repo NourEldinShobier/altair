@@ -272,6 +272,24 @@ export function pluralFor(entry: Catalog, count: number, locale: string): Transl
  * languages, drops in and works.
  */
 export const EN: Catalog = {
+  // Rails' own `datetime.distance_in_words`, key for key, so a catalog from
+  // rails-i18n drops in and translates this without anything being renamed.
+  datetime: {
+    distance_in_words: {
+      half_a_minute: "half a minute",
+      less_than_x_seconds: { one: "less than 1 second", other: "less than %{count} seconds" },
+      x_seconds: { one: "1 second", other: "%{count} seconds" },
+      less_than_x_minutes: { one: "less than a minute", other: "less than %{count} minutes" },
+      x_minutes: { one: "1 minute", other: "%{count} minutes" },
+      about_x_hours: { one: "about 1 hour", other: "about %{count} hours" },
+      x_days: { one: "1 day", other: "%{count} days" },
+      about_x_months: { one: "about 1 month", other: "about %{count} months" },
+      x_months: { one: "1 month", other: "%{count} months" },
+      about_x_years: { one: "about 1 year", other: "about %{count} years" },
+      over_x_years: { one: "over 1 year", other: "over %{count} years" },
+      almost_x_years: { one: "almost 1 year", other: "almost %{count} years" },
+    },
+  },
   errors: {
     format: "%{attribute} %{message}",
     messages: {

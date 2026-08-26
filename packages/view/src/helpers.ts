@@ -12,7 +12,7 @@
  * to date.
  */
 
-import { pluralize as pluralizeWord } from "@altair/support";
+import { pluralize as pluralizeWord, t } from "@altair/support";
 
 export interface NumberOptions {
   locale?: string;
@@ -185,4 +185,121 @@ export function timeAgo(
   }
 
   return formatter.format(Math.round(delta), "year");
+}
+
+const MINUTES_IN_YEAR = 525_600;
+const MINUTES_IN_QUARTER_YEAR = 131_400;
+const MINUTES_IN_THREE_QUARTERS_YEAR = 394_200;
+
+const isLeapYear = (year: number): boolean =>
+  (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+
+export interface DistanceOptions {
+  /**
+   * Words the first minute, rather than calling all of it "less than a
+   * minute". Rails' `include_seconds`.
+   */
+  includeSeconds?: boolean;
+  locale?: string;
+}
+
+/**
+ * Rails' `distance_of_time_in_words`, thresholds and all.
+ *
+ * How long something took, rather than how long ago it was — which is why it
+ * says "about 1 hour" and not "an hour ago", and why it is not `timeAgo`.
+ *
+ * The thresholds are deliberately Rails' own and deliberately fuzzy: 45 minutes
+ * is "about 1 hour", and the year branch subtracts a day per leap year so that
+ * two dates a calendar year apart do not word as "over 1 year". Reproducing
+ * them exactly is the point — the wording is a Rails convention and an
+ * application that has one of these in a template has it in a test too.
+ */
+export function distanceOfTimeInWords(
+  from: Date | string | number,
+  to: Date | string | number = new Date(),
+  options: DistanceOptions = {},
+): string {
+  const first = toDate(from);
+  const second = toDate(to);
+
+  // Rails raises on a nil, and so does this on anything that is not a date.
+  // Without it a bad value falls past every threshold — `NaN < 45` is false —
+  // and comes out of the year branch as "about NaN years".
+  for (const [name, date] of [
+    ["from", first],
+    ["to", second],
+  ] as const) {
+    if (Number.isNaN(date.getTime())) {
+      throw new TypeError(`distanceOfTimeInWords was given a \`${name}\` that is not a date`);
+    }
+  }
+
+  // Rails sorts the pair, so the distance is a length rather than a direction.
+  const [earlier, later] = first <= second ? [first, second] : [second, first];
+
+  const distanceInSeconds = Math.round((later.getTime() - earlier.getTime()) / 1000);
+  const minutes = Math.round(distanceInSeconds / 60);
+
+  const say = (key: string, count?: number): string =>
+    t(key, { scope: "datetime.distance_in_words", count, locale: options.locale });
+
+  if (minutes <= 1) {
+    if (!options.includeSeconds) {
+      return minutes === 0 ? say("less_than_x_minutes", 1) : say("x_minutes", 1);
+    }
+
+    if (distanceInSeconds < 5) return say("less_than_x_seconds", 5);
+    if (distanceInSeconds < 10) return say("less_than_x_seconds", 10);
+    if (distanceInSeconds < 20) return say("less_than_x_seconds", 20);
+    if (distanceInSeconds < 40) return say("half_a_minute");
+    if (distanceInSeconds < 60) return say("less_than_x_minutes", 1);
+
+    return say("x_minutes", 1);
+  }
+
+  if (minutes < 45) return say("x_minutes", minutes);
+  if (minutes < 90) return say("about_x_hours", 1);
+  if (minutes < 1440) return say("about_x_hours", Math.round(minutes / 60));
+  if (minutes < 2520) return say("x_days", 1);
+  if (minutes < 43_200) return say("x_days", Math.round(minutes / 1440));
+  if (minutes < 86_400) return say("about_x_months", Math.round(minutes / 43_200));
+  if (minutes < MINUTES_IN_YEAR) return say("x_months", Math.round(minutes / 43_200));
+
+  // A year is 525,600 minutes only when it has 365 days. Without this, any
+  // span crossing a leap day words as one notch longer than a person would
+  // call it — "over 1 year" for two birthdays in a row.
+  let fromYear = earlier.getFullYear();
+  if (earlier.getMonth() >= 2) fromYear += 1;
+
+  let toYear = later.getFullYear();
+  if (later.getMonth() < 2) toYear -= 1;
+
+  let leapYears = 0;
+  for (let year = fromYear; year <= toYear; year += 1) {
+    if (isLeapYear(year)) leapYears += 1;
+  }
+
+  const offsetMinutes = minutes - leapYears * 1440;
+  const remainder = offsetMinutes % MINUTES_IN_YEAR;
+  const years = Math.floor(offsetMinutes / MINUTES_IN_YEAR);
+
+  if (remainder < MINUTES_IN_QUARTER_YEAR) return say("about_x_years", years);
+  if (remainder < MINUTES_IN_THREE_QUARTERS_YEAR) return say("over_x_years", years);
+
+  return say("almost_x_years", years + 1);
+}
+
+/**
+ * Rails' `time_ago_in_words` — the distance from then until now, with no "ago".
+ *
+ * `timeAgo` is the other one, and says "3 days ago" through `Intl`. This says
+ * "3 days", in Rails' wording, from the translation catalogue. Both are here
+ * because they answer different questions and Rails ships both spellings.
+ */
+export function timeAgoInWords(
+  from: Date | string | number,
+  options: DistanceOptions = {},
+): string {
+  return distanceOfTimeInWords(from, new Date(), options);
 }
