@@ -17,3 +17,5 @@ export * from "./sanitize.js";
 export * from "./environment.js";
 export * from "./dates.js";
 export * from "./enumerable.js";
+export * from "./filter.js";
+export * from "./misc.js";
