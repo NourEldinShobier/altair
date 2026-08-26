@@ -21,7 +21,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { secureToken } from "@altair/support";
-import { t, tableize, underscore } from "@altair/support";
+import { camelize, pluralize, t, tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
@@ -1233,6 +1233,94 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         types: types as Record<string, () => ModelLike>,
         ...options,
       });
+    }
+
+    /**
+     * Rails' `delegated_type`.
+     *
+     *     class Entry extends Model<EntryRow>("entries") {
+     *       static {
+     *         this.delegatedType("entryable", { Message: () => Message, Comment: () => Comment })
+     *       }
+     *     }
+     *
+     * A polymorphic `belongsTo` says "this points at one of several things"
+     * and leaves the caller to ask which. Rails' delegated type adds the three
+     * questions everybody then writes by hand: which one is it, give me it if
+     * it is that one, and give me every entry that is.
+     *
+     *     entry.isMessage        // a message, or not
+     *     await entry.message()  // the message, or null if it is a comment
+     *     await Entry.messages() // every entry that is a message
+     *
+     * The difference from a plain polymorphic association is that the set of
+     * types is closed and written down. That is what makes the predicates and
+     * the scopes possible, and it is the trade: a type not in the list cannot
+     * be stored, which is the point rather than a limitation.
+     */
+    static delegatedType(
+      name: string,
+      types: Record<string, () => unknown>,
+      options: AssociationOptions = {},
+    ): void {
+      this.belongsToPolymorphic(name, types, options);
+
+      const typeKey = `${name}_type`;
+
+      // The type as it stands, so a caller can switch on it without knowing
+      // the column's name. Rails' `entryable_name`.
+      Object.defineProperty(this.prototype, `${camelize(name, false)}Name`, {
+        configurable: true,
+        get(this: InstanceLike): string | null {
+          return (this[typeKey] as string | null) ?? null;
+        },
+      });
+
+      for (const [typeName, target] of Object.entries(types)) {
+        const singular = camelize(typeName, false);
+
+        // `entry.isMessage`. A getter rather than a method, because it reads a
+        // column this record already has and asking it should not look like a
+        // query.
+        Object.defineProperty(this.prototype, `is${typeName}`, {
+          configurable: true,
+          get(this: InstanceLike): boolean {
+            return this[typeKey] === typeName;
+          },
+        });
+
+        // `await entry.message()` — the record when it is one, and null when
+        // it is not. Null rather than throwing: asking a comment for its
+        // message is how you find out it is a comment.
+        Object.defineProperty(this.prototype, singular, {
+          configurable: true,
+          writable: true,
+          value: async function delegatedAccessor(this: InstanceLike): Promise<unknown> {
+            if (this[typeKey] !== typeName) return null;
+
+            return await (this as unknown as Record<string, () => Promise<unknown>>)[name]!();
+          },
+        });
+
+        // `await Entry.messages()` — every entry of that type, as a relation
+        // so it stays chainable.
+        Object.defineProperty(this, pluralize(singular), {
+          configurable: true,
+          writable: true,
+          value: function delegatedScope(this: { where(conditions: Conditions): unknown }) {
+            return this.where({ [typeKey]: typeName });
+          },
+        });
+
+        // `types` already holds the class; `delegatedClassFor` is how a caller
+        // reaches it without going through the association definition.
+        void target;
+      }
+    }
+
+    /** The model class a delegated type name stands for. */
+    static delegatedClassFor(name: string, type: string): ModelLike | undefined {
+      return this.associations[name]?.types?.[type]?.();
     }
 
     /** Rails' `has_one :profile`. */
@@ -2919,6 +3007,13 @@ export interface ModelClass<A extends object> {
     types: Record<string, () => unknown>,
     options?: AssociationOptions,
   ): void;
+  delegatedType<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
+    types: Record<string, () => unknown>,
+    options?: AssociationOptions,
+  ): void;
+  delegatedClassFor(name: string, type: string): unknown;
   associationFor(name: string): AssociationDefinition;
 
   defineCallbacks(names: string | string[], config?: unknown): void;
