@@ -175,6 +175,7 @@ describe("new", () => {
       ".env.example",
       ".gitignore",
       "app/controllers/home_controller.ts",
+      "bin/altair.ts",
       "bin/server.ts",
       "config/console.ts",
       "config/environments/development.ts",

@@ -208,6 +208,7 @@ export function newApplication(name: string): GeneratedFile[] {
             "@altair/mailer": "workspace:*",
             "@altair/jobs": "workspace:*",
             "@altair/cable": "workspace:*",
+            "@altair/cli": "workspace:*",
           },
         },
         null,
@@ -247,6 +248,14 @@ const app = createApplication({
 
 const server = await app.listen();
 console.log(\`Listening on http://localhost:\${server.port}\`);
+`,
+    },
+    {
+      // The scripts in package.json call this, and until now it was not
+      // written: `bun run db:migrate` in a new application failed on a file
+      // the generator had never made. Rails' `bin/rails` is the same idea.
+      path: "bin/altair.ts",
+      contents: `import "@altair/cli/bin";
 `,
     },
     {
