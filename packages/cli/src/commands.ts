@@ -413,6 +413,8 @@ export function helpText(): string {
     "  server, s                 Run the application with reloading",
     "  console, c                A prompt with the application booted",
     "  runner, r                 Run a script, or -e 'code', against the application",
+    "  storage:install           Write the migration Active Storage needs",
+    "  richtext:install          Write the migration rich text needs",
     "  secret                    Print a new SECRET_KEY_BASE",
     "  credentials:edit          Edit the encrypted credentials in $EDITOR",
     "  credentials:show          Print the decrypted credentials",

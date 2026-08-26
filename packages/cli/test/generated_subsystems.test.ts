@@ -122,6 +122,25 @@ export class HomeController extends Controller {
     await probe("job.enqueue", async () => {
       await CleanupJob.performLater(1);
     });
+    await probe("storage", async () => {
+      const { configureStorage, createBlob, DiskService } = await import("@altair/storage");
+
+      configureStorage({
+        services: { disk: new DiskService({ root: "./tmp/storage" }) },
+        default: "disk",
+      });
+
+      const blob = await createBlob({
+        filename: "a.txt",
+        data: new TextEncoder().encode("hi"),
+      });
+
+      if (!String(await blob.url()).startsWith("/storage/")) throw new Error("no url");
+    });
+    await probe("richtext", async () => {
+      const { RichText } = await import("@altair/orm");
+      await RichText.count();
+    });
     await probe("session", () => this.session.set("k", "v"));
     await probe("flash", () => this.flash.set("notice", "hi"));
     await probe("csrf", () => void this.csrfToken);
@@ -132,6 +151,11 @@ export class HomeController extends Controller {
 `,
   );
 
+  // Both tables come from a migration, as Rails' `active_storage:install` and
+  // `action_text:install` write one. Run before db:migrate, so the schema the
+  // application boots against has them.
+  await run("storage:install");
+  await run("richtext:install");
   await run("db:migrate");
 });
 
@@ -167,6 +191,8 @@ describe("the subsystems a generated application uses", () => {
         "mailer.build": "ok",
         "mailer.deliver": "ok",
         "job.enqueue": "ok",
+        storage: "ok",
+        richtext: "ok",
         session: "ok",
         flash: "ok",
         csrf: "ok",

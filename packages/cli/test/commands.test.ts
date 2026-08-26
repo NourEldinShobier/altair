@@ -18,6 +18,7 @@ import {
   rollback,
   routesTable,
 } from "../src/commands.js";
+import { generateRichTextInstall, generateStorageInstall } from "../src/generators.js";
 
 const NOW = new Date(Date.UTC(2026, 7, 22, 14, 30, 5));
 
@@ -230,5 +231,41 @@ describe("help", () => {
     for (const command of ["new", "generate", "db:migrate", "db:rollback", "routes", "secret"]) {
       expect(help).toContain(command);
     }
+  });
+});
+
+/**
+ * The migrations Rails writes with `active_storage:install` and
+ * `action_text:install`.
+ *
+ * Both sets of tables had a creator function in the framework and no way to
+ * reach it from an application: an audit of a generated application found
+ * `no such table: active_storage_blobs` the first time it attached a file.
+ */
+describe("install migrations", () => {
+  const now = new Date("2026-01-02T03:04:05Z");
+
+  it("write a migration rather than creating tables behind the application", () => {
+    const file = generateStorageInstall(now);
+
+    expect(file.path).toBe("db/migrate/20260102030405_create_active_storage_tables.ts");
+    expect(file.contents).toContain('version: "20260102030405"');
+  });
+
+  // The shape of the tables stays defined in one place.
+  it("call the framework's own installer", () => {
+    expect(generateStorageInstall(now).contents).toContain(
+      'import { createStorageTables } from "@altair/storage"',
+    );
+    expect(generateRichTextInstall(now).contents).toContain(
+      'import { createRichTextTable } from "@altair/orm"',
+    );
+  });
+
+  it("roll back", () => {
+    const contents = generateStorageInstall(now).contents;
+
+    expect(contents).toContain('dropTable("active_storage_blobs")');
+    expect(contents).toContain('dropTable("active_storage_attachments")');
   });
 });
