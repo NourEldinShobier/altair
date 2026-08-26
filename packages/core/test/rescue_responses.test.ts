@@ -165,3 +165,86 @@ describe("an error thrown by a middleware", () => {
     expect(seen).toHaveLength(1);
   });
 });
+
+/**
+ * What the client asked for.
+ *
+ * Every error answered `text/plain`, whatever the request said. A JSON client
+ * calling `response.json()` on a 404 got a parse error rather than the 404 it
+ * was actually given — so an API's error handling broke on the errors it was
+ * written for.
+ */
+describe("the format of an error", () => {
+  const askFor = async (accept: string, options: Record<string, unknown> = {}) => {
+    const app = application(options);
+    app.middleware.unshift("boom", async () => {
+      throw new RecordNotFound("Could not find Widget with id = 9");
+    });
+
+    return await app.handler()(
+      new Request("https://app.example/widgets/9", { headers: { accept } }),
+    );
+  };
+
+  it("is JSON when the client asked for JSON", async () => {
+    const response = await askFor("application/json");
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({
+      status: 404,
+      error: "Not Found",
+      message: "Could not find Widget with id = 9",
+    });
+  });
+
+  // `*/*` is curl or a browser saying it has no preference, which is not the
+  // same as asking for JSON.
+  it("is not JSON for a client with no preference", async () => {
+    expect((await askFor("*/*")).headers.get("content-type")).toContain("text/plain");
+    expect((await askFor("text/html")).headers.get("content-type")).toContain("text/plain");
+  });
+
+  it("says nothing extra in a JSON 500 either", async () => {
+    const app = application();
+    app.middleware.unshift("boom", async () => {
+      throw new Error("SQL: password=hunter2");
+    });
+
+    const response = await app.handler()(
+      new Request("https://app.example/w", { headers: { accept: "application/json" } }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toContain("hunter2");
+  });
+});
+
+/**
+ * A route that matched nothing.
+ *
+ * The dispatcher answered its own `new Response("Not Found")`, which never
+ * reached any of this — and which in Bun carries no content-type at all, so it
+ * went over the wire as `application/octet-stream` and a browser offered to
+ * download the words "Not Found" as a file.
+ */
+describe("a request that matches no route", () => {
+  const ask = async (accept: string) =>
+    await application().handler()(
+      new Request("https://app.example/nothing-here", { headers: { accept } }),
+    );
+
+  it("says what kind of thing it is answering with", async () => {
+    const response = await ask("text/html");
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toContain("text/plain");
+  });
+
+  it("is JSON for a client that asked for JSON", async () => {
+    const response = await ask("application/json");
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ status: 404, error: "Not Found" });
+  });
+});

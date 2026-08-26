@@ -122,7 +122,17 @@ describe("the generated application", () => {
 
       // A path with nothing behind it is still the application's 404, not the
       // file server swallowing it.
-      expect((await fetch(`http://localhost:${port}/nothing.txt`)).status).toBe(404);
+      const missing = await fetch(`http://localhost:${port}/nothing.txt`);
+      expect(missing.status).toBe(404);
+
+      // And it is the page the generator wrote, not a line of plain text —
+      // which is the whole reason that file exists.
+      // The page the generator wrote, not a line of plain text — and not the
+      // bare `new Response("Not Found")` the dispatcher used to send, which
+      // carries no content-type in Bun at all, so a browser offered to
+      // download the words "Not Found" as a file.
+      expect(missing.headers.get("content-type")).toContain("text/html");
+      expect(await missing.text()).toContain("Page not found");
 
       // Percent-encoded, because `fetch` collapses a plain `../` before the
       // request is ever sent — so the unencoded form would prove nothing about

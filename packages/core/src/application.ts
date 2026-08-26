@@ -41,7 +41,7 @@ import {
 } from "@altair/orm";
 import { configFor } from "./config_for.js";
 import { buildConfig, type ApplicationConfig } from "./config.js";
-import { statusForError } from "./rescue_responses.js";
+import { statusForError, statusText, wantsJson } from "./rescue_responses.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
 import { logQueries, requestLogging } from "./logging.js";
 
@@ -291,6 +291,7 @@ export class Application {
       controllers: this.controllers,
       context: (request) => this.contextFor(request),
       onError: (error, request) => this.#handleError(error, request),
+      notFound: (request) => this.#respondWith(404, request),
     });
 
     // Built once: the closures are the same every request, and rebuilding them
@@ -367,6 +368,35 @@ export class Application {
     };
   }
 
+  /**
+   * The response for a status nothing threw for — a route that matched nothing.
+   *
+   * Through the same rendering as an error, so a 404 from the router looks
+   * like a 404 from a controller: the same page, the same JSON, and a
+   * content-type either way. The dispatcher used to answer its own bare
+   * `new Response("Not Found")`, which in Bun carries no content-type at all —
+   * so a browser offered to download the words "Not Found" as a file.
+   */
+  async #respondWith(status: number, request: Request): Promise<Response> {
+    if (wantsJson(request)) {
+      return Response.json({ status, error: statusText(status) }, { status });
+    }
+
+    const page = Bun.file(join(this.config.root, "public", `${status}.html`));
+
+    if (await page.exists()) {
+      return new Response(page, {
+        status,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    return new Response(statusText(status), {
+      status,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+
   async #handleError(error: unknown, request: Request): Promise<Response> {
     // Reported before anything is rendered, and whatever the handler decides:
     // an application that turns every error into a friendly page still needs
@@ -385,6 +415,21 @@ export class Application {
 
     if (this.#onError) return await this.#onError(error, request);
 
+    // A client that asked for JSON cannot read a plain-text body: calling
+    // `response.json()` on it is a parse error rather than the 404 it was
+    // actually given. Rails renders the format the request asked for; so does
+    // this, before deciding how much to say.
+    if (wantsJson(request)) {
+      const detail =
+        this.config.showDetailedErrors && error instanceof Error
+          ? { message: error.message, name: error.name, stack: error.stack }
+          : status === 500
+            ? {}
+            : { message: error instanceof Error ? error.message : statusText(status) };
+
+      return Response.json({ status, error: statusText(status), ...detail }, { status });
+    }
+
     // Detailed errors are a development convenience and a production leak, so
     // the environment decides, not the caller.
     if (this.config.showDetailedErrors) {
@@ -395,6 +440,18 @@ export class Application {
       return new Response(`${request.method} ${new URL(request.url).pathname}\n\n${detail}`, {
         status,
         headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+
+    // Rails serves `public/404.html` and `public/500.html` when they are
+    // there, which is how an application gets a page in its own design without
+    // the framework having an opinion about typography.
+    const page = Bun.file(join(this.config.root, "public", `${status}.html`));
+
+    if (await page.exists()) {
+      return new Response(page, {
+        status,
+        headers: { "content-type": "text/html; charset=utf-8" },
       });
     }
 
