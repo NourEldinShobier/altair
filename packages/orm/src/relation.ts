@@ -472,6 +472,15 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   order(column: string, direction: Direction = "asc"): Relation<T> {
+    // Checked at run time as well as by the compiler, because a direction is
+    // usually a query parameter — `?sort=title&dir=descending` — and the type
+    // says nothing about a string that arrived over the wire. Left alone, an
+    // unrecognised direction became ASC, so a list asked to sort one way
+    // silently sorted the other.
+    if (direction !== "asc" && direction !== "desc") {
+      throw new Error(`Unknown sort direction "${String(direction)}". Use "asc" or "desc".`);
+    }
+
     const next = this.#clone();
     next.#orders.push({ column, direction });
     return next;
@@ -1194,7 +1203,18 @@ export class Relation<T> implements PromiseLike<T[]> {
   unscope(...clauses: RelationClause[]): Relation<T> {
     const next = this.#clone();
 
-    for (const clause of clauses) next.#clear(clause);
+    for (const clause of clauses) {
+      // Rails raises here too. An unrecognised clause used to be ignored, so
+      // `unscope("wheres")` — a plural away from the right word — left the
+      // conditions in place and said it had removed them.
+      if (!ALL_CLAUSES.includes(clause)) {
+        throw new Error(
+          `Unknown clause "${String(clause)}". Expected one of: ${ALL_CLAUSES.join(", ")}.`,
+        );
+      }
+
+      next.#clear(clause);
+    }
 
     return next;
   }
