@@ -188,6 +188,82 @@ function normalizeOverride(value: unknown): string | null {
   return OVERRIDABLE.has(wanted) ? wanted : null;
 }
 
+export interface HostAuthorizationOptions {
+  /**
+   * Hosts this application answers to.
+   *
+   * A string matches exactly, a leading dot matches the domain and everything
+   * under it (`.example.com` allows `app.example.com`), and a RegExp is
+   * matched against the whole host. Empty means every host, which is what
+   * Rails does when `config.hosts` is empty.
+   */
+  allowed?: readonly (string | RegExp)[];
+  /** Paths that answer whatever the Host says — a load balancer's health check. */
+  exclude?: (path: string) => boolean;
+}
+
+/**
+ * Refuses a request whose Host header this application does not answer to.
+ *
+ * Ported from `ActionDispatch::HostAuthorization`, which Rails added in 6.0
+ * for two attacks that both start with a Host header nobody checked.
+ *
+ * The first is DNS rebinding, and it is aimed at a development machine: a page
+ * on the attacker's site resolves their domain to 127.0.0.1 after the page has
+ * loaded, and the browser then sends requests to the server on your laptop
+ * with their origin's cookies and no cross-origin check, because as far as it
+ * is concerned nothing changed. That is why the default here covers
+ * development and not production — it is the machine on the café wifi that is
+ * exposed, not the one behind a load balancer that already rejects unknown
+ * hosts.
+ *
+ * The second works anywhere: an application that builds a URL from the Host
+ * header — a password reset link, most often — sends the user a link to
+ * whatever host the attacker asked for.
+ */
+export function hostAuthorization(options: HostAuthorizationOptions = {}): Middleware {
+  const allowed = options.allowed ?? [];
+
+  return async (request, next) => {
+    if (allowed.length === 0) return await next(request);
+
+    const url = new URL(request.url);
+    if (options.exclude?.(url.pathname)) return await next(request);
+
+    // The Host header, not the parsed URL's host: they are the same here, and
+    // being explicit about which one is checked is the whole subject.
+    const host = (request.headers.get("host") ?? url.host).toLowerCase();
+
+    if (allows(allowed, host)) return await next(request);
+
+    return new Response(`Blocked host: ${host}`, {
+      status: 403,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  };
+}
+
+/** Whether any rule covers this host. */
+function allows(rules: readonly (string | RegExp)[], host: string): boolean {
+  // A port is not part of a host name, and a browser sends one whenever the
+  // server is not on 443 or 80 — which, in development, is always.
+  const name = host.replace(/:\d+$/, "");
+
+  return rules.some((rule) => {
+    if (rule instanceof RegExp) return rule.test(name);
+
+    const allowed = rule.toLowerCase();
+
+    // A leading dot means the domain and everything under it, as Rails reads
+    // it — and `.example.com` allows `example.com` itself too.
+    if (allowed.startsWith(".")) {
+      return name === allowed.slice(1) || name.endsWith(allowed);
+    }
+
+    return name === allowed;
+  });
+}
+
 export interface CorsOptions {
   origin?: string | string[] | ((origin: string) => boolean);
   methods?: string[];
