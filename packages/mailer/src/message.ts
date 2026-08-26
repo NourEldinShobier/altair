@@ -1,3 +1,4 @@
+import { errors } from "@altair/support";
 /**
  * Mail messages and delivery, ported from `ActionMailer` and the `mail` gem.
  *
@@ -73,6 +74,100 @@ export function assertHeaderSafe(value: string, field: string): void {
 const HEADER_BREAK = new RegExp(
   `[${String.fromCodePoint(13)}${String.fromCodePoint(10)}${String.fromCodePoint(0)}${String.fromCodePoint(0x0b)}${String.fromCodePoint(0x0c)}]`,
 );
+
+/**
+ * Changes a message on its way out, or stops it.
+ *
+ * Rails' `register_interceptor`. The reason this exists rather than a wrapper
+ * around each mailer: the thing people need it for is a rule that must hold
+ * for every message an application sends, and one mailer that forgot to opt in
+ * is the one that emails a customer from staging.
+ *
+ * Returning `false` drops the message.
+ */
+export type DeliveryInterceptor = (
+  message: MessageFields,
+) => boolean | void | Promise<boolean | void>;
+
+/** Told about a message after it went. Rails' `register_observer`. */
+export type DeliveryObserver = (message: MessageFields) => void | Promise<void>;
+
+const interceptors: DeliveryInterceptor[] = [];
+const observers: DeliveryObserver[] = [];
+
+/**
+ * Registers something to run before every delivery.
+ *
+ *     interceptDelivery((message) => {
+ *       message.to = "staging@example.com"
+ *     })
+ *
+ * The canonical one, and the reason to have it at all: a staging environment
+ * that rewrites every recipient. Without it the rule lives in each mailer, and
+ * the incident is the mailer that did not get it.
+ */
+export function interceptDelivery(interceptor: DeliveryInterceptor): () => void {
+  interceptors.push(interceptor);
+
+  // Returns its own removal, so a test can register one without leaking it
+  // into every test that follows.
+  return () => {
+    const at = interceptors.indexOf(interceptor);
+    if (at !== -1) interceptors.splice(at, 1);
+  };
+}
+
+/** Registers something to run after every delivery. */
+export function observeDelivery(observer: DeliveryObserver): () => void {
+  observers.push(observer);
+
+  return () => {
+    const at = observers.indexOf(observer);
+    if (at !== -1) observers.splice(at, 1);
+  };
+}
+
+/** Forgets every interceptor and observer. */
+export function resetDeliveryHooks(): void {
+  interceptors.length = 0;
+  observers.length = 0;
+}
+
+/**
+ * Runs the interceptors, and says whether the message should still go.
+ *
+ * They run in the order they were registered, each seeing what the last one
+ * did, so a rule that rewrites a recipient and a rule that reads it agree
+ * about which recipient they mean.
+ */
+export async function runInterceptors(message: MessageFields): Promise<boolean> {
+  for (const interceptor of interceptors) {
+    if ((await interceptor(message)) === false) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Tells the observers a message went.
+ *
+ * An observer that throws does not fail the delivery: the message has already
+ * been handed over, and there is nothing left to undo. It is reported and the
+ * rest still run.
+ */
+export async function runObservers(message: MessageFields): Promise<void> {
+  for (const observer of observers) {
+    try {
+      await observer(message);
+    } catch (error) {
+      // Reported rather than swallowed: something that watches deliveries and
+      // fails silently is worse than no watcher at all. Through the error
+      // reporter rather than the console, so an application decides where it
+      // goes and a test suite is not made noisy by a case it is asserting on.
+      errors.report(error, { source: "mailer.observer" });
+    }
+  }
+}
 
 /** Formats an address for a header, quoting a display name that needs it. */
 export function formatAddress(address: Address): string {

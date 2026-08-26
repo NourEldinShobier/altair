@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |       |
 | --------- | --------- | --------- | ----- |
-| **Total** | **3,103** | 26,775    | 11.6% |
+| **Total** | **3,116** | 26,775    | 11.6% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -34,7 +34,7 @@ one that needs no server.
 | `@altair/jobs`       | 96    | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 75    | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 126   | Config, boot lifecycle, request handler, credentials, logging              |
-| `@altair/mailer`     | 100   | Messages, TSX bodies, delivery methods                                     |
+| `@altair/mailer`     | 113   | Messages, TSX bodies, delivery methods                                     |
 
 ---
 
