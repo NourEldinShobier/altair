@@ -146,12 +146,29 @@ describe("transaction bookkeeping", () => {
     await database.close();
   });
 
+  /**
+   * This asserted nothing at all: it created a row, closed, and ended. It
+   * passed whether `close` rolled back or committed, which is the one thing it
+   * exists to tell apart — and a helper that commits between tests is how a
+   * suite starts passing in isolation and failing together.
+   */
   it("rolls back on close", async () => {
     const database = await TestDatabase.prepare(SCHEMA, { url });
     await database.begin();
     await Post.create({ title: "Never committed" });
 
+    expect(await database.count("posts")).toBe(1);
+
     await database.close();
+
+    // Asked of a new connection, because the old one went with the rollback.
+    const after = await TestDatabase.prepare(SCHEMA, { url });
+
+    try {
+      expect(await after.count("posts")).toBe(0);
+    } finally {
+      await after.close();
+    }
   });
 });
 

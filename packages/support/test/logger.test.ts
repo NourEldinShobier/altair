@@ -214,12 +214,24 @@ describe("reporting an error", () => {
       throw new Error("the reporter is down");
     });
 
+    // A second subscriber, so there is something to assert about afterwards.
+    // `expect(true).toBe(true)` stood here, on the grounds that the real check
+    // was the process not dying — true, and it left the case unable to notice
+    // a reporter that swallowed the rejection by breaking itself.
+    const seen: unknown[] = [];
+    reporter.subscribe((error) => void seen.push(error));
+
     reporter.report(new Error("boom"));
     // Long enough for a rejection to surface as an unhandled one if it were
-    // going to. It would take the process down, not fail this assertion.
+    // going to. That would take the process down rather than fail an assertion.
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    expect(true).toBe(true);
+    // The failing subscriber did not stop the working one being called.
+    expect(seen).toHaveLength(1);
+
+    // And the reporter still works after it.
+    reporter.report(new Error("again"));
+    expect(seen).toHaveLength(2);
   });
 
   it("survives a subscriber that throws", () => {
