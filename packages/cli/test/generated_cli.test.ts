@@ -42,7 +42,10 @@ const write = async (path: string, contents: string) => {
 
 /** Runs the binstub the way `package.json` does. */
 const altair = async (...args: string[]) => {
-  const process_ = Bun.spawn(["bun", "run", join(root, "bin", "altair.ts"), ...args], {
+  // The bun binary rather than the name: on Windows the name resolves to a
+  // shim, and Node refuses to hand a shim any argument with a shell character
+  // in it — which is every argument `runner -e` exists to take.
+  const process_ = Bun.spawn([process.execPath, "run", join(root, "bin", "altair.ts"), ...args], {
     cwd: root,
     // Named explicitly because `bun test` sets NODE_ENV to test, and the test
     // environment's database is `:memory:` — which between two processes is no
@@ -148,6 +151,71 @@ describe("altair db:migrate", () => {
     const { output } = await altair("db:migrate");
 
     expect(output).toContain("Already up to date");
+  });
+});
+
+/**
+ * The point of `runner` is cron and backfills: work that has to reach the
+ * application's models with nobody sitting at a prompt. So every case here
+ * goes through the binstub, against the model the generator wrote, and
+ * queries the database it migrated — testing the connection is open is
+ * testing the only thing that makes this different from `bun run`.
+ */
+describe("altair runner", () => {
+  it("runs a script against the application", async () => {
+    await altair("db:migrate");
+    await write(
+      "script/count.ts",
+      `import { Widget } from "../app/models/widget.js";
+
+await Widget.create({ title: "one" });
+console.log("widgets:", await Widget.count());
+`,
+    );
+
+    const { code, output } = await altair("runner", "script/count.ts");
+
+    expect(code).toBe(0);
+    expect(output).toContain("widgets: 1");
+  });
+
+  // Rails takes bare code because Ruby autoloads. TypeScript imports, so the
+  // snippet is written to the project root and the relative path in it has to
+  // resolve from there.
+  it("runs a snippet, with its imports resolving from the project", async () => {
+    await altair("db:migrate");
+
+    const { code, output } = await altair(
+      "runner",
+      "-e",
+      'import { Widget } from "./app/models/widget.js"; console.log("count:", await Widget.count())',
+    );
+
+    expect(code).toBe(0);
+    expect(output).toContain("count: 0");
+  });
+
+  it("does not leave the snippet behind", async () => {
+    await altair("db:migrate");
+    await altair("runner", "-e", 'console.log("hello")');
+
+    const left = new Bun.Glob(".altair-runner-*.ts").scanSync({ cwd: root });
+    expect([...left]).toEqual([]);
+  });
+
+  it("does not leave it behind when it throws either", async () => {
+    await altair("db:migrate");
+    const { code } = await altair("runner", "-e", 'throw new Error("nope")');
+
+    expect(code).not.toBe(0);
+    expect([...new Bun.Glob(".altair-runner-*.ts").scanSync({ cwd: root })]).toEqual([]);
+  });
+
+  it("says how to use it when given nothing", async () => {
+    const { code, output } = await altair("runner");
+
+    expect(code).toBe(1);
+    expect(output).toContain("Usage: altair runner");
   });
 });
 
