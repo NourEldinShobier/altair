@@ -34,12 +34,57 @@ export interface NumericalityOptions {
   greaterThanOrEqualTo?: number;
   lessThan?: number;
   lessThanOrEqualTo?: number;
+  equalTo?: number;
+  otherThan?: number;
+  odd?: boolean;
+  even?: boolean;
 }
+
+/**
+ * What a value is compared against. Rails 7's `validates_comparison_of`.
+ *
+ * A number, a string or a date, and — the reason the validator exists —
+ * another attribute: an end date after a start date, a maximum above a
+ * minimum. Written as a function of the record rather than Rails' symbol,
+ * because a function is checked by the compiler and a symbol is not.
+ */
+export type ComparisonTarget = unknown | ((record: never) => unknown);
+
+export interface ComparisonOptions {
+  greaterThan?: ComparisonTarget;
+  greaterThanOrEqualTo?: ComparisonTarget;
+  lessThan?: ComparisonTarget;
+  lessThanOrEqualTo?: ComparisonTarget;
+  equalTo?: ComparisonTarget;
+  otherThan?: ComparisonTarget;
+}
+
+/**
+ * How each comparison decides. Kept as a table so the validator reads as a
+ * loop rather than six branches that differ by one character.
+ */
+const COMPARISONS: Record<string, (value: unknown, against: unknown) => boolean> = {
+  greaterThan: (value, against) => (value as number) > (against as number),
+  greaterThanOrEqualTo: (value, against) => (value as number) >= (against as number),
+  lessThan: (value, against) => (value as number) < (against as number),
+  lessThanOrEqualTo: (value, against) => (value as number) <= (against as number),
+  equalTo: (value, against) => value === against || Number(value) === Number(against),
+  otherThan: (value, against) => !(value === against || Number(value) === Number(against)),
+};
 
 export interface ValidationOptions {
   presence?: boolean;
   absence?: boolean;
   length?: LengthOptions;
+  /**
+   * Compares against a value or another attribute. Rails' `comparison:`.
+   *
+   *     this.validates("ends_on", { comparison: { greaterThan: (r) => r.starts_on } })
+   *
+   * Separate from `numericality` because it compares whatever the values are —
+   * dates and strings included — rather than turning them into numbers first.
+   */
+  comparison?: ComparisonOptions;
   format?: { with?: RegExp; without?: RegExp };
   inclusion?: { in: readonly unknown[] };
   exclusion?: { in: readonly unknown[] };
@@ -145,6 +190,14 @@ export const MESSAGES = {
   greaterThanOrEqualTo: (count: number) => t("errors.messages.greater_than_or_equal_to", { count }),
   lessThan: (count: number) => t("errors.messages.less_than", { count }),
   lessThanOrEqualTo: (count: number) => t("errors.messages.less_than_or_equal_to", { count }),
+  equalTo: (count: number) => t("errors.messages.equal_to", { count }),
+  otherThan: (count: number) => t("errors.messages.other_than", { count }),
+  get odd() {
+    return t("errors.messages.odd");
+  },
+  get even() {
+    return t("errors.messages.even");
+  },
   get taken() {
     return t("errors.messages.taken");
   },
@@ -243,6 +296,36 @@ export async function runValidation(
       }
       if (rules.lessThanOrEqualTo !== undefined && numeric > rules.lessThanOrEqualTo) {
         fail(MESSAGES.lessThanOrEqualTo(rules.lessThanOrEqualTo));
+      }
+      if (rules.equalTo !== undefined && numeric !== rules.equalTo) {
+        fail(MESSAGES.equalTo(rules.equalTo));
+      }
+      if (rules.otherThan !== undefined && numeric === rules.otherThan) {
+        fail(MESSAGES.otherThan(rules.otherThan));
+      }
+      // 2.5 is neither odd nor even and fails whichever was asked for, which
+      // the remainder already says: 2.5 % 2 is 0.5, and that is neither 0 nor
+      // 1. An `Number.isInteger` guard beside this changed no answer.
+      if (rules.odd && Math.abs(numeric % 2) !== 1) fail(MESSAGES.odd);
+      if (rules.even && numeric % 2 !== 0) fail(MESSAGES.even);
+    }
+  }
+
+  if (options.comparison) {
+    // Whatever the values are, rather than numbers: this is what compares two
+    // dates, and `new Date(a) > new Date(b)` is the comparison people actually
+    // need. A missing value has nothing to compare, and saying so is
+    // `presence`'s job rather than this one's.
+    if (!isBlank(value)) {
+      for (const [rule, target] of Object.entries(options.comparison)) {
+        if (target === undefined) continue;
+
+        const against =
+          typeof target === "function" ? (target as (r: object) => unknown)(record) : target;
+        if (against === null || against === undefined) continue;
+
+        const ok = COMPARISONS[rule as keyof ComparisonOptions]?.(value, against);
+        if (ok === false) fail(MESSAGES[rule as keyof ComparisonOptions](against as number));
       }
     }
   }
