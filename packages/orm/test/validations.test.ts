@@ -66,7 +66,27 @@ describe("isBlank", () => {
     expect(isBlank([])).toBe(true);
     expect(isBlank("x")).toBe(false);
     expect(isBlank(0)).toBe(false);
-    expect(isBlank(false)).toBe(false);
+  });
+
+  /**
+   * Rails' `blank?` is `respond_to?(:empty?) ? !!empty? : !self`, so `false` is
+   * blank. This asserted the opposite under a name claiming it matched.
+   *
+   * The consequence is the one Rails documents: `presence: true` on a boolean
+   * refuses `false`, which is why Rails tells you to use
+   * `inclusion: { in: [true, false] }` for a checkbox that must be answered
+   * either way.
+   */
+  it("counts false as blank, as Rails does", () => {
+    expect(isBlank(false)).toBe(true);
+    expect(isBlank(true)).toBe(false);
+  });
+
+  it("counts an empty object, map and set as blank", () => {
+    expect(isBlank({})).toBe(true);
+    expect(isBlank(new Map())).toBe(true);
+    expect(isBlank(new Set())).toBe(true);
+    expect(isBlank({ a: 1 })).toBe(false);
   });
 });
 
