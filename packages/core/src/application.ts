@@ -28,7 +28,13 @@ import {
   type ControllerContext,
   type ControllerRegistry,
 } from "@altair/controller";
-import { connect, withQueryCache, type Connection } from "@altair/orm";
+import {
+  configureEncryption,
+  configureTokens,
+  connect,
+  withQueryCache,
+  type Connection,
+} from "@altair/orm";
 import { configFor } from "./config_for.js";
 import { buildConfig, type ApplicationConfig } from "./config.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
@@ -206,6 +212,13 @@ export class Application {
     if (this.#booted) return this;
 
     for (const provider of this.providers) await provider.register?.(this);
+
+    // Both derive their keys from the application's secret, and neither was
+    // ever called outside its own test — so `encrypts` threw in every
+    // application that reached for it, and `generatesTokenFor` would have
+    // done the same. Derived here, once, before anything can use them.
+    configureEncryption(this.config.secretKeyBase);
+    configureTokens(this.config.secretKeyBase);
 
     this.#connection = connect(this.config.database.url);
 
