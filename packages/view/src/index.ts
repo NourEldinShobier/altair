@@ -18,3 +18,4 @@ export {
 export * from "./cache.js";
 export * from "./links.js";
 export * from "./content_for.js";
+export * from "./text.js";
