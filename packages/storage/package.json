@@ -8,5 +8,8 @@
   "dependencies": {
     "@altair/orm": "workspace:*",
     "@altair/support": "workspace:*"
+  },
+  "devDependencies": {
+    "@altair/core": "workspace:*"
   }
 }
