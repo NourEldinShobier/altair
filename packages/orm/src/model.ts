@@ -303,6 +303,15 @@ const ORIGINAL = Symbol("altair.model.original");
 // bound to the real object, and every access here goes through a Proxy, so
 // `this.#field` inside a getter would throw "invalid private field".
 const PERSISTED = Symbol("altair.model.persisted");
+/**
+ * What the last save changed.
+ *
+ * Kept because `changed()` is empty by the time an after-save callback runs —
+ * the record is clean, which is the point. Rails added `saved_changes` for
+ * exactly this: "the email changed, so send a confirmation" is an after-save
+ * question and nothing else could answer it.
+ */
+const SAVED_CHANGES = Symbol("altair.model.savedChanges");
 const NESTED = Symbol("altair.model.nested");
 // Whether the last save was an insert. Read by the commit callbacks, which
 // run after both kinds and have no other way to tell them apart.
@@ -320,6 +329,9 @@ export interface BaseModelInstance<A> {
   readonly errors: ValidationErrors;
   attributes(): A;
   changedAttributes(): Partial<A>;
+  savedChanges(): Record<string, [unknown, unknown]>;
+  hasSavedChange(attribute?: keyof A & string): boolean;
+  attributeBeforeLastSave(attribute: keyof A & string): unknown;
   changes(): Record<string, [unknown, unknown]>;
   changed(): (keyof A & string)[];
   hasChanged(attribute?: keyof A & string): boolean;
@@ -787,6 +799,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     declare [ATTRIBUTES]: Record<string, unknown>;
     declare [ORIGINAL]: Record<string, unknown>;
+    declare [SAVED_CHANGES]: Record<string, [unknown, unknown]> | undefined;
 
     declare [PERSISTED]: boolean;
     declare [NESTED]: Record<string, unknown>;
@@ -2066,6 +2079,29 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       }
     }
 
+    /**
+     * What the save that just happened changed, as `[was, is]`.
+     *
+     * Rails' `saved_changes`. The question an after-save callback asks, and the
+     * one it could not ask before this existed: by then the record is clean, so
+     * `changes()` is empty and "did the email change?" has no answer.
+     */
+    savedChanges(): Record<string, [unknown, unknown]> {
+      return { ...this[SAVED_CHANGES] };
+    }
+
+    /** Whether the last save touched this attribute, or anything at all. */
+    hasSavedChange(attribute?: keyof A & string): boolean {
+      const saved = this[SAVED_CHANGES] ?? {};
+
+      return attribute ? attribute in saved : Object.keys(saved).length > 0;
+    }
+
+    /** What an attribute held before the save that just happened. */
+    attributeBeforeLastSave(attribute: keyof A & string): unknown {
+      return this[SAVED_CHANGES]?.[attribute]?.[0];
+    }
+
     /** Rails' `serializable_hash`, with `only`, `except` and `methods`. */
     serializableHash(options: SerializationOptions = {}): Record<string, unknown> {
       return serializableHash(this, this.attributes() as Record<string, unknown>, options);
@@ -2540,6 +2576,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       }
 
       this[PERSISTED] = true;
+      this[SAVED_CHANGES] = this.changes();
       this[ORIGINAL] = { ...this[ATTRIBUTES] };
     }
 
@@ -2548,7 +2585,15 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const changes = this.changedAttributes() as Record<string, unknown>;
 
       if ((await klass.columnNames()).includes("updated_at")) changes.updated_at = new Date();
-      if (Object.keys(changes).length === 0) return;
+
+      // A save that writes nothing still happened, and what it changed is
+      // nothing. Left alone, the record would keep answering with whatever the
+      // save before it changed — so an after-save callback asking "did the
+      // email change?" would say yes twice.
+      if (Object.keys(changes).length === 0) {
+        this[SAVED_CHANGES] = {};
+        return;
+      }
 
       // Optimistic locking: the version the record was read at goes in the
       // WHERE clause, and the new one in the SET. If someone else saved in
@@ -2588,6 +2633,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // MySQL timestamp left in memory would not even sort against an ISO one.
       // `changes` is still the plain values; only the bindings were encrypted.
       Object.assign(this[ATTRIBUTES], klass.castRow(changes as Row, { encrypted: false }));
+      this[SAVED_CHANGES] = this.changes();
       this[ORIGINAL] = { ...this[ATTRIBUTES] };
     }
 
