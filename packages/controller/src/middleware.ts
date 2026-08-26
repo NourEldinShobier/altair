@@ -357,16 +357,65 @@ export function securityHeaders(overrides: Record<string, string> = {}): Middlew
 }
 
 /** Redirects http to https. Rails' `force_ssl`. */
-export function forceSsl(): Middleware {
+export interface ForceSslOptions {
+  /**
+   * How long a browser should refuse to speak plaintext to this host, in
+   * seconds. A year, as Rails does, and as the preload list requires.
+   */
+  maxAge?: number;
+  /** Whether the promise covers subdomains. Rails includes them. */
+  includeSubDomains?: boolean;
+  /**
+   * Asks for inclusion in the browsers' preload list.
+   *
+   * Off by default, and worth leaving off until you mean it: getting a domain
+   * onto that list is a form submission and getting it off again takes months,
+   * during which every subdomain must speak https or be unreachable.
+   */
+  preload?: boolean;
+}
+
+export function forceSsl(options: ForceSslOptions = {}): Middleware {
+  const maxAge = options.maxAge ?? 31_536_000;
+  const directives = [`max-age=${maxAge}`];
+
+  if (options.includeSubDomains ?? true) directives.push("includeSubDomains");
+  if (options.preload) directives.push("preload");
+
+  const policy = directives.join("; ");
+
   return async (request, next) => {
     const url = new URL(request.url);
     const proto = request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "");
+    const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
 
-    if (proto === "https" || url.hostname === "localhost") return await next(request);
+    if (proto !== "https" && !local) {
+      url.protocol = "https:";
+      // 301 rather than 302: this is permanent, and a browser that remembers
+      // it stops sending the first request in plaintext.
+      return new Response(null, { status: 301, headers: { location: url.toString() } });
+    }
 
-    url.protocol = "https:";
-    // 301 rather than 302: this is permanent, and a browser that remembers it
-    // stops sending the first request in plaintext at all.
-    return new Response(null, { status: 301, headers: { location: url.toString() } });
+    const response = await next(request);
+
+    // The redirect above only helps a browser that has already been told
+    // once. Somebody typing the bare domain sends plaintext every time that
+    // memory expires, and a network that is listening answers instead — which
+    // is what this header removes, and what the redirect on its own cannot.
+    //
+    // Not on localhost: it would teach the browser to refuse plaintext there
+    // for a year, across every project on the machine that uses the name.
+    if (local) return response;
+
+    const headers = new Headers(response.headers);
+    if (!headers.has("strict-transport-security")) {
+      headers.set("strict-transport-security", policy);
+    }
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   };
 }
