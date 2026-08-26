@@ -117,6 +117,16 @@ export interface AssociationOptions {
   autosave?: boolean;
 
   /**
+   * The association on the target that points back here. Rails' `inverse_of`.
+   *
+   * Preloading a post's comments already knows which post each comment
+   * belongs to — it grouped them by it. Without this, a comment asked for its
+   * post goes and fetches the row the owner is holding, which is the N+1 that
+   * `includes` was added to remove, one level down.
+   */
+  inverseOf?: string;
+
+  /**
    * Lets a `belongsTo` have no parent. Rails' `optional: true`.
    *
    * A `belongsTo` is required by default, as Rails has had it since 5.0: a
@@ -235,7 +245,10 @@ export async function preloadAssociation(
     const byId = new Map(found.map((record) => [String(record[primaryKey]), record]));
 
     for (const owner of owners) {
-      owner[cacheKey(definition.name)] = byId.get(String(owner[foreignKey])) ?? null;
+      const parent = byId.get(String(owner[foreignKey])) ?? null;
+      owner[cacheKey(definition.name)] = parent;
+
+      if (definition.inverseOf && parent) linkBack(parent, definition.inverseOf, owner, "many");
     }
     return;
   }
@@ -271,7 +284,40 @@ export async function preloadAssociation(
     const matches = grouped.get(String(owner[primaryKey])) ?? [];
     owner[cacheKey(definition.name)] =
       definition.kind === "hasOne" ? (matches[0] ?? null) : matches;
+
+    // The children already know which owner they belong to — that is how they
+    // were grouped. Telling them saves each one a query for a row that is
+    // right here.
+    if (definition.inverseOf) {
+      for (const match of matches) linkBack(match, definition.inverseOf, owner, "one");
+    }
   }
+}
+
+/**
+ * Fills in the other side of an association that was just loaded.
+ *
+ * `shape` says what the inverse holds: a `belongsTo` on the far side is one
+ * record, a `hasMany` is a list. Getting it wrong would hand an array to
+ * something that expects a record, so it is named rather than guessed.
+ */
+function linkBack(
+  target: InstanceLike,
+  name: string,
+  owner: InstanceLike,
+  shape: "one" | "many",
+): void {
+  const key = cacheKey(name);
+
+  if (shape === "one") {
+    target[key] = owner;
+    return;
+  }
+
+  const existing = target[key];
+
+  if (Array.isArray(existing)) existing.push(owner);
+  else target[key] = [owner];
 }
 
 /**
