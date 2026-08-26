@@ -47,6 +47,15 @@ export interface ApplicationConfig {
   /** Forces https and marks cookies Secure. */
   forceSsl: boolean;
   /**
+   * Serves what is in `public/`. Rails' `config.public_file_server.enabled`.
+   *
+   * On everywhere, including production. An application behind a CDN or nginx
+   * never reaches it; one deployed as a container with nothing in front is the
+   * common case now, and for that the alternative is that its own favicon
+   * 404s.
+   */
+  publicFileServer: boolean;
+  /**
    * Requires a valid CSRF token on every unsafe request.
    *
    * Off in test, as Rails' generated test environment is: a controller test
@@ -107,6 +116,7 @@ export function defaultsFor(
     },
     showDetailedErrors: !production,
     forceSsl: production,
+    publicFileServer: true,
     forgeryProtection: env !== "test",
     // Development only, which is where Rails sets it and where the attack is
     // aimed. Test leaves it empty so a suite can call itself whatever it likes,
