@@ -31,7 +31,7 @@ class Comment extends Model<CommentAttributes>("comments") {
   declare post: BelongsTo<Post>;
 
   static {
-    this.belongsTo("post", () => Post, { counterCache: true });
+    this.belongsTo("post", () => Post, { optional: true, counterCache: true });
   }
 }
 
@@ -40,7 +40,7 @@ class Review extends Model<CommentAttributes>("reviews") {
   declare post: BelongsTo<Post>;
 
   static {
-    this.belongsTo("post", () => Post, { counterCache: "reviews_tally" });
+    this.belongsTo("post", () => Post, { optional: true, counterCache: "reviews_tally" });
   }
 }
 
@@ -144,7 +144,7 @@ describe("counter caches", () => {
       declare post: BelongsTo<Post>;
 
       static {
-        this.belongsTo("post", () => Post);
+        this.belongsTo("post", () => Post, { optional: true });
       }
     }
 

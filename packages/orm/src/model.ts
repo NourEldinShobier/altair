@@ -61,6 +61,7 @@ import {
   type SerializationOptions,
 } from "./active_model.js";
 import {
+  MESSAGES,
   declarationApplies,
   runValidation,
   type ValidationDeclaration,
@@ -977,6 +978,26 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
       if (options.counterCache) this.defineCounterCache(name, options.counterCache);
       if (options.touch) this.defineTouch(name, options.touch);
+
+      // Required unless it says otherwise, which is Rails' default since 5.0.
+      // A polymorphic one is skipped: its foreign key alone does not say
+      // whether a parent was named, and the type column carries half the
+      // answer.
+      if (!options.optional && !options.polymorphic) {
+        this.requiresParent(name, options.foreignKey ?? defaultForeignKey(name));
+      }
+    }
+
+    /** Foreign keys that must be filled in, by association name. */
+    static requiredParents: { name: string; foreignKey: string }[] = [];
+
+    /** Records that this association's foreign key may not be empty. */
+    protected static requiresParent(name: string, foreignKey: string): void {
+      if (!Object.hasOwn(this, "requiredParents")) {
+        this.requiredParents = [...this.requiredParents];
+      }
+
+      this.requiredParents.push({ name, foreignKey });
     }
 
     /**
@@ -1845,15 +1866,17 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // being created however it got here.
       const running = context ?? (this.isPersisted ? "update" : "create");
 
-      // Not an early return on `validations` alone: a model whose only rule is
+      // Not an early return on `validations` alone. A model whose only rule is
       // `validatesAssociated` has no attribute validations, and returning here
-      // skipped the one thing it declared.
+      // skipped the one thing it declared — and then a required `belongsTo`
+      // was added and skipped the same way, silently, because every model in
+      // the tests happened to declare something else as well. The probe that
+      // caught it declared nothing.
       if (klass.validations.length === 0) {
+        this.validateRequiredParents(klass);
         await this.validateAssociated(klass);
         return;
       }
-
-      void running;
 
       const probe = {
         isPersisted: this.isPersisted,
@@ -1872,7 +1895,25 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         await runValidation(this as unknown as ValidationTarget, declaration, probe);
       }
 
+      this.validateRequiredParents(klass);
+
       await this.validateAssociated(klass);
+    }
+
+    /**
+     * Checks that every required `belongsTo` names something.
+     *
+     * The foreign key is what is checked, not the parent — reading the parent
+     * would be a query per association on every save, to learn something the
+     * column already says. A key pointing at a row that has since gone is a
+     * job for a foreign key constraint, which the database does better.
+     */
+    protected validateRequiredParents(klass: typeof BaseModel): void {
+      for (const { name, foreignKey } of klass.requiredParents) {
+        if (this[ATTRIBUTES][foreignKey] == null) {
+          this.errors.add(name, MESSAGES.required);
+        }
+      }
     }
 
     /**

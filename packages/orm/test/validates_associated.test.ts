@@ -52,7 +52,7 @@ class Note extends Model<CommentRow>("comments") {
   declare post: Author | undefined;
   static {
     this.validates("body", { presence: true });
-    this.belongsTo("post", () => Author);
+    this.belongsTo("post", () => Author, { optional: true });
     this.validatesAssociated("post");
   }
 }

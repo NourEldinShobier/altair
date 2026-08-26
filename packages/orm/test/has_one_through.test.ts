@@ -32,7 +32,7 @@ class Address extends Model<AddressRow>("addresses") {}
 class Profile extends Model<ProfileRow>("profiles") {
   declare address: () => Promise<Address | null>;
   static {
-    this.belongsTo("address", () => Address);
+    this.belongsTo("address", () => Address, { optional: true });
   }
 }
 

@@ -44,9 +44,9 @@ class Comment extends Model<CommentAttributes>("comments") {
 Author.hasMany("posts", () => Post);
 // Rails: has_many :comments, through: :posts
 Author.hasManyThrough("comments", "posts");
-Post.belongsTo("author", () => Author);
+Post.belongsTo("author", () => Author, { optional: true });
 Post.hasMany("comments", () => Comment);
-Comment.belongsTo("post", () => Post);
+Comment.belongsTo("post", () => Post, { optional: true });
 Comment.belongsToPolymorphic("commentable", { Post: () => Post, Author: () => Author });
 
 let connection: Connection;
