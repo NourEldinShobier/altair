@@ -48,7 +48,10 @@ let root: string;
 const env = () => ({ ...process.env, NODE_ENV: "development", ALTAIR_ENV: "development" });
 
 const altair = (...args: string[]) =>
-  Bun.spawnSync(["bun", "run", join(root, "bin", "altair.ts"), ...args], { cwd: root, env: env() });
+  Bun.spawnSync([process.execPath, "run", join(root, "bin", "altair.ts"), ...args], {
+    cwd: root,
+    env: env(),
+  });
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "altair-typecheck-"));
@@ -107,7 +110,7 @@ function typecheck(): { output: string; code: number | null } {
     "tsc",
   );
 
-  const result = Bun.spawnSync(["bun", "run", compiler, "--noEmit"], { cwd: root });
+  const result = Bun.spawnSync([process.execPath, "run", compiler, "--noEmit"], { cwd: root });
   const output = result.stdout.toString() + result.stderr.toString();
 
   // A compiler that never ran exits non-zero and says nothing — which is

@@ -67,16 +67,34 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  // Tolerated rather than asserted. A server that has just been killed can
-  // still hold its directory for a moment on Windows, and a temporary
-  // directory left behind is the operating system's problem — failing the
-  // suite over one would report a cleanup as a broken application.
-  try {
-    rmSync(root, { recursive: true, force: true });
-  } catch {
-    // Left for the OS to sweep.
-  }
+  removeApplication(root);
 });
+
+/**
+ * Removes the temporary application, and says so when it cannot.
+ *
+ * This used to swallow the failure as "the operating system's problem". It was
+ * not: the server was still running and holding the directory, because the
+ * test spawned `bun` by name and killed the Windows shim instead of the bun
+ * behind it. 205 servers and 404 directories had accumulated before anybody
+ * counted them, and the machine got flakier the longer the suite ran.
+ *
+ * A short retry, because a just-killed process can hold a handle for a moment.
+ * Then a failure, because a directory that will not go is a process that will
+ * not stop.
+ */
+function removeApplication(path: string): void {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch {
+      Bun.sleepSync(50);
+    }
+  }
+
+  rmSync(path, { recursive: true, force: true });
+}
 
 describe("the generated application", () => {
   it("has the files a new application needs", async () => {
@@ -94,7 +112,12 @@ describe("the generated application", () => {
   // The part no unit test reaches: the template's own imports, resolved from
   // the directory it was written into.
   it("boots and answers a request", async () => {
-    const server = Bun.spawn(["bun", "run", join(root, "bin", "server.ts")], {
+    // The bun binary rather than the name. On Windows the name resolves to a
+    // shim, so `Bun.spawn` starts the shim and the real bun is its child —
+    // `kill()` then reaps the shim and leaves a server running, holding the
+    // temporary directory the test is trying to remove. 206 of them had piled
+    // up before anybody counted.
+    const server = Bun.spawn([process.execPath, "run", join(root, "bin", "server.ts")], {
       cwd: root,
       env: { ...process.env, PORT: "0" },
       stdout: "pipe",

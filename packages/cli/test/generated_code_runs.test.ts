@@ -85,7 +85,7 @@ describe("what the generators write", () => {
 
     // Runs the generated tests, which is what the mailer and job generators
     // write and what nothing has ever executed.
-    const result = await Bun.spawn(["bun", "test"], {
+    const result = await Bun.spawn([process.execPath, "test"], {
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",

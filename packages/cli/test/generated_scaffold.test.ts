@@ -123,7 +123,12 @@ afterEach(() => {
 
 describe("a scaffolded resource", () => {
   it("migrates, boots, and answers every action", async () => {
-    const server = Bun.spawn(["bun", "run", join(root, "bin", "boot.ts")], {
+    // The bun binary rather than the name. On Windows the name resolves to a
+    // shim, so `Bun.spawn` starts the shim and the real bun is its child —
+    // `kill()` then reaps the shim and leaves a server running, holding the
+    // temporary directory the test is trying to remove. 206 of them had piled
+    // up before anybody counted.
+    const server = Bun.spawn([process.execPath, "run", join(root, "bin", "boot.ts")], {
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",
