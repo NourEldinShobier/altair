@@ -240,6 +240,37 @@ function primaryKeyClause(connection: Connection): string {
   }
 }
 
+/**
+ * Raised when an adapter cannot make a change the others can.
+ *
+ * Its own error rather than a driver message, because the answer is usually a
+ * different migration rather than a different adapter, and the message is the
+ * only place to say so.
+ */
+export class UnsupportedSchemaChange extends Error {
+  constructor(
+    readonly operation: string,
+    reason: string,
+  ) {
+    super(`${operation} is not supported here: ${reason}`);
+    this.name = "UnsupportedSchemaChange";
+  }
+}
+
+/**
+ * A default value as SQL.
+ *
+ * A default cannot be a bound parameter — it is part of the table's
+ * definition, not of a statement — so it is written out, and a string is
+ * quoted by doubling its quotes rather than escaped by hand.
+ */
+function defaultLiteral(value: unknown): string {
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
 export class SchemaStatements {
   constructor(readonly connection: Connection) {}
 
@@ -307,6 +338,90 @@ export class SchemaStatements {
   async removeColumn(table: string, name: string): Promise<void> {
     await this.connection.execute(
       `ALTER TABLE ${this.connection.quote(table)} DROP COLUMN ${this.connection.quote(name)}`,
+    );
+  }
+
+  /**
+   * Renames a column. Rails' `rename_column`.
+   *
+   * The one statement here all three adapters now spell the same way. They did
+   * not always: SQLite could not rename a column before 3.25 and MySQL wanted
+   * `CHANGE` with the type repeated before 8.0. Both are old enough that
+   * carrying the workarounds would be carrying them for nobody.
+   */
+  async renameColumn(table: string, from: string, to: string): Promise<void> {
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} RENAME COLUMN ${this.connection.quote(from)} TO ${this.connection.quote(to)}`,
+    );
+  }
+
+  /**
+   * Adds or removes a column's NOT NULL. Rails' `change_column_null`.
+   *
+   * Postgres and MySQL disagree about more than syntax: MySQL restates the
+   * column's whole definition, so it needs the type, and dropping it here
+   * would silently reset the column's default along with its nullability.
+   */
+  async changeColumnNull(
+    table: string,
+    column: string,
+    allowNull: boolean,
+    type?: ColumnType,
+  ): Promise<void> {
+    const quoted = `${this.connection.quote(table)}`;
+    const name = this.connection.quote(column);
+
+    if (this.connection.adapter === "sqlite") {
+      throw new UnsupportedSchemaChange(
+        "changeColumnNull",
+        "SQLite cannot alter a column's nullability. Create the table with the constraint, or rebuild it: new table, copy, drop, rename.",
+      );
+    }
+
+    if (this.connection.adapter === "mysql") {
+      if (!type) {
+        throw new Error(
+          `changeColumnNull needs the column's type on MySQL: it restates the whole definition, and guessing would reset ${column}'s default.`,
+        );
+      }
+
+      const sql = sqlType(this.connection, { name: column, type } as Column);
+
+      await this.connection.execute(
+        `ALTER TABLE ${quoted} MODIFY ${name} ${sql} ${allowNull ? "NULL" : "NOT NULL"}`,
+      );
+      return;
+    }
+
+    await this.connection.execute(
+      `ALTER TABLE ${quoted} ALTER COLUMN ${name} ${allowNull ? "DROP" : "SET"} NOT NULL`,
+    );
+  }
+
+  /**
+   * Changes a column's default. Rails' `change_column_default`.
+   *
+   * `null` removes it, which is a different statement from setting it to NULL
+   * on Postgres and the same one on MySQL.
+   */
+  async changeColumnDefault(table: string, column: string, value: unknown): Promise<void> {
+    if (this.connection.adapter === "sqlite") {
+      throw new UnsupportedSchemaChange(
+        "changeColumnDefault",
+        "SQLite cannot alter a column's default. Create the table with it, or rebuild the table.",
+      );
+    }
+
+    const quoted = this.connection.quote(table);
+    const name = this.connection.quote(column);
+
+    if (value === null || value === undefined) {
+      await this.connection.execute(`ALTER TABLE ${quoted} ALTER COLUMN ${name} DROP DEFAULT`);
+      return;
+    }
+
+    await this.connection.execute(
+      `ALTER TABLE ${quoted} ALTER COLUMN ${name} SET DEFAULT ${defaultLiteral(value)}`,
     );
   }
 
