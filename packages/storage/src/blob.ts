@@ -134,8 +134,16 @@ export interface UploadedFile {
 
 /** A key no one can guess, in the shape Rails uses. */
 export function generateKey(): string {
+  let key = "";
+
   // base64url minus the punctuation, so a key is safe in a path and a header.
-  return secureToken(24).replaceAll(/[-_]/g, "").slice(0, 28);
+  // Stripping takes the token below 28 characters about once in 270 keys, so
+  // this pulls until there are enough rather than returning a short one: a key
+  // that is usually 28 characters and occasionally 26 is a key of no length at
+  // all, and the shorter ones are the guessable ones.
+  while (key.length < 28) key += secureToken(24).replaceAll(/[-_]/g, "");
+
+  return key.slice(0, 28);
 }
 
 /**
