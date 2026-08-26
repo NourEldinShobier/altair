@@ -178,6 +178,39 @@ describe("radios and selects", () => {
 
     expect(html).toContain(">Technology<");
   });
+
+  /**
+   * A select with no blank option has already answered for the person looking
+   * at it: whatever is first is what gets submitted by anyone who does not
+   * touch it, which is how a required field arrives filled in with a value
+   * nobody chose.
+   */
+  it("can start with nothing chosen", async () => {
+    const html = await render(builder.select("category", ["tech", "life"], { includeBlank: true }));
+
+    expect(html).toContain('<option value=""></option>');
+    // The blank goes first, or it is not what an untouched form submits.
+    expect(html.indexOf('value=""')).toBeLessThan(html.indexOf('value="tech"'));
+  });
+
+  it("can say something in the blank", async () => {
+    const html = await render(builder.select("category", ["tech"], { prompt: "Pick a category" }));
+
+    expect(html).toContain('<option value="">Pick a category</option>');
+  });
+
+  it("leaves the blank out unless it is asked for", async () => {
+    expect(await render(builder.select("category", ["tech"]))).not.toContain('value=""');
+  });
+
+  // Rails keeps the html attributes in their own argument, after the options.
+  it("still takes attributes of its own", async () => {
+    const html = await render(
+      builder.select("category", ["tech"], { includeBlank: true }, { class: "pretty" }),
+    );
+
+    expect(html).toContain('class="pretty"');
+  });
 });
 
 describe("errors", () => {

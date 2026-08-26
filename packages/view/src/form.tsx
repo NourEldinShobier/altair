@@ -76,6 +76,18 @@ export function scopeFor(record: FormRecord | undefined, given?: string): string
  * Every method returns a node, so a caller composes them with anything else
  * TSX can express rather than reaching for a helper that wraps a helper.
  */
+export type SelectOption = string | { value: string; label?: string };
+
+export interface SelectSettings {
+  /**
+   * An empty first option, so a select does not silently answer for the person
+   * looking at it. Rails' `include_blank`.
+   */
+  includeBlank?: boolean;
+  /** The same, with something written in it. Rails' `prompt`. */
+  prompt?: string;
+}
+
 export class FormBuilder {
   constructor(
     readonly scope: string | undefined,
@@ -219,14 +231,23 @@ export class FormBuilder {
 
   select(
     attribute: string,
-    options: readonly (string | { value: string; label?: string })[],
+    options: readonly SelectOption[],
+    settings: SelectSettings = {},
     attributes: Attributes = {},
   ): Node {
     const current = this.value(attribute);
 
+    // A select with nothing blank in it has already answered the question:
+    // whatever is first is submitted by anyone who does not touch it, which
+    // is how a "required" field comes back filled in with the first option.
+    const blank =
+      settings.prompt !== undefined || settings.includeBlank
+        ? [{ value: "", label: settings.prompt ?? "" }]
+        : [];
+
     return (
       <select name={this.name(attribute)} id={this.id(attribute)} {...attributes}>
-        {options.map((option) => {
+        {[...blank, ...options].map((option) => {
           const value = typeof option === "string" ? option : option.value;
           const label = typeof option === "string" ? option : (option.label ?? option.value);
 
