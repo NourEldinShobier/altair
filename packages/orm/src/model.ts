@@ -963,6 +963,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         tableName: this.table,
         primaryKey: this.primaryKey,
         instantiate: (row: Row) => this.instantiate(row) as InstanceType<M>,
+        build: (values: Record<string, unknown>) =>
+          new (this as unknown as { new (values?: object): InstanceType<M> })(values),
         // Column types have to be known before a row can be cast, and reading
         // them is asynchronous while instantiate is not.
         prepare: async () => {
