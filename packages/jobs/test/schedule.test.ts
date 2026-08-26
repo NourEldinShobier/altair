@@ -207,6 +207,7 @@ describe("the database queue", () => {
     runAt: Date.now(),
     attempts: 0,
     enqueuedAt: Date.now(),
+    priority: 0,
     ...over,
   });
 

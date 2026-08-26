@@ -63,6 +63,7 @@ const payloadFor = (jobClass: string, attempts = 0): JobPayload => ({
   arguments: [],
   runAt: Date.now(),
   enqueuedAt: Date.now(),
+  priority: 0,
   attempts,
 });
 

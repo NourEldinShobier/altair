@@ -37,6 +37,15 @@ export interface JobPayload {
   runAt: number;
   attempts: number;
   enqueuedAt: number;
+  /**
+   * Which job runs first when several are due. Lower goes first, as `nice`
+   * does and as every queue that has one reads it.
+   *
+   * Defaults to 0. Without it a password reset waits behind whatever the
+   * nightly batch enqueued, because the only order was the order they arrived
+   * in.
+   */
+  priority: number;
 }
 
 export interface EnqueueOptions {
@@ -54,6 +63,8 @@ export interface EnqueueOptions {
   /** Run at a specific time. Rails' `wait_until`. */
   waitUntil?: Date;
   queue?: string;
+  /** Lower runs first. Overrides the class's own for this enqueue. */
+  priority?: number;
 }
 
 export interface RetryPolicy {
@@ -139,6 +150,8 @@ const REGISTRY = new Map<string, typeof Job>();
 export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
   /** The queue this class enqueues to. Rails' `queue_as`. */
   static queueName = "default";
+  /** What this class enqueues at. Rails' `queue_with_priority`. */
+  static priority = 0;
   static retryPolicy: RetryPolicy = DEFAULT_RETRY;
   static adapter: QueueAdapter | undefined;
   /** Per-error rules, first match wins. Rails' `retry_on` and `discard_on`. */
@@ -272,6 +285,7 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       runAt: runAtFor(options),
       attempts: 0,
       enqueuedAt: Date.now(),
+      priority: options.priority ?? this.priority,
     };
 
     // Deferred until the transaction commits, which Rails made the default in
