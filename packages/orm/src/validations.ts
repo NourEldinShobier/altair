@@ -200,16 +200,24 @@ export async function runValidation(
   if (options.allowNil && (value === null || value === undefined)) return;
   if (options.allowBlank && isBlank(value)) return;
 
-  if (options.length && !isBlank(value)) {
-    const length = String(value).length;
+  // Blank is not skipped here, and Rails does not skip it either. A length
+  // validator that ignored an empty value would let `minimum: 3` through on
+  // "" — which is the case it most obviously exists to catch. `allowNil` and
+  // `allowBlank` above are how a caller asks for the other behaviour.
+  if (options.length) {
+    const length = String(value ?? "").length;
     const { minimum, maximum, is } = options.length;
     if (minimum !== undefined && length < minimum) fail(MESSAGES.tooShort(minimum));
     if (maximum !== undefined && length > maximum) fail(MESSAGES.tooLong(maximum));
     if (is !== undefined && length !== is) fail(MESSAGES.wrongLength(is));
   }
 
-  if (options.format && !isBlank(value)) {
-    const text = String(value);
+  // Nor here. `validates("email", { format: { with: /@/ } })` accepted an
+  // empty string and a null, so a form submitted with the field left blank —
+  // which sends "" rather than nothing — passed a validation written to stop
+  // exactly that.
+  if (options.format) {
+    const text = String(value ?? "");
     if (options.format.with && !options.format.with.test(text)) fail(MESSAGES.invalid);
     if (options.format.without && options.format.without.test(text)) fail(MESSAGES.invalid);
   }
