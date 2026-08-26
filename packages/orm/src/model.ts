@@ -61,6 +61,7 @@ import {
   type SerializationOptions,
 } from "./active_model.js";
 import {
+  declarationApplies,
   runValidation,
   type ValidationDeclaration,
   type ValidationOptions,
@@ -328,9 +329,10 @@ export interface BaseModelInstance<A> {
   update(values: Partial<A>): Promise<boolean>;
   destroy(): Promise<boolean>;
   reload(): Promise<void>;
-  validate(): Promise<boolean>;
+  /** Runs the validations, optionally in a named context. Rails' `valid?`. */
+  validate(context?: string): Promise<boolean>;
   /** Override to add validations. Push onto `this.errors` to fail. */
-  runValidations(): Promise<void>;
+  runValidations(context?: string): Promise<void>;
   toJSON(): A;
   toParam(): string;
   cacheKey(): string;
@@ -1836,8 +1838,12 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * Runs the declared validations. Override to add rules in code, calling
      * `super.runValidations()` to keep the declared ones.
      */
-    async runValidations(): Promise<void> {
+    async runValidations(context?: string): Promise<void> {
       const klass = this.constructor as typeof BaseModel;
+
+      // What `on:` is matched against. A record that has never been saved is
+      // being created however it got here.
+      const running = context ?? (this.isPersisted ? "update" : "create");
 
       // Not an early return on `validations` alone: a model whose only rule is
       // `validatesAssociated` has no attribute validations, and returning here
@@ -1846,6 +1852,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         await this.validateAssociated(klass);
         return;
       }
+
+      void running;
 
       const probe = {
         isPersisted: this.isPersisted,
@@ -1859,6 +1867,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       };
 
       for (const declaration of klass.validations) {
+        if (!(await declarationApplies(declaration.options, this, running))) continue;
+
         await runValidation(this as unknown as ValidationTarget, declaration, probe);
       }
 
@@ -1900,10 +1910,16 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       });
     }
 
-    async validate(): Promise<boolean> {
+    /**
+     * Runs the validations, in a context.
+     *
+     * Rails' `valid?(:context)`. Without one the context is `create` or
+     * `update`, decided by whether the record has been saved.
+     */
+    async validate(context?: string): Promise<boolean> {
       this.errors.clear();
       await runCallbacks(this, "validation", async () => {
-        await this.runValidations();
+        await this.runValidations(context);
       });
       return this.errors.isEmpty;
     }
