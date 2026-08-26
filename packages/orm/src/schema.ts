@@ -481,6 +481,107 @@ export class SchemaStatements {
     );
   }
 
+  /**
+   * Rails' `add_check_constraint`.
+   *
+   * The condition is written into the table definition rather than bound, so
+   * it cannot be a parameter — a check is part of the schema, not part of a
+   * statement. It is the caller's SQL, which is why the migration file is the
+   * only place it should ever come from.
+   */
+  async addCheckConstraint(
+    table: string,
+    condition: string,
+    options: { name?: string } = {},
+  ): Promise<void> {
+    if (this.connection.adapter === "sqlite") {
+      throw new Error(
+        `SQLite cannot add a check constraint to an existing table. Declare it in createTable("${table}") instead.`,
+      );
+    }
+
+    const name =
+      options.name ?? `chk_rails_${table}_${Bun.hash(condition).toString(36).slice(0, 10)}`;
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} ADD CONSTRAINT ${this.connection.quote(name)} CHECK (${condition})`,
+    );
+  }
+
+  async removeCheckConstraint(table: string, name: string): Promise<void> {
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} DROP CONSTRAINT ${this.connection.quote(name)}`,
+    );
+  }
+
+  /** Rails' `add_unique_constraint`, which is an index everywhere but Postgres. */
+  async addUniqueConstraint(
+    table: string,
+    columns: string | string[],
+    options: { name?: string } = {},
+  ): Promise<void> {
+    const names = Array.isArray(columns) ? columns : [columns];
+
+    await this.addIndex(table, names, { unique: true, ...options });
+  }
+
+  /**
+   * Rails' `add_timestamps`.
+   *
+   * Both columns, because a row with one and not the other is worse than a row
+   * with neither: everything that reads `updated_at` finds it and everything
+   * that sorts by `created_at` does not.
+   */
+  async addTimestamps(table: string, options: { default?: unknown } = {}): Promise<void> {
+    for (const column of ["created_at", "updated_at"]) {
+      await this.addColumn(table, column, "datetime", options);
+    }
+  }
+
+  async removeTimestamps(table: string): Promise<void> {
+    for (const column of ["created_at", "updated_at"]) {
+      await this.removeColumn(table, column);
+    }
+  }
+
+  /** Whether an index is there. Rails' `index_exists?`. */
+  async indexExists(table: string, columns: string | string[]): Promise<boolean> {
+    const names = Array.isArray(columns) ? columns : [columns];
+    const wanted = indexName(table, names);
+
+    return (await this.indexes(table)).some((index) => index === wanted);
+  }
+
+  /** Every index on a table, by name. */
+  async indexes(table: string): Promise<string[]> {
+    const connection = this.connection;
+
+    if (connection.adapter === "sqlite") {
+      const rows = await connection.query<{ name: string }>(
+        `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ${connection.placeholder(0)}`,
+        [table],
+      );
+
+      return rows.map((row) => row.name);
+    }
+
+    if (connection.adapter === "postgres") {
+      const rows = await connection.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes WHERE tablename = ${connection.placeholder(0)}`,
+        [table],
+      );
+
+      return rows.map((row) => row.indexname);
+    }
+
+    const rows = await connection.query<{ INDEX_NAME: string; index_name: string }>(
+      `SELECT DISTINCT INDEX_NAME FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ${connection.placeholder(0)}`,
+      [table],
+    );
+
+    return rows.map((row) => row.INDEX_NAME ?? row.index_name);
+  }
+
   /** Rails' `remove_foreign_key`. */
   async removeForeignKey(
     table: string,
