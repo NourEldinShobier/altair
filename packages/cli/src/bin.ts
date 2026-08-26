@@ -360,6 +360,22 @@ switch (command) {
     process.exit(await child.exited);
   }
 
+  case "storage:install":
+  case "richtext:install": {
+    const { generateRichTextInstall, generateStorageInstall } = await import("./generators.js");
+    const file =
+      command === "storage:install"
+        ? generateStorageInstall(new Date())
+        : generateRichTextInstall(new Date());
+
+    // Through the same version check as `generate`: two of these written in
+    // the same second would otherwise claim the same version, and db:migrate
+    // refuses a table it cannot order.
+    await write(await withFreeVersion([file]), process.cwd());
+    console.log("Run altair db:migrate to apply it.");
+    break;
+  }
+
   case "runner":
   case "r": {
     const { runnerTarget, runTarget } = await import("./runner.js");

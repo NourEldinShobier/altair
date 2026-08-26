@@ -466,6 +466,64 @@ export class ${className} extends Channel {
   ];
 }
 
+/**
+ * The migration ActiveStorage needs, as Rails' `active_storage:install` writes.
+ *
+ * A migration rather than a table created behind the application's back: it
+ * lands in `db/schema.ts` like everything else, it can be read before it runs,
+ * and it rolls back. The body calls the framework's own installer, so the
+ * shape of the tables is defined once.
+ */
+export function generateStorageInstall(now: Date): GeneratedFile {
+  return installMigration("create_active_storage_tables", now, {
+    from: "@altair/storage",
+    up: "createStorageTables",
+    tables: ["active_storage_attachments", "active_storage_blobs"],
+  });
+}
+
+/** The same for ActionText, as Rails' `action_text:install` writes. */
+export function generateRichTextInstall(now: Date): GeneratedFile {
+  return installMigration("create_action_text_tables", now, {
+    from: "@altair/orm",
+    up: "createRichTextTable",
+    tables: ["action_text_rich_texts"],
+  });
+}
+
+function installMigration(
+  name: string,
+  now: Date,
+  options: { from: string; up: string; tables: string[] },
+): GeneratedFile {
+  const version = migrationVersion(now);
+  const drops = options.tables
+    .map((table) => `    await schema.dropTable(${JSON.stringify(table)});`)
+    .join("\n");
+
+  return {
+    path: `db/migrate/${version}_${name}.ts`,
+    contents: `import type { Migration } from "@altair/orm";
+import { ${options.up} } from "${options.from}";
+
+const migration: Migration = {
+  version: ${JSON.stringify(version)},
+  name: ${JSON.stringify(camelize(name))},
+
+  up: async (schema) => {
+    await ${options.up}(schema);
+  },
+
+  down: async (schema) => {
+${drops}
+  },
+};
+
+export default migration;
+`,
+  };
+}
+
 export function generateScaffold(name: string, fields: FieldSpec[], now: Date): GeneratedFile[] {
   return [
     generateMigration(`create_${tableize(name)}`, fields, now),
