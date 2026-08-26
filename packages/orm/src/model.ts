@@ -66,6 +66,7 @@ import {
   type ValidationOptions,
   type ValidationTarget,
 } from "./validations.js";
+import { fingerprintMatches, generateToken, readToken, type TokenDefinition } from "./token_for.js";
 import {
   cacheKey,
   defaultForeignKey,
@@ -333,6 +334,8 @@ export interface BaseModelInstance<A> {
   toJSON(): A;
   toParam(): string;
   cacheKey(): string;
+  /** Signs a token for one purpose. Rails' `generate_token_for`. */
+  generateTokenFor(purpose: string): string;
   touch(...columns: string[]): Promise<void>;
   withLock<R>(body: () => Promise<R>): Promise<R>;
   serializableHash(options?: SerializationOptions): Record<string, unknown>;
@@ -1124,6 +1127,69 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       });
     }
 
+    /** Token shapes this class can sign, by purpose. */
+    static tokenDefinitions: Record<string, TokenDefinition> = {};
+
+    /**
+     * Rails' `generates_token_for`.
+     *
+     *     this.generatesTokenFor("passwordReset", { expiresIn: 900 }, (user) =>
+     *       String(user.password_digest ?? "").slice(-10),
+     *     )
+     *
+     * No column and no row: the token carries the id and is signed. The third
+     * argument is what earns it — whatever it returns is signed in and checked
+     * again on use, so a reset link stops working the moment the password
+     * changes. Without it a link keeps working after the reset, and whoever
+     * read the email once still has a way in.
+     */
+    static generatesTokenFor(
+      purpose: string,
+      options: { expiresIn?: number } = {},
+      fingerprint?: (record: never) => unknown,
+    ): void {
+      // Copied before writing, so a subclass declaring a token does not add it
+      // to its parent and every sibling.
+      if (!Object.hasOwn(this, "tokenDefinitions")) {
+        this.tokenDefinitions = { ...this.tokenDefinitions };
+      }
+
+      this.tokenDefinitions[purpose] = { expiresIn: options.expiresIn, fingerprint };
+    }
+
+    /**
+     * Finds the record a token names, or null.
+     *
+     * Null for every way it can fail — a bad signature, the wrong purpose, an
+     * expired token, a record that has gone, a fingerprint that no longer
+     * matches. One thing for the caller to check, and no answer that tells an
+     * attacker which of those it was.
+     */
+    static async findByTokenFor<T extends BaseModel>(
+      this: (new (...args: never[]) => T) & typeof BaseModel,
+      purpose: string,
+      token: string,
+    ): Promise<T | null> {
+      const definition = this.tokenDefinitions[purpose];
+
+      if (!definition) {
+        throw new Error(
+          `${this.name} has no token defined for "${purpose}". Declare one with generatesTokenFor("${purpose}").`,
+        );
+      }
+
+      const read = readToken(this.name, purpose, token);
+      if (!read) return null;
+
+      const record = await (
+        this as unknown as { findBy(conditions: object): Promise<T | null> }
+      ).findBy({ [this.primaryKey]: read.id });
+
+      if (!record) return null;
+
+      return fingerprintMatches(definition, record, read.fingerprint) ? record : null;
+    }
+
     /**
      * A polymorphic belongsTo, whose target class is named by a companion
      * `<name>_type` column. Rails' `belongs_to :commentable, polymorphic: true`.
@@ -1599,6 +1665,32 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * no `updated_at` gets a key with no version, and the caller should know
      * that such a key cannot detect a change.
      */
+    /** Signs a token for one purpose. Rails' `generate_token_for`. */
+    generateTokenFor(purpose: string): string {
+      const klass = this.constructor as typeof BaseModel;
+      const definition = klass.tokenDefinitions[purpose];
+
+      if (!definition) {
+        throw new Error(
+          `${klass.name} has no token defined for "${purpose}". Declare one with generatesTokenFor("${purpose}").`,
+        );
+      }
+
+      if (this.isNewRecord) {
+        throw new Error(
+          `Cannot build a token for an unsaved ${klass.name}: it has no id, so nothing could find it again.`,
+        );
+      }
+
+      return generateToken(
+        klass.name,
+        purpose,
+        definition,
+        this,
+        this[ATTRIBUTES][klass.primaryKey],
+      );
+    }
+
     cacheKey(): string {
       const klass = this.constructor as typeof BaseModel;
       const id = String(this[ATTRIBUTES][klass.primaryKey] ?? "new");
@@ -2640,6 +2732,17 @@ export interface ModelClass<A extends object> {
     through: string,
     options?: AssociationOptions & { source?: string },
   ): void;
+  tokenDefinitions: Record<string, TokenDefinition>;
+  generatesTokenFor(
+    purpose: string,
+    options?: { expiresIn?: number },
+    fingerprint?: (record: never) => unknown,
+  ): void;
+  findByTokenFor<M extends AnyModel>(
+    this: M,
+    purpose: string,
+    token: string,
+  ): Promise<InstanceType<M> | null>;
   belongsToPolymorphic<M extends AnyModel>(
     this: M,
     name: AssociationName<M>,
