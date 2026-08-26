@@ -258,6 +258,52 @@ export default async function queue(app: Application): Promise<void> {
   });
 });
 
+/**
+ * The state every application is in before it writes its first job.
+ *
+ * `Glob.scan` on a directory that does not exist throws ENOENT rather than
+ * returning nothing, so `jobs:work` crashed for an application with no
+ * `app/jobs` — which is every application on its first day. Shipped in the
+ * same change that added the command, with nothing covering it.
+ */
+describe("altair jobs:work with no jobs", () => {
+  it("idles instead of crashing", async () => {
+    await altair("db:migrate");
+
+    const worker = Bun.spawn(
+      [process.execPath, "run", join(root, "bin", "altair.ts"), "jobs:work"],
+      {
+        cwd: root,
+        env: { ...process.env, NODE_ENV: "development", ALTAIR_ENV: "development" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    try {
+      const decoder = new TextDecoder();
+      const reader = worker.stdout.getReader();
+      const deadline = Date.now() + 20_000;
+      let said = "";
+
+      while (Date.now() < deadline && !said.includes("Working")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        said += decoder.decode(value);
+      }
+
+      expect(said).toContain("No jobs found");
+
+      // Still running, which is the point: it waits for work rather than
+      // exiting because there is none yet.
+      expect(worker.exitCode).toBeNull();
+    } finally {
+      worker.kill();
+      await worker.exited;
+    }
+  });
+});
+
 describe("altair routes", () => {
   it("lists what the application draws", async () => {
     const { code, output } = await altair("routes");
