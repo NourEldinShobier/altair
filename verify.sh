@@ -14,10 +14,16 @@ step() {
   fi
 }
 
-step "format" bunx oxfmt .
+# --threads=1 on purpose. oxfmt runs its formatting in a worker pool, and
+# spawning one of those workers fails intermittently on Windows when this
+# script has its output on a pipe: "UNKNOWN, spawn" out of tinypool, about
+# one verify run in three. It never happened running oxfmt straight from a
+# terminal, which is why it looked like a test failure the first two times.
+# One thread has no pool to spawn, and costs 0.4s on this repository.
+step "format" bunx oxfmt --threads=1 .
 step "typecheck" bun run typecheck
 step "lint" bunx oxlint --deny-warnings
-step "format check" bunx oxfmt --check .
+step "format check" bunx oxfmt --threads=1 --check .
 
 OUT=$(bun test 2>&1)
 echo "$OUT" | grep -E "^ [0-9]+ (pass|fail)" || true
