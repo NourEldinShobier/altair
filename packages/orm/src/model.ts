@@ -332,6 +332,16 @@ export interface BaseModelInstance<A> {
   attributes(): A;
   changedAttributes(): Partial<A>;
   savedChanges(): Record<string, [unknown, unknown]>;
+  hasAttribute(name: string): boolean;
+  attributeNames(): string[];
+  attributeInDatabase(name: string): unknown;
+  attributesInDatabase(): Record<string, unknown>;
+  attributeChangeToBeSaved(name: string): [unknown, unknown] | undefined;
+  willSaveChangeToAttribute(name: string): boolean;
+  hasChangesToSave(): boolean;
+  changesToSave(): Record<string, [unknown, unknown]>;
+  changedAttributeNamesToSave(): string[];
+  readonly idInDatabase: unknown;
   readonly isDestroyed: boolean;
   updateColumns(values: Partial<A>): Promise<boolean>;
   updateColumn(column: keyof A & string, value: unknown): Promise<boolean>;
@@ -1428,6 +1438,31 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       });
     }
 
+    /**
+     * `afterCommit(..., { on: "create" })`, spelled the way Rails usually is.
+     *
+     * The named forms are what appears in real applications, and reading
+     * `afterCreateCommit` at a glance is the point — an options hash three
+     * lines down from the callback body is a thing to go and check.
+     */
+    static afterCreateCommit(callback: CommitCallback): void {
+      this.afterCommit(callback, { on: "create" });
+    }
+
+    static afterUpdateCommit(callback: CommitCallback): void {
+      this.afterCommit(callback, { on: "update" });
+    }
+
+    static afterDestroyCommit(callback: CommitCallback): void {
+      this.afterCommit(callback, { on: "destroy" });
+    }
+
+    /** Both halves of a save, and not a destroy. Rails' `after_save_commit`. */
+    static afterSaveCommit(callback: CommitCallback): void {
+      this.afterCommit(callback, { on: "create" });
+      this.afterCommit(callback, { on: "update" });
+    }
+
     /** The model class a delegated type name stands for. */
     static delegatedClassFor(name: string, type: string): ModelLike | undefined {
       return this.associations[name]?.types?.[type]?.();
@@ -2139,6 +2174,63 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     /** What an attribute held before the save that just happened. */
     attributeBeforeLastSave(attribute: keyof A & string): unknown {
       return this[SAVED_CHANGES]?.[attribute]?.[0];
+    }
+
+    /** Whether the model has this column at all. Rails' `has_attribute?`. */
+    hasAttribute(name: string): boolean {
+      return name in this[ATTRIBUTES];
+    }
+
+    /** Every attribute this record carries. Rails' `attribute_names`. */
+    attributeNames(): string[] {
+      return Object.keys(this[ATTRIBUTES]);
+    }
+
+    /**
+     * What the row holds, as far as this record knows. Rails'
+     * `attribute_in_database`.
+     *
+     * The value before any unsaved change — which is what a callback comparing
+     * against the database needs, and what `attributeWas` answers for one
+     * attribute.
+     */
+    attributeInDatabase(name: string): unknown {
+      return this[ORIGINAL][name];
+    }
+
+    attributesInDatabase(): Record<string, unknown> {
+      return { ...this[ORIGINAL] };
+    }
+
+    /** The pending change to one attribute, as `[was, is]`. */
+    attributeChangeToBeSaved(name: string): [unknown, unknown] | undefined {
+      return this.changes()[name];
+    }
+
+    /** Whether saving would write this attribute. Rails' `will_save_change_to_attribute?`. */
+    willSaveChangeToAttribute(name: string): boolean {
+      return name in this.changedAttributes();
+    }
+
+    /** Whether saving would write anything at all. */
+    hasChangesToSave(): boolean {
+      return this.changed().length > 0;
+    }
+
+    /** Everything a save would write. Rails' `changes_to_save`. */
+    changesToSave(): Record<string, [unknown, unknown]> {
+      return this.changes();
+    }
+
+    changedAttributeNamesToSave(): string[] {
+      return this.changed();
+    }
+
+    /** The primary key as the row holds it, before any unsaved change. */
+    get idInDatabase(): unknown {
+      const klass = this.constructor as typeof BaseModel;
+
+      return this[ORIGINAL][klass.primaryKey];
     }
 
     /**
@@ -3393,6 +3485,10 @@ export interface ModelClass<A extends object> {
     options?: AssociationOptions,
   ): void;
   delegatedClassFor(name: string, type: string): unknown;
+  afterCreateCommit(callback: unknown): void;
+  afterUpdateCommit(callback: unknown): void;
+  afterDestroyCommit(callback: unknown): void;
+  afterSaveCommit(callback: unknown): void;
   composedOf<V, P extends Record<string, unknown>>(
     name: string,
     options: ComposedOfOptions<V, P>,
