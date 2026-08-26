@@ -215,3 +215,80 @@ describe("asking how many and whether any", () => {
     expect(await author.books().isEmpty()).toBe(false);
   });
 });
+
+/**
+ * Taking records out of a collection, ported from the same Rails file.
+ *
+ * Two methods because there are two things a caller might mean, and Rails
+ * keeps them apart for good reason: removing a book from an author should not
+ * usually burn the book.
+ */
+describe("taking records out", () => {
+  it("unlinks without deleting", async () => {
+    const author = await Author.create({ name: "Ada" });
+    const book = await author.books().create({ title: "One" });
+
+    await author.books().unlink(book);
+
+    expect(await author.books().count()).toBe(0);
+    // Still there, belonging to nobody.
+    expect(await Book.count()).toBe(1);
+    expect((await Book.find(book.id)).author_id).toBeNull();
+  });
+
+  it("unlinks several", async () => {
+    const author = await Author.create({ name: "Ada" });
+    const first = await author.books().create({ title: "One" });
+    const second = await author.books().create({ title: "Two" });
+
+    await author.books().unlink(first, second);
+
+    expect(await author.books().count()).toBe(0);
+    expect(await Book.count()).toBe(2);
+  });
+
+  it("destroys when that is what was meant", async () => {
+    const author = await Author.create({ name: "Ada" });
+    const book = await author.books().create({ title: "One" });
+
+    await author.books().destroy(book);
+
+    expect(await Book.count()).toBe(0);
+    expect(book.isDestroyed).toBe(true);
+  });
+
+  // One at a time, because each record's own callbacks are what separate this
+  // from deleteAll.
+  it("runs each record's destroy callbacks", async () => {
+    const gone: string[] = [];
+
+    class Volume extends Model<BookRow>("books") {
+      static {
+        this.setCallback("destroy", "before", function (this: Volume) {
+          gone.push(String(this.title));
+        });
+      }
+    }
+
+    const author = await Author.create({ name: "Ada" });
+    const volume = await Volume.create({ title: "One", author_id: author.id });
+
+    await (author.books() as unknown as { destroy(...r: Volume[]): Promise<unknown> }).destroy(
+      volume,
+    );
+
+    expect(gone).toEqual(["One"]);
+  });
+
+  it("leaves the other author's books alone", async () => {
+    const ada = await Author.create({ name: "Ada" });
+    const grace = await Author.create({ name: "Grace" });
+
+    const hers = await ada.books().create({ title: "One" });
+    await grace.books().create({ title: "Two" });
+
+    await ada.books().unlink(hers);
+
+    expect(await grace.books().count()).toBe(1);
+  });
+});

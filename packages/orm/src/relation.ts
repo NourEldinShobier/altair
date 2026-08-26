@@ -1079,6 +1079,44 @@ export class Relation<T> implements PromiseLike<T[]> {
     return records;
   }
 
+  /**
+   * Unlinks records from this collection. Rails' `collection.delete`.
+   *
+   * Unlinked rather than deleted: the record stays, its foreign key is
+   * cleared, and it belongs to nobody. That is what Rails does for a `has_many`
+   * without `dependent: :destroy`, and the distinction is the whole reason
+   * both methods exist — removing a book from an author should not usually
+   * burn the book.
+   */
+  async unlink(...records: T[]): Promise<T[]> {
+    const seed = this.#seed();
+
+    for (const record of records) {
+      const cleared = Object.fromEntries(Object.keys(seed).map((column) => [column, null]));
+
+      await (
+        record as unknown as { updateColumns(values: object): Promise<boolean> }
+      ).updateColumns(cleared);
+    }
+
+    return records;
+  }
+
+  /**
+   * Destroys records in this collection. Rails' `collection.destroy`.
+   *
+   * One at a time, because each record's own callbacks are what separate this
+   * from `deleteAll` — a destroyed comment should still take its attachments
+   * with it.
+   */
+  async destroy(...records: T[]): Promise<T[]> {
+    for (const record of records) {
+      await (record as unknown as { destroy(): Promise<boolean> }).destroy();
+    }
+
+    return records;
+  }
+
   /** How many, as Rails' `size` on a collection. */
   async size(): Promise<number> {
     return await this.count();
