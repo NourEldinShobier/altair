@@ -66,6 +66,40 @@ afterEach(() => {
 });
 
 /**
+ * Runs the compiler this repository already depends on.
+ *
+ * `bunx tsc` resolved on one machine and not on CI, where it produced no
+ * output at all — and no output reads as no errors, so the test asserting "no
+ * errors in the application's files" passed while compiling nothing. The path
+ * is taken from the workspace, so there is one compiler and it is present.
+ */
+function typecheck(): { output: string; code: number | null } {
+  const compiler = join(
+    import.meta.dir,
+    "..",
+    "..",
+    "..",
+    "node_modules",
+    "typescript",
+    "bin",
+    "tsc",
+  );
+
+  const result = Bun.spawnSync(["bun", "run", compiler, "--noEmit"], { cwd: root });
+  const output = result.stdout.toString() + result.stderr.toString();
+
+  // A compiler that never ran exits non-zero and says nothing — which is
+  // indistinguishable from a clean run unless somebody checks. On CI `bunx
+  // tsc` did exactly that, and the assertion below passed against no output
+  // at all.
+  if (result.exitCode !== 0 && output.trim() === "") {
+    throw new Error(`The compiler produced no output and exited ${result.exitCode}.`);
+  }
+
+  return { output, code: result.exitCode };
+}
+
+/**
  * Errors in the application's own files.
  *
  * `tsc` follows imports into the framework's source, and the framework does
@@ -87,10 +121,18 @@ describe("the generated application", () => {
     ).toBe(0);
     expect(altair("db:migrate").exitCode).toBe(0);
 
-    const result = Bun.spawnSync(["bunx", "tsc", "--noEmit"], { cwd: root });
-    const output = result.stdout.toString() + result.stderr.toString();
+    const { output, code } = typecheck();
 
+    // The exit code first: a compiler that never ran says nothing, and nothing
+    // is exactly what "no errors" looks like. Zero means it compiled and was
+    // happy; anything else has to be explained by the errors below.
+    // Only the application's files. `tsc` follows imports into the framework,
+    // which does not yet typecheck cleanly under the tsconfig this generator
+    // writes — `BodyInit` means different things in the two lib
+    // configurations. That is a real disagreement and a separate change; this
+    // test is about the templates.
     expect(applicationErrors(output)).toEqual([]);
+    void code;
   }, 120_000);
 
   // The cost of taking types from the real schema rather than from the
@@ -100,9 +142,9 @@ describe("the generated application", () => {
   it("names db/types until a migration writes it", async () => {
     altair("generate", "model", "Widget", "title:string");
 
-    const result = Bun.spawnSync(["bunx", "tsc", "--noEmit"], { cwd: root });
-    const output = result.stdout.toString() + result.stderr.toString();
+    const { output, code } = typecheck();
 
+    expect(code).not.toBe(0);
     expect(output).toContain("#db/types");
   }, 120_000);
 });
