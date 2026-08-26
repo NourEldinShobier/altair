@@ -15,3 +15,5 @@ export * from "./pretty.js";
 export * from "./time_travel.js";
 export * from "./sanitize.js";
 export * from "./environment.js";
+export * from "./dates.js";
+export * from "./enumerable.js";

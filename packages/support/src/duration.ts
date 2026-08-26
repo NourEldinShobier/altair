@@ -168,7 +168,13 @@ export function advanceMonths(moment: Date, months: number): Date {
   return result;
 }
 
-/** How many days a month has, leap years included. */
+/**
+ * How many days a month has, leap years included.
+ *
+ * The month is zero-based, as `Date#getMonth` counts them — January is 0. The
+ * name does not say so, and passing a human month number is off by one in a
+ * way the answer looks fine for: August asked as 8 gives September's 30.
+ */
 export function daysInMonth(year: number, month: number): number {
   // Day zero of the next month is the last day of this one.
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();

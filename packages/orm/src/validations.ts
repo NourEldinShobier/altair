@@ -19,7 +19,7 @@
  * validation on a persisted row.
  */
 
-import { t } from "@altair/support";
+import { isBlank, t } from "@altair/support";
 import { humanAttributeName } from "./active_model.js";
 
 export interface LengthOptions {
@@ -210,13 +210,7 @@ export const MESSAGES = {
   },
 };
 
-/** Rails' `blank?`: nil, an empty string, or whitespace only. */
-export function isBlank(value: unknown): boolean {
-  if (value === null || value === undefined) return true;
-  if (typeof value === "string") return value.trim().length === 0;
-  if (Array.isArray(value)) return value.length === 0;
-  return false;
-}
+export { isBlank };
 
 export interface ValidationTarget {
   errors: { add: (attribute: string, message: string) => void };
