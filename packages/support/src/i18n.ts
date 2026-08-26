@@ -316,6 +316,10 @@ export const EN: Catalog = {
       greater_than_or_equal_to: "must be greater than or equal to %{count}",
       less_than: "must be less than %{count}",
       less_than_or_equal_to: "must be less than or equal to %{count}",
+      equal_to: "must be equal to %{count}",
+      other_than: "must be other than %{count}",
+      odd: "must be odd",
+      even: "must be even",
       taken: "has already been taken",
       // Rails' message for a required `belongs_to` with nothing on the other end.
       required: "must exist",
