@@ -41,6 +41,7 @@ import {
 } from "@altair/orm";
 import { configFor } from "./config_for.js";
 import { buildConfig, type ApplicationConfig } from "./config.js";
+import { healthCheck } from "./health.js";
 import { statusForError, statusText, wantsJson } from "./rescue_responses.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
 import { logQueries, requestLogging } from "./logging.js";
@@ -189,6 +190,31 @@ export class Application {
     // still logged with the id the response carries.
     this.middleware.use("logging", requestLogging({ logger: this.logger }));
     this.middleware.use("securityHeaders", securityHeaders());
+
+    // Rails 7.1 puts `/up` in the routes it generates, and this stack already
+    // assumed it existed: `hostAuthorization` excludes that path so a load
+    // balancer checking by IP is not turned away. Nothing answered it.
+    //
+    // The database is the check worth making by default. An application whose
+    // connection pool is wedged is one a load balancer should take out of
+    // rotation, and it is the failure that looks healthiest from outside —
+    // the process is up and answering, and every request is failing.
+    if (this.config.healthCheck) {
+      this.middleware.use(
+        "health",
+        healthCheck({
+          checks: {
+            database: async () => {
+              // Not `connection` — that throws before boot, and a health check
+              // that throws is a health check that fails for the wrong reason.
+              if (!this.#connection) return false;
+              await this.#connection.query("SELECT 1");
+              return true;
+            },
+          },
+        }),
+      );
+    }
 
     // Last, so a file gets the headers and the request id above it, and so a
     // route always wins over a file of the same name. Rails ships this for the

@@ -84,6 +84,11 @@ export interface ApplicationConfig {
    * Keyed on the error's `name`, as Rails keys on the class name.
    */
   rescueResponses: Record<string, number>;
+  /**
+   * Answers `/up` with the state of the application. Rails generates the same
+   * route. Off only for an application that wants to answer it itself.
+   */
+  healthCheck: boolean;
   /** Directory the app was loaded from, used to resolve app files. */
   root: string;
   log: LogConfig;
@@ -119,6 +124,7 @@ export function defaultsFor(
     forceSsl: production,
     rescueResponses: {},
     publicFileServer: true,
+    healthCheck: true,
     forgeryProtection: env !== "test",
     // Development only, which is where Rails sets it and where the attack is
     // aimed. Test leaves it empty so a suite can call itself whatever it likes,
