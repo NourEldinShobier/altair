@@ -204,12 +204,17 @@ type Next = (request: Request) => Promise<Response>;
 export interface IngressOptions {
   path?: string;
   /**
-   * A shared secret the provider sends back.
+   * The shared secret the provider sends back. Required.
    *
-   * Without it the endpoint accepts mail from anyone who finds the URL, which
-   * is an application that can be told anything by anybody.
+   * Not optional, and it used to be: without one the endpoint accepts mail
+   * from anyone who finds the URL, and an inbound address is printed on
+   * websites and in email headers. An application that can be told anything by
+   * anybody is one where a support ticket, a password reset reply or an
+   * invoice can be forged by a stranger.
+   *
+   * Rails refuses to mount an ingress without a password for the same reason.
    */
-  secret?: string;
+  secret: string;
   /** Reads the provider's own body shape into a message. */
   parse?: (body: unknown) => InboundMessage;
 }
@@ -237,22 +242,30 @@ export function parseInbound(body: unknown): InboundMessage {
  * Rails calls these ingresses and ships one per provider. This takes the shape
  * they have in common and a hook for the ones that differ.
  */
-export function inboundIngress(router: MailboxRouter, options: IngressOptions = {}) {
+export function inboundIngress(router: MailboxRouter, options: IngressOptions) {
   const path = options.path ?? "/altair/inbound";
   const parse = options.parse ?? parseInbound;
+
+  // Refused at construction rather than at the first request: an endpoint that
+  // is open is open from the moment it is mounted, and a boot that fails is
+  // seen immediately by whoever mounted it.
+  if (!options.secret) {
+    throw new Error(
+      "An inbound ingress needs a secret. Without one it accepts mail from anyone who finds the URL, and an inbound address is public by design. Pass the value your provider is configured to send back.",
+    );
+  }
 
   return async (request: Request, next: Next): Promise<Response> => {
     const url = new URL(request.url);
     if (url.pathname !== path) return await next(request);
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-    if (options.secret) {
-      const given = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-      // Constant time: comparing secrets with === leaks their length and
-      // prefix to anyone willing to measure.
-      if (!timingSafeEqual(given, options.secret)) {
-        return new Response("Unauthorized", { status: 401 });
-      }
+    const given = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+
+    // Constant time: comparing secrets with === leaks their length and prefix
+    // to anyone willing to measure.
+    if (!timingSafeEqual(given, options.secret)) {
+      return new Response("Unauthorized", { status: 401 });
     }
 
     let message: InboundMessage;

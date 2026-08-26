@@ -269,12 +269,30 @@ describe("reading a provider's payload", () => {
 describe("the ingress endpoint", () => {
   const next = async () => new Response("app", { status: 418 });
 
-  const post = (body: unknown, init: RequestInit = {}, options = {}) =>
-    inboundIngress(new MailboxRouter().route("support@example.com", SupportMailbox), options)(
+  const SECRET = "ingress-secret";
+
+  /**
+   * Sends the secret unless a case is about not sending it.
+   *
+   * An ingress needs one now, so every case that is about something else has
+   * to get past the door first.
+   */
+  const post = (
+    body: unknown,
+    init: RequestInit = {},
+    options: { path?: string; secret?: string } = {},
+  ) =>
+    inboundIngress(new MailboxRouter().route("support@example.com", SupportMailbox), {
+      secret: SECRET,
+      ...options,
+    })(
       new Request("https://example.com/altair/inbound", {
         method: "POST",
         body: JSON.stringify(body),
         ...init,
+        // Sent by default, so a case about routing is not also a case about
+        // authentication. A case that is about the door overrides it.
+        headers: { authorization: `Bearer ${SECRET}`, ...(init.headers as object) },
       }),
       next,
     );
@@ -287,7 +305,7 @@ describe("the ingress endpoint", () => {
   });
 
   it("passes anything else along", async () => {
-    const response = await inboundIngress(new MailboxRouter())(
+    const response = await inboundIngress(new MailboxRouter(), { secret: SECRET })(
       new Request("https://example.com/posts"),
       next,
     );
@@ -296,7 +314,7 @@ describe("the ingress endpoint", () => {
   });
 
   it("refuses a method that is not POST", async () => {
-    const response = await inboundIngress(new MailboxRouter())(
+    const response = await inboundIngress(new MailboxRouter(), { secret: SECRET })(
       new Request("https://example.com/altair/inbound"),
       next,
     );
@@ -309,10 +327,12 @@ describe("the ingress endpoint", () => {
   it("answers 500 when a mailbox failed, so the provider tries again", async () => {
     const response = await inboundIngress(
       new MailboxRouter().route("support@example.com", BrokenMailbox),
+      { secret: SECRET },
     )(
       new Request("https://example.com/altair/inbound", {
         method: "POST",
         body: JSON.stringify({ messageId: "a", to: "support@example.com" }),
+        headers: { authorization: `Bearer ${SECRET}` },
       }),
       next,
     );
@@ -328,12 +348,36 @@ describe("the ingress endpoint", () => {
   });
 
   it("refuses a body it cannot read", async () => {
-    const response = await inboundIngress(new MailboxRouter())(
-      new Request("https://example.com/altair/inbound", { method: "POST", body: "not json" }),
+    const response = await inboundIngress(new MailboxRouter(), { secret: SECRET })(
+      new Request("https://example.com/altair/inbound", {
+        method: "POST",
+        body: "not json",
+        headers: { authorization: `Bearer ${SECRET}` },
+      }),
       next,
     );
 
     expect(response.status).toBe(400);
+  });
+
+  /**
+   * An inbound address is printed on websites and in email headers, so the URL
+   * behind it is found. Without a secret, a support ticket, a password reset
+   * reply or an invoice can be forged by a stranger.
+   *
+   * Refused at construction rather than at the first request: an endpoint that
+   * is open is open from the moment it is mounted, and a boot that fails is
+   * seen by whoever mounted it.
+   */
+  it("cannot be built without a secret", () => {
+    expect(() => inboundIngress(new MailboxRouter(), { secret: "" })).toThrow(/needs a secret/);
+    expect(() => inboundIngress(new MailboxRouter(), undefined as never)).toThrow();
+  });
+
+  it("says what the secret is for", () => {
+    expect(() => inboundIngress(new MailboxRouter(), { secret: "" })).toThrow(
+      /anyone who finds the URL/,
+    );
   });
 
   // Without a secret the endpoint accepts mail from anyone who finds the URL.
