@@ -374,6 +374,19 @@ switch (command) {
       env: { ...process.env, ...(port ? { PORT: port } : {}) },
     });
 
+    // Passed on rather than left to the operating system. Ctrl-C reaches this
+    // process, and the server is a child of it — without this the CLI exits
+    // and the server carries on holding the port, so the next `altair server`
+    // meets "address already in use" for a process nothing appears to own.
+    //
+    // Both signals: Ctrl-C sends SIGINT, and anything supervising this (a
+    // container stopping, a test harness) sends SIGTERM.
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.on(signal, () => {
+        child.kill(signal);
+      });
+    }
+
     process.exit(await child.exited);
   }
 

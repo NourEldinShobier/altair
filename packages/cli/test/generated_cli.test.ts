@@ -163,10 +163,17 @@ describe("altair server", () => {
 
     // The real check: nothing is answering on that port any more. A survivor
     // would still be serving here, which is exactly what used to happen.
-    await Bun.sleep(250);
+    // Given a moment, and retried: a listening socket does not always close
+    // the instant the process holding it is signalled.
+    let answering: Response | null = null;
 
-    const after = await fetch(`http://localhost:${port}/robots.txt`).catch(() => null);
-    expect(after).toBeNull();
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await Bun.sleep(100);
+      answering = await fetch(`http://localhost:${port}/robots.txt`).catch(() => null);
+      if (answering === null) break;
+    }
+
+    expect(answering).toBeNull();
   });
 });
 
