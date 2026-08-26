@@ -239,6 +239,17 @@ const ALL_CLAUSES: readonly RelationClause[] = [
   "joins",
 ];
 
+/**
+ * What each adapter spells "no limit, but I still need a LIMIT clause".
+ *
+ * MySQL refuses a negative one, so it takes the largest value a BIGINT holds —
+ * which is what its own documentation suggests for exactly this.
+ */
+const ALL_ROWS: Record<string, string> = {
+  sqlite: "-1",
+  mysql: "18446744073709551615",
+};
+
 export class Relation<T> implements PromiseLike<T[]> {
   #source: RelationSource<T>;
   #wheres: WhereClause[] = [];
@@ -686,7 +697,16 @@ export class Relation<T> implements PromiseLike<T[]> {
     }
 
     if (this.#limit !== undefined) sql += ` LIMIT ${Number(this.#limit)}`;
-    if (this.#offset !== undefined) sql += ` OFFSET ${Number(this.#offset)}`;
+
+    if (this.#offset !== undefined) {
+      // SQLite and MySQL will not take an OFFSET without a LIMIT in front of
+      // it — `OFFSET 4` on its own is a syntax error — so an offset with no
+      // limit needs one that means "all the rest". Rails' adapters do the
+      // same. Postgres accepts a bare OFFSET and does not mind this either.
+      if (this.#limit === undefined) sql += ` LIMIT ${ALL_ROWS[this.connection.adapter] ?? "-1"}`;
+
+      sql += ` OFFSET ${Number(this.#offset)}`;
+    }
 
     if (this.#lock) sql += lockClause(connection.adapter, this.#lock);
 
@@ -811,18 +831,140 @@ export class Relation<T> implements PromiseLike<T[]> {
   async count(): Promise<number> {
     if (this.#none) return 0;
 
+    this.#refuseGrouped("count", "countByGroup()");
+
+    return Number(await this.#scalar(`COUNT(*)`, "count")) || 0;
+  }
+
+  /**
+   * Refuses a scalar aggregate on a grouped relation.
+   *
+   * It used to answer with the first group's value — a single number that
+   * looks exactly like a total and is not one. Rails answers a hash here;
+   * TypeScript would have to type that as a union of a number and a map, so
+   * the grouped answer has its own method and this says which.
+   */
+  #refuseGrouped(called: string, instead: string): void {
+    if (this.#groups.length === 0) return;
+
+    throw new Error(
+      `${called}() on a relation grouped by ${this.#groups.join(", ")} would answer for one group. Use ${instead} for a value per group.`,
+    );
+  }
+
+  /**
+   * One number, with limit and offset honoured.
+   *
+   * Wrapped in a subquery when either is set, because `LIMIT 2` beside
+   * `COUNT(*)` limits the rows the count comes back in rather than the rows
+   * being counted — so `limit(2).count()` answered with every row. Rails
+   * wraps it for the same reason.
+   */
+  async #scalar(expression: string, alias: string, bounded_expression?: string): Promise<unknown> {
+    // Distinct joins the list too: replacing the select list with COUNT(*)
+    // throws away both the DISTINCT and the columns it applied to, so
+    // `select(a, b).distinct().count()` counted every row. Wrapping keeps the
+    // whole query intact and counts what came out of it.
+    const bounded =
+      this.#limit !== undefined || this.#offset !== undefined || this.#distinct === true;
+
     const relation = this.#clone();
-    relation.#orders = [];
-    relation.#limit = undefined;
-    relation.#offset = undefined;
+
+    // An order costs a sort and changes nothing about a total — unless a limit
+    // is present, in which case it decides *which* rows the limit keeps, and
+    // dropping it makes `order(desc).limit(1).sum()` answer for whichever row
+    // the database happened to return first.
+    if (!bounded) relation.#orders = [];
+
+    if (!bounded) {
+      relation.#limit = undefined;
+      relation.#offset = undefined;
+
+      const { sql, bindings } = relation.toSql();
+      const rows = await this.connection.query<Row>(
+        sql.replace(
+          /^SELECT .*? FROM/,
+          `SELECT ${expression} AS ${this.connection.quote(alias)} FROM`,
+        ),
+        bindings,
+      );
+
+      return rows[0]?.[alias];
+    }
 
     const { sql, bindings } = relation.toSql();
-    const counted = sql.replace(
-      /^SELECT .*? FROM/,
-      `SELECT COUNT(*) AS ${this.connection.quote("count")} FROM`,
+
+    // Inside the wrapper the rows come from a subquery with its own name, so a
+    // column qualified by the table no longer resolves — `items.price` is not
+    // a column of `bounded`. The caller supplies the unqualified form.
+    const rows = await this.connection.query<Row>(
+      `SELECT ${bounded_expression ?? expression} AS ${this.connection.quote(alias)} FROM (${sql}) AS ${this.connection.quote("bounded")}`,
+      bindings,
     );
-    const rows = await this.connection.query<Row>(counted, bindings);
-    return Number(rows[0]?.count ?? 0);
+
+    return rows[0]?.[alias];
+  }
+
+  /**
+   * A value per group. Rails' `Model.group(:kind).count`.
+   *
+   * Keyed by the group's value, in the order the database returns them — which
+   * is the order the relation asked for when it asked for one.
+   */
+  async countByGroup(): Promise<Map<unknown, number>> {
+    // Never null: a group exists because a row is in it.
+    return (await this.#grouped(`COUNT(*)`)) as Map<unknown, number>;
+  }
+
+  /** Zero rather than null for an empty sum, as Rails' `sum` answers. */
+  async sumByGroup(column: string): Promise<Map<unknown, number>> {
+    const answer = await this.#grouped(`SUM(${this.#quoteColumn(column)})`);
+
+    for (const [key, value] of answer) if (value === null) answer.set(key, 0);
+
+    return answer as Map<unknown, number>;
+  }
+
+  async averageByGroup(column: string): Promise<Map<unknown, number | null>> {
+    return await this.#grouped(`AVG(${this.#quoteColumn(column)})`);
+  }
+
+  async minimumByGroup(column: string): Promise<Map<unknown, number | null>> {
+    return await this.#grouped(`MIN(${this.#quoteColumn(column)})`);
+  }
+
+  async maximumByGroup(column: string): Promise<Map<unknown, number | null>> {
+    return await this.#grouped(`MAX(${this.#quoteColumn(column)})`);
+  }
+
+  /** Runs an aggregate and keys it by the grouped columns. */
+  async #grouped(expression: string): Promise<Map<unknown, number | null>> {
+    const answer = new Map<unknown, number | null>();
+    if (this.#none) return answer;
+
+    if (this.#groups.length === 0) {
+      throw new Error("Nothing is grouped. Call group() before asking for a value per group.");
+    }
+
+    const keys = this.#groups.map((column) => this.#quoteColumn(column));
+
+    const { sql, bindings } = this.toSql();
+    const selected = sql.replace(
+      /^SELECT .*? FROM/,
+      `SELECT ${keys.join(", ")}, ${expression} AS ${this.connection.quote("value")} FROM`,
+    );
+
+    for (const row of await this.connection.query<Row>(selected, bindings)) {
+      const parts = this.#groups.map((column) => row[column.split(".").pop() as string]);
+      // One grouped column keys by the value; several key by the tuple, which
+      // is what Rails does and the only thing a Map can hold on to.
+      const key = parts.length === 1 ? parts[0] : JSON.stringify(parts);
+      const value = row.value;
+
+      answer.set(key, value === null || value === undefined ? null : Number(value));
+    }
+
+    return answer;
   }
 
   /**
@@ -834,19 +976,14 @@ export class Relation<T> implements PromiseLike<T[]> {
   async #aggregate(fn: string, column: string): Promise<number | null> {
     if (this.#none) return null;
 
-    const relation = this.#clone();
-    relation.#orders = [];
-    relation.#limit = undefined;
-    relation.#offset = undefined;
+    this.#refuseGrouped(fn.toLowerCase(), `${fn.toLowerCase()}ByGroup("${column}")`);
 
-    const { sql, bindings } = relation.toSql();
-    const aggregated = sql.replace(
-      /^SELECT .*? FROM/,
-      `SELECT ${fn}(${relation.#quoteColumn(column)}) AS ${this.connection.quote("value")} FROM`,
+    const value = await this.#scalar(
+      `${fn}(${this.#quoteColumn(column)})`,
+      "value",
+      `${fn}(${this.connection.quote(column.split(".").pop() as string)})`,
     );
 
-    const rows = await this.connection.query<Row>(aggregated, bindings);
-    const value = rows[0]?.value;
     return value === null || value === undefined ? null : Number(value);
   }
 

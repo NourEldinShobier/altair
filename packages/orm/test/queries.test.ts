@@ -66,10 +66,17 @@ describe("aggregates", () => {
     expect(await Post.where({ category: "none" }).average("views")).toBeNull();
   });
 
-  // Order and limit would change the answer rather than the rows, so an
-  // aggregate ignores them.
-  it("ignores order and limit", async () => {
-    expect(await Post.all().order("views", "desc").limit(1).sum("views")).toBe(60);
+  /**
+   * The order does not change an aggregate, so it is dropped and the sort is
+   * not paid for. The limit does change it, and Rails applies it.
+   *
+   * This asserted 60 — the total, with the limit doing nothing — and was
+   * describing the bug rather than the behaviour: `LIMIT 1` beside `SUM(views)`
+   * limits the rows the sum comes back in, not the rows being summed.
+   */
+  it("ignores the order but honours the limit", async () => {
+    expect(await Post.all().order("views", "desc").limit(1).sum("views")).toBe(30);
+    expect(await Post.all().order("views", "desc").sum("views")).toBe(60);
   });
 });
 
