@@ -22,6 +22,7 @@ import { Router, type Mapper } from "@altair/router";
 import {
   MiddlewareStack,
   createDispatcher,
+  methodOverride,
   forceSsl,
   requestId,
   securityHeaders,
@@ -167,6 +168,9 @@ export class Application {
   #defaultMiddleware(): void {
     if (this.config.forceSsl) this.middleware.use("ssl", forceSsl());
 
+    // Before anything that reads the method: a request that says it is a
+    // DELETE should be one by the time the router looks at it.
+    this.middleware.use("methodOverride", methodOverride());
     this.middleware.use("requestId", requestId());
     // Outside the dispatcher, so a request that fails in another middleware is
     // still logged with the id the response carries.
