@@ -398,6 +398,26 @@ ${named
 });
 `,
     },
+    {
+      // Rails generates one of these beside every mailer and mounts them at
+      // /rails/mailers. Sample data rather than assertions: the point is to
+      // look at the message in a browser while writing it.
+      path: `test/mailers/previews/${base}_mailer_preview.ts`,
+      contents: `import { definePreviews } from "@altair/mailer";
+import { ${className} } from "#mailers/${base}_mailer";
+
+// Visible at /altair/mailers while the application is running.
+export default definePreviews({
+${named
+  .map(
+    (action) =>
+      `  ${JSON.stringify(humanize(underscore(action)))}: () =>
+    ${className}.${camelize(action, false)}("someone@example.com"),`,
+  )
+  .join("\n")}
+});
+`,
+    },
   ];
 }
 

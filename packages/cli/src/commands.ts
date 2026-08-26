@@ -247,6 +247,7 @@ export class HomeController extends Controller {
       path: "bin/server.ts",
       contents: `import { createApplication } from "@altair/core";
 import { mountCable } from "@altair/cable";
+import { mountPreviews } from "@altair/mailer";
 import routes from "../config/routes.js";
 import { HomeController } from "#controllers/home_controller";
 
@@ -259,6 +260,11 @@ const app = createApplication({
 // to remember later: a generated channel that nothing mounts cannot receive a
 // connection however correct it is.
 await mountCable(app);
+
+// The mailer previews, at /altair/mailers. Off in production by default,
+// because a preview builds a message from sample data and shows it to whoever
+// asks for it.
+await mountPreviews(app);
 
 const server = await app.listen();
 console.log(\`Listening on http://localhost:\${server.port}\`);

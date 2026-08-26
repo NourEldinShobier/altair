@@ -194,6 +194,11 @@ describe("new", () => {
     ]);
   });
 
+  // The previews the mailer generator writes, and the line that serves them.
+  it("mounts the mailer previews", () => {
+    expect(at("bin/server.ts")!.contents).toContain("await mountPreviews(app)");
+  });
+
   it("normalizes the application name", () => {
     expect(at("package.json")!.contents).toContain('"name": "blog-app"');
   });

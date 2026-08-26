@@ -252,8 +252,22 @@ describe("mailer, job and channel generators", () => {
     expect(Object.keys(written)).toEqual([
       "app/mailers/user_mailer.tsx",
       "test/mailers/user_mailer.test.ts",
+      "test/mailers/previews/user_mailer_preview.ts",
     ]);
     expect(written["app/mailers/user_mailer.tsx"]).toContain("static passwordReset(");
+  });
+
+  // A preview per action, since the point is looking at each message while
+  // writing it. Mounted by the generated server, so they are on a URL rather
+  // than something to wire up.
+  it("previews every action it generated", () => {
+    const preview = files("mailer", "User", ["welcome", "password_reset"])[
+      "test/mailers/previews/user_mailer_preview.ts"
+    ] as string;
+
+    expect(preview).toContain('"Welcome": () =>');
+    expect(preview).toContain('"Password reset": () =>');
+    expect(preview).toContain("UserMailer.passwordReset(");
   });
 
   // Without a default sender `toMessage()` throws, so the generated test

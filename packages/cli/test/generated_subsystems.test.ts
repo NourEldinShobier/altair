@@ -196,6 +196,14 @@ describe("the subsystems a generated application uses", () => {
         string
       >;
 
+      // The previews the mailer generator wrote, on a URL. `servePreviews` was
+      // written and tested and needed a set an application had to assemble and
+      // mount itself — so the previews existed and nobody could look at one.
+      const index = await fetch(`http://localhost:${port}/altair/mailers`);
+
+      expect(index.status).toBe(200);
+      expect(await index.text()).toContain("Welcome");
+
       // Asserted as a whole, so a message says which subsystem broke and how.
       expect(report).toEqual({
         orm: "ok",
