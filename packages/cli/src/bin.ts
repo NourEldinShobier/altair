@@ -24,14 +24,7 @@ import {
 import { createDatabase, dropDatabase, targetFor, type MaintenanceConnection } from "./database.js";
 import { editCredentials, ignoreMasterKey, showCredentials } from "./credentials.js";
 import { loadMigrations } from "./loader.js";
-import {
-  Connection,
-  dumpSchema,
-  dumpTypes,
-  introspect,
-  loadSchema,
-  setConnection,
-} from "@altair/orm";
+import { Connection, dumpSchema, dumpTypes, introspect, loadSchema } from "@altair/orm";
 import type { Environment } from "@altair/core";
 import { currentEnvironment } from "@altair/support";
 
@@ -390,6 +383,50 @@ switch (command) {
     process.exit(await child.exited);
   }
 
+  case "jobs:work": {
+    const { loadApplication } = await import("@altair/core");
+    const { Job, Worker } = await import("@altair/jobs");
+    const { queueFrom, registerJobs } = await import("./worker.js");
+
+    // Booted rather than merely connected: the initializers are where an
+    // application sets its queue adapter, and a worker that skipped them would
+    // poll a different queue than the one the web process enqueues to.
+    const workerApp = await loadApplication();
+    await workerApp.boot();
+
+    const names = await registerJobs(process.cwd());
+    const queue = queueFrom(args);
+
+    console.log(
+      names.length > 0
+        ? `Working ${queue} with ${names.length} job(s): ${names.join(", ")}`
+        : `Working ${queue}. No jobs found in app/jobs.`,
+    );
+
+    const worker = new Worker({
+      adapter: Job.queue,
+      queue,
+      onError: (error, payload) => {
+        console.error(`  ${payload.jobClass} failed:`, (error as Error).message);
+      },
+      onFailure: (error, payload) => {
+        console.error(`  ${payload.jobClass} gave up:`, (error as Error).message);
+      },
+    });
+
+    // Stops after the job in flight rather than in the middle of one, which is
+    // the difference between a deploy and a half-charged card.
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.on(signal, () => {
+        console.log("\nFinishing the job in flight, then stopping.");
+        void worker.stop();
+      });
+    }
+
+    await worker.start();
+    break;
+  }
+
   case "storage:install":
   case "richtext:install": {
     const { generateRichTextInstall, generateStorageInstall } = await import("./generators.js");
@@ -418,15 +455,22 @@ switch (command) {
       process.exit(1);
     }
 
-    const connection = await connect();
-    setConnection(connection);
+    // Booted, not merely connected. The initializers are where an application
+    // configures its queue adapter, its storage services and its encryption
+    // keys — so a script run without them got a different application than the
+    // one serving requests. `performLater` was the loud case: with no adapter
+    // configured it fell back to the development default and ran every job
+    // inline, in this process, instead of enqueuing any of them.
+    const { loadApplication: loadForRunner } = await import("@altair/core");
+    const runnerApp = await loadForRunner();
+    await runnerApp.boot();
 
     try {
       await runTarget(target, process.cwd());
     } finally {
       // Closed even when the script threw, or the process hangs on an open
       // pool rather than reporting what went wrong.
-      await connection.close();
+      await runnerApp.connection.close();
     }
 
     break;
@@ -444,7 +488,13 @@ switch (command) {
       process.exit(1);
     }
 
-    const connection = await connect();
+    // Booted for the same reason `runner` is: seeds that attach a file or
+    // enqueue a job need the services the initializers configure, and without
+    // them they quietly get the defaults instead.
+    const { loadApplication: loadForSeed } = await import("@altair/core");
+    const seedApp = await loadForSeed();
+    await seedApp.boot();
+
     const loaded = (await import(pathToFileURL(seeds).href)) as {
       default?: () => unknown | Promise<unknown>;
     };
@@ -454,9 +504,8 @@ switch (command) {
       process.exit(1);
     }
 
-    setConnection(connection);
     await loaded.default();
-    await connection.close();
+    await seedApp.connection.close();
 
     console.log("      seeded  db/seeds.ts");
     break;

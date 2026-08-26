@@ -29,6 +29,7 @@
       },
       "dependencies": {
         "@altair/core": "workspace:*",
+        "@altair/jobs": "workspace:*",
         "@altair/orm": "workspace:*",
         "@altair/router": "workspace:*",
         "@altair/support": "workspace:*",
