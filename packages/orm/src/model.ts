@@ -1536,17 +1536,68 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return this.all().limit(count);
     }
 
-    /** Rails' `find`: by primary key, or a thrown RecordNotFound. */
-    static async find<M extends typeof BaseModel>(this: M, id: unknown): Promise<InstanceType<M>> {
-      const record = await this.all()
+    /**
+     * Rails' `find`: by primary key, or a thrown RecordNotFound.
+     *
+     * Several ids answer with several records, in the order they were asked
+     * for. This used to hand back one record for `find([1, 3])`, because the
+     * ids became an `IN` and `first()` took whatever came out of it — so a
+     * caller expecting two got one, and `find([1, 999])` for a row that does
+     * not exist answered with the row that does.
+     */
+    static async find<M extends typeof BaseModel>(this: M, id: unknown): Promise<InstanceType<M>>;
+    static async find<M extends typeof BaseModel>(
+      this: M,
+      ids: readonly unknown[],
+    ): Promise<InstanceType<M>[]>;
+    static async find<M extends typeof BaseModel>(
+      this: M,
+      id: unknown,
+    ): Promise<InstanceType<M> | InstanceType<M>[]> {
+      if (!Array.isArray(id)) {
+        const record = await this.all()
+          .where({ [this.primaryKey]: id })
+          .first();
+
+        if (!record) {
+          throw new RecordNotFound(
+            `Could not find ${this.name} with ${this.primaryKey} = ${String(id)}`,
+          );
+        }
+
+        return record as InstanceType<M>;
+      }
+
+      // Asking for none of them is not an error, and does not need a query.
+      if (id.length === 0) return [];
+
+      const found = await this.all()
         .where({ [this.primaryKey]: id })
-        .first();
-      if (!record) {
+        .toArray();
+
+      const byId = new Map(
+        found.map((record) => [
+          // Compared as strings: an id off the database is a number and one
+          // out of a URL is not, and `find(["4"])` is the ordinary case.
+          String((record as unknown as Record<string, unknown>)[this.primaryKey]),
+          record,
+        ]),
+      );
+
+      // Rails answers in the order the ids were given rather than the order
+      // the database returns them, which is what makes `find(ids)` usable for
+      // rebuilding a list somebody has already sorted.
+      const ordered = id.map((one) => byId.get(String(one))).filter(Boolean);
+
+      if (ordered.length !== id.length) {
         throw new RecordNotFound(
-          `Could not find ${this.name} with ${this.primaryKey} = ${String(id)}`,
+          `Could not find all ${this.name} records with ${this.primaryKey}: ` +
+            `(${id.map((one) => String(one)).join(", ")}) ` +
+            `(found ${ordered.length} results, but was looking for ${id.length}).`,
         );
       }
-      return record;
+
+      return ordered as InstanceType<M>[];
     }
 
     /** Rails' `find_by`: the first match, or null. */
@@ -3023,6 +3074,7 @@ export interface ModelClass<A extends object> {
   where<T>(this: ModelConstructor<A, T>, sql: string, ...bindings: unknown[]): Relation<T>;
   order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
   limit<T>(this: ModelConstructor<A, T>, count: number): Relation<T>;
+  find<T>(this: ModelConstructor<A, T>, ids: readonly unknown[]): Promise<T[]>;
   find<T>(this: ModelConstructor<A, T>, id: unknown): Promise<T>;
   findBy<T>(this: ModelConstructor<A, T>, conditions: Conditions): Promise<T | null>;
   first<T>(this: ModelConstructor<A, T>): Promise<T | null>;
