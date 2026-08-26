@@ -216,6 +216,8 @@ export class Relation<T> implements PromiseLike<T[]> {
   #wheres: WhereClause[] = [];
   #orders: { column: string; direction: Direction }[] = [];
   #limit: number | undefined;
+  /** Set by `none`: this relation matches nothing and knows it. */
+  #none = false;
   #offset: number | undefined;
   #selects: string[] | undefined;
   #includes: string[] = [];
@@ -241,6 +243,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#wheres = [...this.#wheres];
     next.#orders = [...this.#orders];
     next.#limit = this.#limit;
+    next.#none = this.#none;
     next.#offset = this.#offset;
     next.#selects = this.#selects ? [...this.#selects] : undefined;
     next.#includes = [...this.#includes];
@@ -688,6 +691,8 @@ export class Relation<T> implements PromiseLike<T[]> {
 
   /** Runs the query and returns model instances, preloading any includes. */
   async toArray(): Promise<T[]> {
+    if (this.#none) return [];
+
     if (this.#preloaded) return this.#preloaded;
 
     await this.#source.prepare?.();
@@ -776,6 +781,8 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   async count(): Promise<number> {
+    if (this.#none) return 0;
+
     const relation = this.#clone();
     relation.#orders = [];
     relation.#limit = undefined;
@@ -797,6 +804,8 @@ export class Relation<T> implements PromiseLike<T[]> {
    * and offset, which would otherwise change the answer rather than the rows.
    */
   async #aggregate(fn: string, column: string): Promise<number | null> {
+    if (this.#none) return null;
+
     const relation = this.#clone();
     relation.#orders = [];
     relation.#limit = undefined;
@@ -833,11 +842,84 @@ export class Relation<T> implements PromiseLike<T[]> {
     return (await this.limit(1).toArray()).length > 0;
   }
 
+  /**
+   * A relation that matches nothing, and does not ask the database.
+   *
+   * Rails' `none`. What it is for is returning a relation from a method that
+   * has decided there is nothing to return — an authorisation check, a guard
+   * clause — without the caller having to know. It stays chainable, so
+   * `visible().where(...).order(...)` keeps working and still runs no query.
+   *
+   * `where({ id: null })` is the usual stand-in and is not the same thing: it
+   * runs a query, and it stops being empty the moment somebody chains an `or`
+   * onto it.
+   */
+  none(): Relation<T> {
+    const next = this.#clone();
+    next.#none = true;
+    return next;
+  }
+
+  /** Whether this relation was emptied by `none`. */
+  get isNone(): boolean {
+    return this.#none;
+  }
+
+  /**
+   * The first record, in no particular order. Rails' `take`.
+   *
+   * `first` orders by the primary key so the answer is stable; this does not,
+   * which is what makes it the cheaper call when any row will do.
+   */
+  async take(): Promise<T | null> {
+    return (await this.limit(1).toArray())[0] ?? null;
+  }
+
+  /** The primary keys of everything matching. Rails' `ids`. */
+  async ids(): Promise<unknown[]> {
+    return await this.pluck(this.#source.primaryKey);
+  }
+
+  /** Whether anything matches. Rails' `any?`. */
+  async any(): Promise<boolean> {
+    return await this.exists();
+  }
+
+  /**
+   * Whether more than one thing matches. Rails' `many?`.
+   *
+   * Two rows fetched rather than a count, for the same reason `sole` does it:
+   * the question is "more than one", and counting a million rows to learn
+   * there are at least two is work nobody asked for.
+   */
+  async many(): Promise<boolean> {
+    return (await this.limit(2).toArray()).length > 1;
+  }
+
+  /**
+   * Loads each record and destroys it. Rails' `destroy_all`.
+   *
+   * Unlike `deleteAll`, which is one statement and skips everything: this runs
+   * callbacks and dependent options, which is the difference between removing
+   * rows and removing records. Slower on purpose.
+   */
+  async destroyAll(): Promise<number> {
+    const records = await this.toArray();
+
+    for (const record of records) {
+      await (record as unknown as { destroy(): Promise<boolean> }).destroy();
+    }
+
+    return records.length;
+  }
+
   /** One column's values. Rails' `pluck`. */
   async pluck(column: string): Promise<unknown[]>;
   /** Several columns, as a row of values each. */
   async pluck(...columns: string[]): Promise<unknown[][]>;
   async pluck(...columns: string[]): Promise<unknown[] | unknown[][]> {
+    if (this.#none) return [];
+
     const { sql, bindings } = this.select(...columns).toSql();
     const rows = await this.connection.query<Row>(sql, bindings);
 
@@ -1019,6 +1101,8 @@ export class Relation<T> implements PromiseLike<T[]> {
 
   /** Deletes every matching row without instantiating or running callbacks. */
   async deleteAll(): Promise<void> {
+    if (this.#none) return;
+
     checkWritable("delete");
     const where = this.#whereClause();
     const statement = `DELETE FROM ${this.connection.quote(this.#source.tableName)}${where.sql}`;
