@@ -7,6 +7,12 @@
   },
   "dependencies": {
     "@altair/support": "workspace:*",
-    "@altair/view": "workspace:*"
+    "@altair/view": "workspace:*",
+    "nodemailer": "^9.0.5"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.1",
+    "@types/smtp-server": "^3.5.13",
+    "smtp-server": "^3.19.3"
   }
 }

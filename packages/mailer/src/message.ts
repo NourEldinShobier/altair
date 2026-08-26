@@ -242,7 +242,7 @@ export class LogDelivery implements DeliveryMethod {
 export class UnconfiguredDelivery implements DeliveryMethod {
   async sendMail(): Promise<never> {
     throw new Error(
-      "No delivery method configured. Set Mailer.delivery to a transport, TestDelivery, or LogDelivery.",
+      "No delivery method configured. Set SMTP_URL, or set Mailer.delivery to smtpDelivery({ host, port, auth }), TestDelivery, or LogDelivery.",
     );
   }
 }
