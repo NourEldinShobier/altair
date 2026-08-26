@@ -311,8 +311,17 @@ async function preloadPolymorphic(
 }
 
 /** Where a preloaded association is stashed on the record. */
+/**
+ * Marks a property as the record's own bookkeeping rather than a column.
+ *
+ * The model proxy keys off this: anything it does not recognise becomes an
+ * attribute, and without a way to tell these apart the preload cache was
+ * stored among the columns and written to the database.
+ */
+export const PRELOAD_PREFIX = "__preloaded_";
+
 export function cacheKey(name: string): string {
-  return `__preloaded_${name}`;
+  return `${PRELOAD_PREFIX}${name}`;
 }
 
 /** Builds the relation a to-many association reads through. */
