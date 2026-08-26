@@ -175,6 +175,32 @@ switch (command) {
     break;
   }
 
+  case "destroy":
+  case "d": {
+    const [kind, name, ...fields] = args;
+    if (!kind || !name) {
+      console.error("Usage: altair destroy KIND NAME");
+      process.exit(1);
+    }
+
+    const { destroy } = await import("./destroy.js");
+    const removals = await destroy(kind, name, fields, process.cwd());
+
+    for (const removal of removals) {
+      console.log(`      ${removal.removed ? "remove" : "absent"}  ${removal.path}`);
+    }
+
+    // Said plainly rather than exiting 0 in silence: nothing removed almost
+    // always means the name is not the one that was generated.
+    if (!removals.some((removal) => removal.removed)) {
+      console.error(`
+Nothing to remove. Was it generated under a different name?`);
+      process.exitCode = 1;
+    }
+
+    break;
+  }
+
   case "db:create": {
     const { output } = await createDatabase(targetFor(databaseUrl()), openMaintenance);
     console.log(output);

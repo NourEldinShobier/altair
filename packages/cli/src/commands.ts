@@ -485,6 +485,7 @@ export function helpText(): string {
     "Commands:",
     "  new NAME                  Create a new application",
     "  generate KIND NAME        model, controller, migration, scaffold, mailer, job, channel",
+    "  destroy, d KIND NAME      Remove what generate wrote",
     "  db:create                 Create the database",
     "  db:drop                   Drop the database",
     "  db:prepare                Create it, migrate it, and seed it if it was new",
