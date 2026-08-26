@@ -90,6 +90,9 @@
         "@altair/orm": "workspace:*",
         "@altair/support": "workspace:*",
       },
+      "devDependencies": {
+        "@altair/core": "workspace:*",
+      },
     },
     "packages/support": {
       "name": "@altair/support",
