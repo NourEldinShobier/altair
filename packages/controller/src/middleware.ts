@@ -126,6 +126,68 @@ export function requestId(headerName = "x-request-id"): Middleware {
   };
 }
 
+/** What a form may ask to become. */
+const OVERRIDABLE = new Set(["PATCH", "PUT", "DELETE"]);
+
+export const METHOD_OVERRIDE_PARAM = "_method";
+export const METHOD_OVERRIDE_HEADER = "x-http-method-override";
+
+/**
+ * Lets a form say it meant PATCH, PUT or DELETE.
+ *
+ * Ported from `Rack::MethodOverride`. A browser sends only GET and POST from a
+ * form, so everything else travels as a hidden `_method` field — which is what
+ * `ButtonTo` writes, and what nothing read: a delete button posted to a path
+ * with no POST route and came back 404.
+ *
+ * Only a POST is overridden, and that is the whole point rather than a detail.
+ * Honouring it on a GET would let a link carry `?_method=delete`, and a link
+ * is followed by crawlers, prefetchers and the back button — which is the
+ * failure `ButtonTo` exists to avoid, reintroduced one layer down.
+ */
+export function methodOverride(): Middleware {
+  return async (request, next) => {
+    if (request.method !== "POST") return await next(request);
+
+    const wanted = await overrideFor(request);
+    if (!wanted) return await next(request);
+
+    // A fresh Request over the same body: `method` is read-only, and the body
+    // has to survive because the dispatcher parses it again for params.
+    return await next(new Request(request, { method: wanted }));
+  };
+}
+
+/** What this request asked to be, if anything, and if it is allowed. */
+async function overrideFor(request: Request): Promise<string | null> {
+  const header = request.headers.get(METHOD_OVERRIDE_HEADER);
+  if (header) return normalizeOverride(header);
+
+  const type = request.headers.get("content-type") ?? "";
+  const form =
+    type.includes("application/x-www-form-urlencoded") || type.includes("multipart/form-data");
+
+  if (!form) return null;
+
+  try {
+    // Cloned, because reading a body consumes it and the dispatcher needs it.
+    const fields = await request.clone().formData();
+
+    return normalizeOverride(fields.get(METHOD_OVERRIDE_PARAM));
+  } catch {
+    // A body that will not parse is not a request that meant DELETE.
+    return null;
+  }
+}
+
+function normalizeOverride(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+
+  const wanted = value.toUpperCase();
+
+  return OVERRIDABLE.has(wanted) ? wanted : null;
+}
+
 export interface CorsOptions {
   origin?: string | string[] | ((origin: string) => boolean);
   methods?: string[];
