@@ -132,6 +132,15 @@ async function railsMethods(component: string, subdirs: string[]): Promise<Set<s
   return names;
 }
 
+/**
+ * Lowercases the first letter, so a JSX component matches the Rails helper it
+ * replaces: `TextFieldTag` is how `text_field_tag` is spelled here, and a
+ * component is the idiomatic form rather than a different feature.
+ */
+function key(name: string): string {
+  return name.charAt(0).toLowerCase() + name.slice(1);
+}
+
 /** Every identifier that appears as a declaration in our source. */
 async function ourNames(packages: string[]): Promise<Set<string>> {
   const names = new Set<string>();
@@ -145,7 +154,7 @@ async function ourNames(packages: string[]): Promise<Set<string>> {
       for (const match of source.matchAll(
         /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?([a-zA-Z][a-zA-Z0-9]*)\s*[(<:=]/g,
       )) {
-        names.add(match[1] as string);
+        names.add(key(match[1] as string));
       }
     }
   }
@@ -192,8 +201,8 @@ let totalCovered = 0;
 
 for (const [label, component, subdirs, _packages] of AREAS) {
   const rails = await railsMethods(component, subdirs);
-  const covered = [...rails].filter((name) => all.has(name));
-  const missing = [...rails].filter((name) => !all.has(name));
+  const covered = [...rails].filter((name) => all.has(key(name)));
+  const missing = [...rails].filter((name) => !all.has(key(name)));
 
   totalRails += rails.size;
   totalCovered += covered.length;
