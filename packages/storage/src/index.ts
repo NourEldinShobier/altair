@@ -7,3 +7,4 @@ export * from "./direct_upload.js";
 export * from "./analyze.js";
 export * from "./provider.js";
 export * from "./purge_job.js";
+export * from "./mirror.js";
