@@ -21,6 +21,7 @@ import {
   routesTable,
   type GeneratedFile,
 } from "./commands.js";
+import { createDatabase, dropDatabase, targetFor, type MaintenanceConnection } from "./database.js";
 import { editCredentials, ignoreMasterKey, showCredentials } from "./credentials.js";
 import { loadMigrations } from "./loader.js";
 import {
@@ -39,11 +40,33 @@ import type { Environment } from "@altair/core";
  * Mirrors the application's own default, so `altair db:migrate` and a booted
  * application disagree only if DATABASE_URL does.
  */
-async function connect(): Promise<Connection> {
+/**
+ * The database this CLI would connect to.
+ *
+ * Named separately because `db:create` and `db:drop` need it *before* there is
+ * anything to connect to, which is the one thing every other task can assume.
+ */
+function databaseUrl(): string {
   const env = process.env.ALTAIR_ENV ?? process.env.NODE_ENV ?? "development";
-  const url =
+
+  return (
     process.env.DATABASE_URL ??
-    (env === "test" ? "sqlite://:memory:" : `sqlite://${process.cwd()}/db/${env}.sqlite3`);
+    (env === "test" ? "sqlite://:memory:" : `sqlite://${process.cwd()}/db/${env}.sqlite3`)
+  );
+}
+
+/** The environment the CLI is acting on. */
+function environment(): string {
+  return process.env.ALTAIR_ENV ?? process.env.NODE_ENV ?? "development";
+}
+
+/** Opens the connection `CREATE DATABASE` is run from. */
+async function openMaintenance(url: string): Promise<MaintenanceConnection> {
+  return new Connection(url) as unknown as MaintenanceConnection;
+}
+
+async function connect(): Promise<Connection> {
+  const url = databaseUrl();
 
   // SQLite will not create a database in a directory that does not exist, and
   // "unable to open database file" is a poor way to learn that db/ is missing.
@@ -116,6 +139,59 @@ switch (command) {
       process.exit(1);
     }
     await write(generate(kind, name, fields), process.cwd());
+    break;
+  }
+
+  case "db:create": {
+    const { output } = await createDatabase(targetFor(databaseUrl()), openMaintenance);
+    console.log(output);
+    break;
+  }
+
+  case "db:drop": {
+    const { output } = await dropDatabase(targetFor(databaseUrl()), openMaintenance);
+    console.log(output);
+    break;
+  }
+
+  // Rails' `db:prepare`: get the database into a usable state from wherever it
+  // is now. Safe to run on a machine that has never seen the application and
+  // on one that is already up to date, which is what makes it the command to
+  // put in a setup script.
+  case "db:prepare": {
+    console.log((await createDatabase(targetFor(databaseUrl()), openMaintenance)).output);
+
+    const connection = await connect();
+    const { output, applied } = await migrate(connection, await loadMigrations(MIGRATIONS_DIR));
+    console.log(output);
+
+    if (applied.length > 0) await dump(connection);
+    await connection.close();
+    break;
+  }
+
+  // Rails' `db:reset`: throw it away and build it again. Refused outside
+  // development and test, because the command that drops a database should not
+  // be one keystroke from a production console.
+  case "db:reset": {
+    if (environment() === "production") {
+      console.error(
+        "Refusing to drop the production database. Set ALTAIR_ENV if you meant another one.",
+      );
+      process.exitCode = 1;
+      break;
+    }
+
+    const target = targetFor(databaseUrl());
+    console.log((await dropDatabase(target, openMaintenance)).output);
+    console.log((await createDatabase(target, openMaintenance)).output);
+
+    const connection = await connect();
+    const { output } = await migrate(connection, await loadMigrations(MIGRATIONS_DIR));
+    console.log(output);
+
+    await dump(connection);
+    await connection.close();
     break;
   }
 
