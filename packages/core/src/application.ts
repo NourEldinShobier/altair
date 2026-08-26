@@ -41,6 +41,7 @@ import {
 } from "@altair/orm";
 import { configFor } from "./config_for.js";
 import { buildConfig, type ApplicationConfig } from "./config.js";
+import { statusForError } from "./rescue_responses.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
 import { logQueries, requestLogging } from "./logging.js";
 
@@ -328,7 +329,18 @@ export class Application {
         // the footer, and none of the three can see the other two; held any
         // longer than the request, the same cache is a stale-read waiting for
         // a slow page.
-        async () => await withQueryCache(async () => await stack(request)),
+        async () => {
+          try {
+            return await withQueryCache(async () => await stack(request));
+          } catch (error) {
+            // Out here as well as inside the stack. The inner catch is under
+            // every middleware, so anything one of them threw — a session
+            // store that is down, a header builder given bad config — went
+            // past it: no report, no status, and whatever the runtime does
+            // with a rejected promise.
+            return await this.#handleError(error, request);
+          }
+        },
       );
     };
   }
@@ -359,11 +371,16 @@ export class Application {
     // Reported before anything is rendered, and whatever the handler decides:
     // an application that turns every error into a friendly page still needs
     // the error to reach whatever is watching for them.
+    const status = statusForError(error, this.config.rescueResponses);
+
+    // An error the framework has a status for is the client's doing, not a
+    // fault. Every one of them used to arrive as an unhandled server error, so
+    // a crawler walking ids paged whoever was on call.
     errors.report(error, {
-      handled: false,
-      severity: "error",
+      handled: status !== 500,
+      severity: status >= 500 ? "error" : "info",
       source: "altair",
-      context: { method: request.method, path: new URL(request.url).pathname },
+      context: { method: request.method, path: new URL(request.url).pathname, status },
     });
 
     if (this.#onError) return await this.#onError(error, request);
@@ -376,12 +393,23 @@ export class Application {
           ? `${error.name}: ${error.message}\n\n${error.stack ?? ""}`
           : String(error);
       return new Response(`${request.method} ${new URL(request.url).pathname}\n\n${detail}`, {
-        status: 500,
+        status,
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
 
-    return new Response("Internal Server Error", { status: 500 });
+    // The message goes out for a status the client can act on — "no such
+    // record" tells them something and gives nothing away. A 500 keeps its
+    // mouth shut, because the message is where the stack traces and the
+    // connection strings are.
+    if (status !== 500 && error instanceof Error) {
+      return new Response(error.message, {
+        status,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+
+    return new Response("Internal Server Error", { status });
   }
 
   /** Boots if needed, runs the start phase, and serves. */
