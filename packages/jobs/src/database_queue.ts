@@ -45,15 +45,68 @@ export async function createJobsTable(connection: QueueConnection): Promise<void
        ${q("run_at")} BIGINT NOT NULL,
        ${q("attempts")} INTEGER NOT NULL,
        ${q("enqueued_at")} BIGINT NOT NULL,
+       ${q("priority")} INTEGER NOT NULL DEFAULT 0,
        ${q("claimed_at")} BIGINT
      )`,
   );
 
-  // The index every dequeue uses: the runnable jobs on one queue, oldest first.
+  await addPriorityToExistingTable(connection);
+
+  // The index every dequeue uses: the runnable jobs on one queue, in the order
+  // the dequeue asks for them — priority first, then oldest.
   await connection.execute(
-    `CREATE INDEX IF NOT EXISTS ${q("index_altair_jobs_on_queue_and_run_at")} ` +
-      `ON ${q(JOBS_TABLE)} (${q("queue")}, ${q("claimed_at")}, ${q("run_at")})`,
+    `CREATE INDEX IF NOT EXISTS ${q("index_altair_jobs_on_queue_and_priority")} ` +
+      `ON ${q(JOBS_TABLE)} (${q("queue")}, ${q("claimed_at")}, ${q("priority")}, ${q("run_at")})`,
   );
+}
+
+/**
+ * Adds `priority` to a table created before it existed.
+ *
+ * `CREATE TABLE IF NOT EXISTS` does nothing for a table that is already there,
+ * so an application that ran an earlier version would have every insert fail
+ * on a column the code now names. Detected by asking for the column rather
+ * than by reading the adapter's catalog, which each of the three spells
+ * differently.
+ */
+async function addPriorityToExistingTable(connection: QueueConnection): Promise<void> {
+  if (await hasColumn(connection, JOBS_TABLE, "priority")) return;
+
+  await connection.execute(
+    `ALTER TABLE ${connection.quote(JOBS_TABLE)} ` +
+      `ADD COLUMN ${connection.quote("priority")} INTEGER NOT NULL DEFAULT 0`,
+  );
+}
+
+/**
+ * Whether a table has a column, asked of the database's own catalog.
+ *
+ * The obvious shortcut is `SELECT "priority" FROM jobs LIMIT 1` and a
+ * try/catch, and on SQLite it does not work: a double-quoted name that matches
+ * no column is accepted as a *string literal* rather than refused, so the
+ * probe succeeds, the migration is skipped, and every insert afterwards fails
+ * on the column that was never added. It reported success against an empty
+ * table for exactly that reason.
+ */
+async function hasColumn(
+  connection: QueueConnection,
+  table: string,
+  column: string,
+): Promise<boolean> {
+  if (connection.adapter === "sqlite") {
+    const rows = await connection.query<{ name: string }>(`PRAGMA table_info(${table})`);
+
+    return rows.some((row) => row.name === column);
+  }
+
+  const rows = await connection.query<{ count: number | string }>(
+    `SELECT COUNT(*) AS ${connection.quote("count")} FROM information_schema.columns ` +
+      `WHERE table_name = ${connection.placeholder(0)} ` +
+      `AND column_name = ${connection.placeholder(1)}`,
+    [table, column],
+  );
+
+  return Number(rows[0]?.count ?? 0) > 0;
 }
 
 interface Row {
@@ -65,6 +118,7 @@ interface Row {
   run_at: number | string;
   attempts: number | string;
   enqueued_at: number | string;
+  priority: number | string;
 }
 
 function toPayload(row: Row): JobPayload {
@@ -76,6 +130,7 @@ function toPayload(row: Row): JobPayload {
     runAt: Number(row.run_at),
     attempts: Number(row.attempts),
     enqueuedAt: Number(row.enqueued_at),
+    priority: Number(row.priority ?? 0),
   };
 }
 
@@ -84,20 +139,26 @@ export class DatabaseQueue implements QueueAdapter {
 
   async enqueue(payload: JobPayload): Promise<void> {
     const q = (name: string) => this.connection.quote(name);
-    const values = [0, 1, 2, 3, 4, 5, 6].map((index) => this.connection.placeholder(index));
+    const bindings = [
+      payload.id,
+      payload.jobClass,
+      JSON.stringify(payload.arguments),
+      payload.queue,
+      payload.runAt,
+      payload.attempts,
+      payload.enqueuedAt,
+      payload.priority ?? 0,
+    ];
+
+    // Built from the bindings rather than a hardcoded list: the first version
+    // of this counted to six by hand, and adding a column to the table and to
+    // the ordering while forgetting this one wrote every job at priority zero.
+    const values = bindings.map((_, index) => this.connection.placeholder(index));
 
     await this.connection.execute(
-      `INSERT INTO ${q(JOBS_TABLE)} (${q("job_id")}, ${q("job_class")}, ${q("arguments")}, ${q("queue")}, ${q("run_at")}, ${q("attempts")}, ${q("enqueued_at")}) ` +
+      `INSERT INTO ${q(JOBS_TABLE)} (${q("job_id")}, ${q("job_class")}, ${q("arguments")}, ${q("queue")}, ${q("run_at")}, ${q("attempts")}, ${q("enqueued_at")}, ${q("priority")}) ` +
         `VALUES (${values.join(", ")})`,
-      [
-        payload.id,
-        payload.jobClass,
-        JSON.stringify(payload.arguments),
-        payload.queue,
-        payload.runAt,
-        payload.attempts,
-        payload.enqueuedAt,
-      ],
+      bindings,
     );
   }
 
@@ -119,7 +180,7 @@ export class DatabaseQueue implements QueueAdapter {
           `WHERE ${q("queue")} = ${this.connection.placeholder(0)} ` +
           `AND ${q("claimed_at")} IS NULL ` +
           `AND ${q("run_at")} <= ${this.connection.placeholder(1)} ` +
-          `ORDER BY ${q("run_at")} ASC LIMIT 1`,
+          `ORDER BY ${q("priority")} ASC, ${q("run_at")} ASC LIMIT 1`,
         [queue, now],
       );
 
@@ -160,7 +221,7 @@ export class DatabaseQueue implements QueueAdapter {
     const q = (name: string) => this.connection.quote(name);
     const rows = await this.connection.query<Row>(
       `SELECT * FROM ${q(JOBS_TABLE)} WHERE ${q("queue")} = ${this.connection.placeholder(0)} ` +
-        `ORDER BY ${q("run_at")} ASC`,
+        `ORDER BY ${q("priority")} ASC, ${q("run_at")} ASC`,
       [queue],
     );
 
