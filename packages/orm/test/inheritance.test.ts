@@ -170,3 +170,43 @@ describe("a model with no hierarchy", () => {
     expect((widget as unknown as Record<string, unknown>).type).toBeUndefined();
   });
 });
+
+/**
+ * The subclass that forgot to say it was one.
+ *
+ * Rails works out a hierarchy from the class definition; JavaScript gives no
+ * hook for that, so a subclass has to call `inherit()`. Forgetting was silent
+ * and looked entirely fine — `Car.create()` wrote no type, `Car.all()` handed
+ * back every vehicle, and each row came back as the base class.
+ *
+ * Found by writing a probe that forgot the call, then noticing the results
+ * were wrong rather than the probe.
+ */
+describe("a subclass that never declared itself", () => {
+  class Bicycle extends Vehicle {}
+
+  it("is refused rather than quietly behaving like the base class", () => {
+    expect(() => Bicycle.build({ name: "b" })).toThrow(/never called/);
+  });
+
+  it("names the call that is missing", () => {
+    expect(() => Bicycle.build({ name: "b" })).toThrow(/inherit\(\)/);
+  });
+
+  it("says what goes wrong without it", () => {
+    expect(() => Bicycle.build({ name: "b" })).toThrow(/returns every Vehicle/);
+  });
+
+  it("does not complain about the root itself", () => {
+    expect(() => Vehicle.build({ name: "v" })).not.toThrow();
+  });
+
+  it("does not complain about one that did declare itself", () => {
+    expect(() => Car.build({ name: "c" })).not.toThrow();
+  });
+
+  // Two levels down, where the declaration is on the class above.
+  it("does not complain about a grandchild that declared itself", () => {
+    expect(() => PickupTruck.build({ name: "p" })).not.toThrow();
+  });
+});

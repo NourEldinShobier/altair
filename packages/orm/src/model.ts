@@ -1773,7 +1773,35 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     /** Builds an unsaved record. */
     static build<M extends typeof BaseModel>(this: M, values: Partial<A> = {}): InstanceType<M> {
+      this.checkInherited();
+
       return new this(values) as InstanceType<M>;
+    }
+
+    /**
+     * Refuses a model subclass that never called `inherit()`.
+     *
+     * Rails works out a hierarchy from the class definition; JavaScript gives
+     * no hook for that, so a subclass has to say so. Forgetting is silent and
+     * looks entirely fine: `Car.create()` writes no type, `Car.all()` hands
+     * back every vehicle, and each row comes back as the base class. Nothing
+     * fails, and the type column simply stays empty.
+     *
+     * Cheap to check — a prototype lookup on a class that is almost always the
+     * root — and it turns that into a sentence naming the missing line.
+     */
+    protected static checkInherited(): void {
+      const parent = Object.getPrototypeOf(this) as typeof BaseModel;
+
+      // The root itself, or something that is not a model subclass at all.
+      if (!parent?.tableName || parent === BaseModel) return;
+      // Already declared, whether by this class or by one above it.
+      if (this.stiRoot !== undefined) return;
+
+      throw new Error(
+        `${this.name} extends ${parent.name} but never called \`this.inherit()\`. ` +
+          `Without it the type column is not written and ${this.name}.all() returns every ${parent.name}.`,
+      );
     }
 
     /** Builds and saves. Rails' `create`. */
