@@ -27,6 +27,7 @@
  * payload and a body rendered at enqueue time rather than at send time.
  */
 
+import { smtpDeliveryFromUrl } from "./smtp.js";
 import { currentEnvironment, type Environment } from "@altair/support";
 import { renderToString, type Node } from "@altair/view";
 import {
@@ -196,7 +197,16 @@ export class Mailer {
  * environment itself, so an application that was not generated gets the same.
  */
 export function defaultDelivery(env: Environment = currentEnvironment()): DeliveryMethod {
+  // Never from a test, whatever the environment says. A suite that sends real
+  // mail is one that sends it to real people the first time it runs somewhere
+  // with the production variables set.
   if (env === "test") return new TestDelivery();
+
+  // One variable and an application can send. `smtp://user:pass@host:587`,
+  // which is the shape every hosted mail service already hands you.
+  const url = process.env.SMTP_URL;
+  if (url) return smtpDeliveryFromUrl(url);
+
   if (env === "development") return new LogDelivery();
 
   return new UnconfiguredDelivery();
