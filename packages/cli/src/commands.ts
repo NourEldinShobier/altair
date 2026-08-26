@@ -187,16 +187,27 @@ export function newApplication(name: string): GeneratedFile[] {
             "db:migrate": "bun run bin/altair.ts db:migrate",
             routes: "bun run bin/altair.ts routes",
           },
+          // One entry per directory a generator writes into. A missing one is
+          // not a missing feature: `altair generate mailer User` wrote a test
+          // importing `#mailers/user_mailer`, which resolved to nothing.
           imports: {
             "#models/*": "./app/models/*.ts",
             "#controllers/*": "./app/controllers/*.ts",
+            "#mailers/*": "./app/mailers/*.tsx",
+            "#jobs/*": "./app/jobs/*.ts",
+            "#channels/*": "./app/channels/*.ts",
             "#db/*": "./db/*.ts",
           },
+          // Every package a generated file imports. The mailer, job and
+          // channel generators name three that were not here.
           dependencies: {
             "@altair/core": "workspace:*",
             "@altair/controller": "workspace:*",
             "@altair/orm": "workspace:*",
             "@altair/view": "workspace:*",
+            "@altair/mailer": "workspace:*",
+            "@altair/jobs": "workspace:*",
+            "@altair/cable": "workspace:*",
           },
         },
         null,
