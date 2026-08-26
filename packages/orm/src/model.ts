@@ -312,6 +312,8 @@ const PERSISTED = Symbol("altair.model.persisted");
  * question and nothing else could answer it.
  */
 const SAVED_CHANGES = Symbol("altair.model.savedChanges");
+/** Whether `destroy` has run, which "not persisted" alone cannot say. */
+const DESTROYED = Symbol("altair.model.destroyed");
 const NESTED = Symbol("altair.model.nested");
 // Whether the last save was an insert. Read by the commit callbacks, which
 // run after both kinds and have no other way to tell them apart.
@@ -330,6 +332,12 @@ export interface BaseModelInstance<A> {
   attributes(): A;
   changedAttributes(): Partial<A>;
   savedChanges(): Record<string, [unknown, unknown]>;
+  readonly isDestroyed: boolean;
+  updateColumns(values: Partial<A>): Promise<boolean>;
+  updateColumn(column: keyof A & string, value: unknown): Promise<boolean>;
+  increment(column: keyof A & string, by?: number): Promise<unknown>;
+  decrement(column: keyof A & string, by?: number): Promise<unknown>;
+  toggle(column: keyof A & string): Promise<unknown>;
   hasSavedChange(attribute?: keyof A & string): boolean;
   attributeBeforeLastSave(attribute: keyof A & string): unknown;
   changes(): Record<string, [unknown, unknown]>;
@@ -800,6 +808,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     declare [ATTRIBUTES]: Record<string, unknown>;
     declare [ORIGINAL]: Record<string, unknown>;
     declare [SAVED_CHANGES]: Record<string, [unknown, unknown]> | undefined;
+    declare [DESTROYED]: boolean | undefined;
 
     declare [PERSISTED]: boolean;
     declare [NESTED]: Record<string, unknown>;
@@ -2102,6 +2111,138 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return this[SAVED_CHANGES]?.[attribute]?.[0];
     }
 
+    /**
+     * Whether this record was destroyed. Rails' `destroyed?`.
+     *
+     * Not the same question as `isPersisted`, which a record that was never
+     * saved also answers no to. A caller cleaning up after a failed request
+     * needs to tell "this was never written" from "this is gone".
+     */
+    get isDestroyed(): boolean {
+      return this[DESTROYED] === true;
+    }
+
+    /**
+     * Writes columns straight to the row. Rails' `update_column(s)`.
+     *
+     * No validations, no callbacks, and no `updated_at` — which is the whole
+     * point and the whole danger. It is for the columns that are bookkeeping
+     * rather than content: marking a row processed, storing a job id. Using it
+     * for anything a person typed skips every check that was put there for
+     * them.
+     */
+    async updateColumns(values: Partial<A>): Promise<boolean> {
+      checkWritable("updateColumns");
+
+      if (this.isNewRecord) {
+        throw new Error("updateColumns needs a row to update. Save the record first.");
+      }
+
+      const klass = this.constructor as typeof BaseModel;
+      const connection = klass.connection;
+      const entries = Object.entries(values as Record<string, unknown>);
+
+      if (entries.length === 0) return true;
+
+      const columns = await klass.columnNames();
+      for (const [column] of entries) {
+        // Checked rather than escaped, as everywhere else a column name
+        // reaches SQL: an unknown name is a mistake, and a crafted one is
+        // worse.
+        if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+      }
+
+      const assignments = entries
+        .map(([column], index) => `${connection.quote(column)} = ${connection.placeholder(index)}`)
+        .join(", ");
+
+      await connection.execute(
+        `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`,
+        [
+          ...entries.map(([column, value]) => klass.encryptFor(column, value)),
+          this[ATTRIBUTES][klass.primaryKey],
+        ],
+      );
+
+      // The record follows the row, and stays clean: nothing here is a pending
+      // change any more.
+      for (const [column, value] of entries) {
+        this[ATTRIBUTES][column] = value;
+        this[ORIGINAL][column] = value;
+      }
+
+      return true;
+    }
+
+    /** One column, the same way. Rails' `update_column`. */
+    async updateColumn(column: keyof A & string, value: unknown): Promise<boolean> {
+      return await this.updateColumns({ [column]: value } as Partial<A>);
+    }
+
+    /**
+     * Adds to a column in the database rather than in memory. Rails'
+     * `increment!`.
+     *
+     * `SET views = views + 1` rather than reading, adding and writing back:
+     * two requests incrementing at once both read 5, both write 6, and one
+     * view is gone. The whole reason to have this rather than `post.views +=
+     * 1; save()`.
+     */
+    async increment(column: keyof A & string, by = 1): Promise<this> {
+      checkWritable("increment");
+
+      if (this.isNewRecord) {
+        throw new Error("increment needs a row to update. Save the record first.");
+      }
+
+      const klass = this.constructor as typeof BaseModel;
+      const connection = klass.connection;
+      const columns = await klass.columnNames();
+
+      if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+
+      const quoted = connection.quote(column);
+
+      await connection.execute(
+        `UPDATE ${connection.quote(klass.table)} SET ${quoted} = COALESCE(${quoted}, 0) + ${connection.placeholder(0)} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(1)}`,
+        [by, this[ATTRIBUTES][klass.primaryKey]],
+      );
+
+      // Read back rather than added to in memory: another request may have
+      // incremented it too, and the point of doing this in the database is
+      // that both count.
+      const rows = await connection.query<Row>(
+        `SELECT ${quoted} FROM ${connection.quote(klass.table)} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(0)}`,
+        [this[ATTRIBUTES][klass.primaryKey]],
+      );
+
+      const now = rows[0]?.[column];
+      this[ATTRIBUTES][column] = now;
+      this[ORIGINAL][column] = now;
+
+      return this;
+    }
+
+    /** The other direction. Rails' `decrement!`. */
+    async decrement(column: keyof A & string, by = 1): Promise<this> {
+      return await this.increment(column, -by);
+    }
+
+    /**
+     * Flips a flag in the database. Rails' `toggle!`.
+     *
+     * Read and written rather than `NOT column` in SQL, because a flag is null
+     * before anybody sets it and `NOT NULL` is null — a toggle that left it
+     * null would do nothing and say it had.
+     */
+    async toggle(column: keyof A & string): Promise<this> {
+      const current = this[ATTRIBUTES][column];
+
+      await this.updateColumns({ [column]: current ? 0 : 1 } as Partial<A>);
+
+      return this;
+    }
+
     /** Rails' `serializable_hash`, with `only`, `except` and `methods`. */
     serializableHash(options: SerializationOptions = {}): Record<string, unknown> {
       return serializableHash(this, this.attributes() as Record<string, unknown>, options);
@@ -2673,6 +2814,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         }
 
         this[PERSISTED] = false;
+        this[DESTROYED] = true;
         return true;
       });
 
