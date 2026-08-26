@@ -87,6 +87,7 @@
       "name": "@altair/storage",
       "version": "0.0.0",
       "dependencies": {
+        "@altair/jobs": "workspace:*",
         "@altair/orm": "workspace:*",
         "@altair/support": "workspace:*",
       },

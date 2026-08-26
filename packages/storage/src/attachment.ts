@@ -104,6 +104,24 @@ abstract class Attached {
       await attachment.destroy();
     }
   }
+
+  /**
+   * Drops the attachments now and the bytes on a worker. Rails' `purge_later`.
+   *
+   * The rows go immediately because the page reads them: leaving an attachment
+   * pointing at a blob a worker is about to delete is the broken image this
+   * whole ordering exists to avoid.
+   */
+  async purgeLater(): Promise<void> {
+    const attachments = await Attachment.where(this.scope);
+
+    for (const attachment of attachments) {
+      const blob = await StorageBlob.find(attachment.blob_id).catch(() => null);
+
+      await attachment.destroy();
+      if (blob) await blob.purgeLater();
+    }
+  }
 }
 
 /** Rails' `has_one_attached`. */
@@ -185,11 +203,21 @@ export interface AttachedOptions {
   /**
    * What happens to the files when the record is destroyed.
    *
-   * `purge` — the default, and Rails' — deletes the attachment rows, the blob
-   * rows, and the bytes. `false` keeps them, for the case where several
-   * records share a blob or something outside the application owns the files.
+   * `purge` — the default — deletes the attachment rows, the blob rows, and
+   * the bytes, in line with the request. `purgeLater` drops the rows now and
+   * leaves the bytes to a worker, which is what Rails defaults to and what a
+   * record with many large attachments wants: deleting bytes is a round trip
+   * to the service each, and nobody is waiting to see the result.
+   *
+   * Not the default here, because it is the default that can fail: enqueuing
+   * needs a queue adapter, and production has none until an application
+   * configures one. Turning every `destroy` into an error there would be a
+   * worse trade than the wait.
+   *
+   * `false` keeps everything, for a blob several records share or files
+   * something outside the application owns.
    */
-  dependent?: "purge" | false;
+  dependent?: "purge" | "purgeLater" | false;
 }
 
 /** The name an attachment is declared under has to be a declared property. */
@@ -216,12 +244,16 @@ function defineAttached<M extends ModelClass>(
   // After the commit, not after the destroy: deleting the bytes is the one
   // step no rollback can undo, so it waits until the row is really gone.
   //
-  // ponytail: purged in line with the request, so a record with many large
-  // attachments waits on that many round trips to the service. Rails enqueues
-  // a job instead; do that here too the day it costs somebody a timeout.
+  // Purged in line with the request by default, so a record with many large
+  // attachments waits on that many round trips to the service. `dependent:
+  // "purgeLater"` hands the bytes to a worker instead, for an application that
+  // has a queue.
+  const later = options.dependent === "purgeLater";
+
   model.afterCommit(
     async function (this: never) {
-      await build(this as unknown as AttachedRecord, name).purge();
+      const attached = build(this as unknown as AttachedRecord, name);
+      await (later ? attached.purgeLater() : attached.purge());
     },
     { on: "destroy" },
   );

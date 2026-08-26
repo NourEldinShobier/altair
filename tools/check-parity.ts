@@ -33,7 +33,10 @@ const PACKAGES = [
 
 /** Runs one package's suite and reads the count off the summary. */
 async function countFor(name: string): Promise<number> {
-  const result = Bun.spawnSync(["bun", "test", `packages/${name}`], {
+  // The binary rather than the name: on Windows "bun" resolves to a shim, and
+  // a shim that fails to start produces no summary at all — which came back as
+  // "Could not read a test count" rather than as anything to do with spawning.
+  const result = Bun.spawnSync([process.execPath, "test", `packages/${name}`], {
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -42,7 +45,12 @@ async function countFor(name: string): Promise<number> {
   const output = `${result.stderr.toString()}${result.stdout.toString()}`;
   const match = /^\s*(\d+)\s+pass/m.exec(output);
 
-  if (!match) throw new Error(`Could not read a test count for ${name}.`);
+  if (!match) {
+    throw new Error(
+      `Could not read a test count for ${name}. It exited ${result.exitCode} saying:
+${output.trim().slice(-800)}`,
+    );
+  }
 
   // A red suite has no count worth writing down. Without this a single flaky
   // failure came back as "says 3,303, actually 3,302" — which reads as a stale
