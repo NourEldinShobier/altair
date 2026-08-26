@@ -149,6 +149,9 @@ export const MESSAGES = {
     return t("errors.messages.taken");
   },
   confirmation: (attribute: string) => t("errors.messages.confirmation", { attribute }),
+  get required() {
+    return t("errors.messages.required");
+  },
   get accepted() {
     return t("errors.messages.accepted");
   },

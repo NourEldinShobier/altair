@@ -54,7 +54,9 @@ class Post extends Model<PostAttributes>("posts") {
   static {
     this.hasMany("comments", () => Comment);
     this.hasOne("cover", () => Cover);
-    this.belongsTo("author", () => Author);
+    // Optional: these tests build a post without one, which a required
+    // belongsTo now refuses — as Rails has since 5.0.
+    this.belongsTo("author", () => Author, { optional: true });
 
     this.acceptsNestedAttributesFor("comments", { allowDestroy: true });
     this.acceptsNestedAttributesFor("cover", { allowDestroy: true });

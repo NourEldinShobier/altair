@@ -299,6 +299,8 @@ export const EN: Catalog = {
       less_than: "must be less than %{count}",
       less_than_or_equal_to: "must be less than or equal to %{count}",
       taken: "has already been taken",
+      // Rails' message for a required `belongs_to` with nothing on the other end.
+      required: "must exist",
       // Rails names the attribute here, and rails-i18n's translations of this
       // key all carry the placeholder, so dropping it would show a raw
       // "%{attribute}" the moment a catalog was loaded.

@@ -49,9 +49,9 @@ class Profile extends Model<ProfileAttributes>("profiles") {}
 
 User.hasMany("posts", () => Post);
 User.hasOne("profile", () => Profile);
-Post.belongsTo("user", () => User);
+Post.belongsTo("user", () => User, { optional: true });
 Post.hasMany("comments", () => Comment);
-Comment.belongsTo("post", () => Post);
+Comment.belongsTo("post", () => Post, { optional: true });
 
 let connection: Connection;
 

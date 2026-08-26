@@ -34,7 +34,7 @@ class Comment extends Model<CommentRow>("comments") {
   declare post: Post;
 
   static {
-    this.belongsTo("post", () => Post, { touch: true });
+    this.belongsTo("post", () => Post, { optional: true, touch: true });
   }
 }
 

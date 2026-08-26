@@ -47,9 +47,9 @@ class Comment extends Model<CommentRow>("comments") {
 }
 
 Author.hasMany("posts", () => Post);
-Post.belongsTo("author", () => Author);
+Post.belongsTo("author", () => Author, { optional: true });
 Post.hasMany("comments", () => Comment);
-Comment.belongsTo("post", () => Post);
+Comment.belongsTo("post", () => Post, { optional: true });
 
 let connection: Connection;
 
@@ -84,7 +84,7 @@ function sqliteArticles() {
     declare comments: HasMany<Comment>;
 
     static {
-      this.belongsTo("author", () => Author);
+      this.belongsTo("author", () => Author, { optional: true });
       this.hasMany("comments", () => Comment, { foreignKey: "post_id" });
     }
   }

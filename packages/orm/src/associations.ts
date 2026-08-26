@@ -106,6 +106,16 @@ export interface AssociationOptions {
    * the association means, with only performance appearing to change.
    */
   scope?: (relation: Relation<InstanceLike>) => Relation<InstanceLike>;
+
+  /**
+   * Lets a `belongsTo` have no parent. Rails' `optional: true`.
+   *
+   * A `belongsTo` is required by default, as Rails has had it since 5.0: a
+   * comment with no post is almost always a row that was saved before its
+   * parent existed, or after the parent was deleted, and it is found much
+   * later by whatever tries to read `comment.post().title`.
+   */
+  optional?: boolean;
 }
 
 export interface AssociationDefinition extends AssociationOptions {
