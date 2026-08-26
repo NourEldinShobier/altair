@@ -158,6 +158,18 @@ describe("the generated application", () => {
       expect(missing.headers.get("content-type")).toContain("text/html");
       expect(await missing.text()).toContain("Page not found");
 
+      // Rails generates `/up`, and this stack already assumed it existed —
+      // `hostAuthorization` excludes that path so a load balancer checking by
+      // IP is not turned away. Nothing answered it, so every application
+      // reported itself unreachable to whatever was watching.
+      const health = await fetch(`http://localhost:${port}/up`);
+
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ status: "ok" });
+      // A cached health check is a load balancer reading a reply from before
+      // the thing it is checking broke.
+      expect(health.headers.get("cache-control")).toContain("no-store");
+
       // A generated channel used to be a class nothing served: no cable was
       // mounted, so it could not receive a connection however correct it was.
       // The only way to find that out is to open one.
