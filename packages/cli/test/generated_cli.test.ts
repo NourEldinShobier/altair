@@ -177,6 +177,87 @@ describe("altair server", () => {
   });
 });
 
+/**
+ * `altair jobs:work` — the process that runs what `performLater` enqueued.
+ *
+ * Without it an application could enqueue and never perform: the queue filled
+ * up and nothing on the other end took work off it. The two halves are
+ * separate processes, so the only test worth writing enqueues in one and
+ * performs in the other.
+ */
+describe("altair jobs:work", () => {
+  it("runs a job another process enqueued", async () => {
+    await altair("db:migrate");
+
+    // A job that leaves proof it ran, since the worker is another process and
+    // nothing in this one can watch it happen.
+    await write(
+      "app/jobs/mark_job.ts",
+      `import { Job } from "@altair/jobs";
+import { DatabaseQueue } from "@altair/jobs";
+
+export class MarkJob extends Job {
+  override async perform(text: string): Promise<void> {
+    await Bun.write("done.txt", text);
+  }
+}
+
+void DatabaseQueue;
+`,
+    );
+
+    // A queue both processes can see. The default adapters are in memory,
+    // which between two processes is no queue at all.
+    await write(
+      "config/initializers/queue.ts",
+      `import { Job, DatabaseQueue, createJobsTable } from "@altair/jobs";
+import type { Application } from "@altair/core";
+
+export default async function queue(app: Application): Promise<void> {
+  await createJobsTable(app.connection);
+  Job.adapter = new DatabaseQueue(app.connection);
+}
+`,
+    );
+
+    await altair(
+      "runner",
+      "-e",
+      'import { MarkJob } from "./app/jobs/mark_job.js"; await MarkJob.performLater("it ran")',
+    );
+
+    // Before the worker starts, nothing has performed it. This is the
+    // assertion that tells the two failures apart: if `runner` had not booted
+    // the application, `performLater` would have fallen back to the inline
+    // adapter and done the work here, and every check below would still pass.
+    expect(await Bun.file(join(root, "done.txt")).exists()).toBe(false);
+
+    const worker = Bun.spawn(
+      [process.execPath, "run", join(root, "bin", "altair.ts"), "jobs:work"],
+      {
+        cwd: root,
+        env: { ...process.env, NODE_ENV: "development", ALTAIR_ENV: "development" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    try {
+      const proof = join(root, "done.txt");
+
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (await Bun.file(proof).exists()) break;
+        await Bun.sleep(100);
+      }
+
+      expect(await Bun.file(proof).text()).toBe("it ran");
+    } finally {
+      worker.kill();
+      await worker.exited;
+    }
+  });
+});
+
 describe("altair routes", () => {
   it("lists what the application draws", async () => {
     const { code, output } = await altair("routes");
