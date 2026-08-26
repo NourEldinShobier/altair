@@ -56,8 +56,13 @@ afterEach(async () => {
 });
 
 describe("keys", () => {
+  // Every time, not usually: the key was built by stripping two characters
+  // out of a base64 token, which left it short about once in 270 — and the
+  // short ones are the guessable ones.
   it("are long enough not to be guessed", () => {
-    expect(generateKey()).toHaveLength(28);
+    for (let index = 0; index < 5_000; index += 1) {
+      expect(generateKey()).toHaveLength(28);
+    }
   });
 
   it("are different every time", () => {
