@@ -33,6 +33,7 @@ import {
   setConnection,
 } from "@altair/orm";
 import type { Environment } from "@altair/core";
+import { currentEnvironment } from "@altair/support";
 
 /**
  * The database this command should talk to.
@@ -47,7 +48,7 @@ import type { Environment } from "@altair/core";
  * anything to connect to, which is the one thing every other task can assume.
  */
 function databaseUrl(): string {
-  const env = process.env.ALTAIR_ENV ?? process.env.NODE_ENV ?? "development";
+  const env = currentEnvironment();
 
   return (
     process.env.DATABASE_URL ??
@@ -57,7 +58,7 @@ function databaseUrl(): string {
 
 /** The environment the CLI is acting on. */
 function environment(): string {
-  return process.env.ALTAIR_ENV ?? process.env.NODE_ENV ?? "development";
+  return currentEnvironment();
 }
 
 /** Opens the connection `CREATE DATABASE` is run from. */
@@ -138,12 +139,22 @@ async function write(files: GeneratedFile[], root: string): Promise<void> {
   }
 }
 
-/** `--environment production`, or the ALTAIR_ENV the rest of the CLI uses. */
+/** `--environment production`, or the one the rest of the CLI is acting on. */
 function environmentArgument(argv: string[]): Environment {
   const flag = argv.indexOf("--environment");
   const value = flag === -1 ? undefined : argv[flag + 1];
 
-  return (value ?? process.env.ALTAIR_ENV ?? "development") as Environment;
+  if (value === undefined) return currentEnvironment();
+
+  // Checked rather than cast. `--environment prod` used to become the string
+  // "prod", which reads credentials from a file that does not exist and
+  // reports it as a missing key rather than as a typo.
+  if (value !== "development" && value !== "test" && value !== "production") {
+    console.error(`Unknown environment "${value}". Expected development, test, or production.`);
+    process.exit(1);
+  }
+
+  return value;
 }
 
 const [command, ...args] = process.argv.slice(2);
