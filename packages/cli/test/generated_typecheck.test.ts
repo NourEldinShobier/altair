@@ -140,7 +140,15 @@ describe("the generated application", () => {
   // written yet. Recorded rather than treated as a defect, because the
   // alternative is types that describe a schema the database may not have.
   it("names db/types until a migration writes it", async () => {
-    altair("generate", "model", "Widget", "title:string");
+    // Asserted, because a generate that quietly failed leaves nothing
+    // importing `#db/types` — and then the assertion below fails for a reason
+    // that has nothing to do with what it is testing. That is what it did on
+    // CI while passing here.
+    const generated = altair("generate", "model", "Widget", "title:string");
+
+    expect(
+      { code: generated.exitCode, output: generated.stderr.toString() },
+    ).toMatchObject({ code: 0 });
 
     const { output, code } = typecheck();
 
