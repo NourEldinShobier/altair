@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |       |
 | --------- | --------- | --------- | ----- |
-| **Total** | **3,213** | 26,775    | 12.0% |
+| **Total** | **3,215** | 26,775    | 12.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -26,7 +26,7 @@ one that needs no server.
 | `@altair/support`    | 853   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
 | `@altair/orm`        | 852   | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 439   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
-| `@altair/cli`        | 142   | Generators, db tasks, file loading, encrypted credentials                  |
+| `@altair/cli`        | 144   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 97    | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 58    | Action Cable, protocol-compatible with Rails' client                       |
 | `@altair/storage`    | 132   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
