@@ -89,6 +89,35 @@ const TYPES_FILE = join(process.cwd(), "db", "types.ts");
  * the database that exists. A column added in a migration and forgotten in an
  * interface is otherwise a silent lie.
  */
+/**
+ * Moves a generated migration off a version something already has.
+ *
+ * A version is the time to the second, so generating two models in one second
+ * gives them the same one — and the second `db:migrate` then fails on a unique
+ * constraint after the first has already run. A second later is still in
+ * order, which is all the version has to be.
+ */
+async function withFreeVersion(files: GeneratedFile[]): Promise<GeneratedFile[]> {
+  const taken = new Set(
+    (await loadMigrations(MIGRATIONS_DIR).catch(() => [])).map((migration) => migration.version),
+  );
+
+  return files.map((file) => {
+    const match = /^db\/migrate\/(\d+)_(.+)$/.exec(file.path);
+    if (!match) return file;
+
+    let version = match[1] as string;
+    while (taken.has(version)) version = String(BigInt(version) + 1n);
+
+    taken.add(version);
+
+    return {
+      path: `db/migrate/${version}_${match[2]}`,
+      contents: file.contents.replace(/version: "\d+"/, `version: "${version}"`),
+    };
+  });
+}
+
 async function dump(connection: Connection): Promise<void> {
   const schema = await introspect(connection);
 
@@ -138,7 +167,7 @@ switch (command) {
       console.error("Usage: altair generate KIND NAME [field:type ...]");
       process.exit(1);
     }
-    await write(generate(kind, name, fields), process.cwd());
+    await write(await withFreeVersion(generate(kind, name, fields)), process.cwd());
     break;
   }
 
