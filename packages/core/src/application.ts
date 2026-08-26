@@ -9,6 +9,7 @@
  * bindings, then boot, then the app starts, then it terminates.
  */
 
+import { join } from "node:path";
 import {
   errors,
   jsonFormatter,
@@ -27,6 +28,7 @@ import {
   forceSsl,
   requestId,
   securityHeaders,
+  serveStatic,
   type ControllerContext,
   type ControllerRegistry,
 } from "@altair/controller";
@@ -186,6 +188,13 @@ export class Application {
     // still logged with the id the response carries.
     this.middleware.use("logging", requestLogging({ logger: this.logger }));
     this.middleware.use("securityHeaders", securityHeaders());
+
+    // Last, so a file gets the headers and the request id above it, and so a
+    // route always wins over a file of the same name. Rails ships this for the
+    // same reason: without it a new application cannot serve its own favicon.
+    if (this.config.publicFileServer) {
+      this.middleware.use("static", serveStatic({ root: join(this.config.root, "public") }));
+    }
   }
 
   get connection(): Connection {

@@ -100,6 +100,26 @@ describe("the generated application", () => {
 
       expect(response.status).toBe(200);
       expect(await response.text()).not.toBe("");
+
+      // The static file server is in the default stack, and this is the only
+      // way to find out whether it is reachable from a real request. It was
+      // written, tested, documented, and never added to the stack — so a new
+      // application could not serve its own favicon.
+      const robots = await fetch(`http://localhost:${port}/robots.txt`);
+
+      expect(robots.status).toBe(200);
+      expect(await robots.text()).toContain("User-agent");
+
+      // A path with nothing behind it is still the application's 404, not the
+      // file server swallowing it.
+      expect((await fetch(`http://localhost:${port}/nothing.txt`)).status).toBe(404);
+
+      // Percent-encoded, because `fetch` collapses a plain `../` before the
+      // request is ever sent — so the unencoded form would prove nothing about
+      // the server. This one arrives at it intact.
+      const escape = await fetch(`http://localhost:${port}/%2e%2e/%2e%2e/package.json`);
+
+      expect(escape.status).toBe(404);
     } finally {
       server.kill();
       // Waited for, so the directory is not still held when cleanup runs.

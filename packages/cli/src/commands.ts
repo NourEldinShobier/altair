@@ -321,6 +321,15 @@ export default {
 `,
     },
     {
+      // Rails writes one too. It is also the smallest proof that the static
+      // file server in the default stack is actually reachable.
+      path: "public/robots.txt",
+      contents: `# See https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Disallow:
+`,
+    },
+    {
       path: "config/initializers/.gitkeep",
       contents: "",
     },
