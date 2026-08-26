@@ -42,6 +42,16 @@ interface WhereClause {
   sql: string;
   bindings: unknown[];
   /**
+   * What the column was compared to, when it was a single value.
+   *
+   * Read by `build`, which seeds a new record from the equality conditions the
+   * relation already carries — so `author.books.create(...)` sets the foreign
+   * key without the caller doing it, and so does `where(published: 1).create()`.
+   * A range, a list or raw SQL leaves this unset: there is no one value those
+   * mean.
+   */
+  value?: unknown;
+  /**
    * The column this came from, when it came from the object form.
    *
    * Only `merge` reads it, and only so it can do what Rails does: a merged
@@ -57,6 +67,14 @@ export interface RelationSource<T> {
   primaryKey: string;
   /** Turns a database row into a model instance. */
   instantiate: (row: Row) => T;
+  /**
+   * Builds a new, unsaved record.
+   *
+   * Separate from `instantiate`, which is for a row that already exists and
+   * marks the record persisted — building one from a relation's conditions is
+   * the opposite case.
+   */
+  build?: (values: Record<string, unknown>) => T;
   /**
    * Work the source needs done before it can build records.
    *
@@ -335,7 +353,7 @@ export class Relation<T> implements PromiseLike<T[]> {
           });
         }
       } else {
-        next.#wheres.push({ sql: `${quoted} = ?`, bindings: [value], column });
+        next.#wheres.push({ sql: `${quoted} = ?`, bindings: [value], column, value });
       }
     }
     return next;
@@ -1001,6 +1019,74 @@ export class Relation<T> implements PromiseLike<T[]> {
 
   async maximum(column: string): Promise<number | null> {
     return await this.#aggregate("MAX", column);
+  }
+
+  /**
+   * The attributes a record built from this relation starts with.
+   *
+   * Every equality condition, which for an association is the foreign key and
+   * for `where(published: 1)` is the flag. Rails does the same, and it is what
+   * makes `author.books.create(title)` link the book without being told to.
+   */
+  #seed(): Record<string, unknown> {
+    const seed: Record<string, unknown> = {};
+
+    for (const clause of this.#wheres) {
+      if (clause.column !== undefined && "value" in clause) seed[clause.column] = clause.value;
+    }
+
+    return seed;
+  }
+
+  /**
+   * A new record carrying this relation's conditions. Rails' `build`/`new`.
+   *
+   *     const book = author.books().build({ title: "One" })
+   *     book.author_id  // already set
+   */
+  build(values: Partial<T> = {}): T {
+    if (!this.#source.build) {
+      throw new Error("This relation's source cannot build records.");
+    }
+
+    return this.#source.build({ ...this.#seed(), ...values });
+  }
+
+  /** The same, saved. Rails' `create`. */
+  async create(values: Partial<T> = {}): Promise<T> {
+    const record = this.build(values);
+
+    await (record as unknown as { save(): Promise<boolean> }).save();
+
+    return record;
+  }
+
+  /**
+   * Links records that already exist. Rails' `collection <<`.
+   *
+   * Written one at a time rather than in a single UPDATE: each record's own
+   * callbacks and validations are the reason a caller reaches for this instead
+   * of `updateAll`.
+   */
+  async push(...records: T[]): Promise<T[]> {
+    const seed = this.#seed();
+
+    for (const record of records) {
+      Object.assign(record as object, seed);
+      await (record as unknown as { save(): Promise<boolean> }).save();
+    }
+
+    return records;
+  }
+
+  /** How many, as Rails' `size` on a collection. */
+  async size(): Promise<number> {
+    return await this.count();
+  }
+
+  /** Whether there are none. Rails' `empty?`. */
+  async isEmpty(): Promise<boolean> {
+    return !(await this.exists());
   }
 
   async exists(): Promise<boolean> {
