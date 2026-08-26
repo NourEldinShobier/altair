@@ -16,3 +16,4 @@ export * from "./send.js";
 export * from "./basic_auth.js";
 export * from "./nested_params.js";
 export * from "./permissions_policy.js";
+export * from "./static_files.js";
