@@ -172,10 +172,19 @@ export class Connection {
    * The callback receives a Connection bound to the transaction, so anything
    * it touches joins the same transaction rather than the pool.
    *
-   * Nesting is a savepoint, as it is in Rails: an inner block that throws
-   * undoes only its own work, and the outer transaction carries on. A database
-   * has no nested BEGIN — Bun says as much — so without this a model method
-   * that opens a transaction could not be called from another one.
+   * Nesting is a savepoint: an inner block that throws undoes only its own
+   * work, and the outer transaction carries on. A database has no nested
+   * BEGIN — Bun says as much — so without this a model method that opens a
+   * transaction could not be called from another one.
+   *
+   * This is a deliberate divergence, and the comment here used to claim the
+   * opposite. Rails *flattens* a nested block by default: the inner one joins
+   * the outer, `requires_new: true` is what asks for a savepoint, and the
+   * famous consequence is that `raise ActiveRecord::Rollback` inside a nested
+   * block does nothing at all. Rails' own guides warn about it.
+   *
+   * A savepoint every time is the behaviour the surprising one is a footgun
+   * against, so there is nothing to opt into and no `requiresNew` option.
    */
   async transaction<T>(body: (connection: Connection) => Promise<T>): Promise<T> {
     if (this.#inTransaction) return await this.#withSavepoint(body);
