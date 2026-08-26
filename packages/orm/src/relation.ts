@@ -107,6 +107,21 @@ export interface BatchOptions {
   order?: Direction;
 }
 
+/**
+ * Raised by `sole` when more than one record matches.
+ *
+ * Its own error rather than a generic one: "I expected exactly one" and "I
+ * expected at least one" fail for different reasons and want different
+ * handling. Finding two where one was expected usually means the data has a
+ * duplicate nobody knew about, and answering with the first would hide it.
+ */
+export class SoleRecordExceeded extends Error {
+  constructor(readonly table: string) {
+    super(`Wanted one ${table} and found more than one.`);
+    this.name = "SoleRecordExceeded";
+  }
+}
+
 /** Raised by `find` and `first!` when nothing matches. Rails' RecordNotFound. */
 export class RecordNotFound extends Error {
   constructor(message: string) {
@@ -715,6 +730,29 @@ export class Relation<T> implements PromiseLike<T[]> {
       throw new RecordNotFound(`Could not find ${this.#source.tableName} matching the conditions`);
     }
     return record;
+  }
+
+  /**
+   * Exactly one record, or an error saying which way it went wrong.
+   *
+   * Rails' `sole`. `first` answers the same thing when one row matches and
+   * quietly picks a winner when two do — so a uniqueness assumption that has
+   * stopped being true reads as normal behaviour. This one says so.
+   *
+   * Two rows are fetched rather than counted separately: one query either way,
+   * and no chance of the count and the read disagreeing about a table somebody
+   * else is writing to.
+   */
+  async sole(): Promise<T> {
+    const rows = await this.#firstOrdered().limit(2).toArray();
+
+    if (rows.length === 0) {
+      throw new RecordNotFound(`Could not find ${this.#source.tableName} matching the conditions`);
+    }
+
+    if (rows.length > 1) throw new SoleRecordExceeded(this.#source.tableName);
+
+    return rows[0] as T;
   }
 
   async last(): Promise<T | null> {

@@ -1359,6 +1359,21 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return await this.all().where(conditions).first();
     }
 
+    /**
+     * Exactly one record matching, or an error. Rails' `find_sole_by`.
+     *
+     * For a lookup that is meant to be unique — a user by email, a setting by
+     * key. `findBy` answers the same thing when one row matches and quietly
+     * picks a winner when two do, so a uniqueness assumption that has stopped
+     * being true reads as normal behaviour.
+     */
+    static async findSoleBy<M extends typeof BaseModel>(
+      this: M,
+      conditions: Conditions,
+    ): Promise<InstanceType<M>> {
+      return await this.all().where(conditions).sole();
+    }
+
     static async first<M extends typeof BaseModel>(this: M): Promise<InstanceType<M> | null> {
       return await this.all().first();
     }
@@ -2738,6 +2753,7 @@ export interface ModelClass<A extends object> {
     options?: { expiresIn?: number },
     fingerprint?: (record: never) => unknown,
   ): void;
+  findSoleBy<M extends AnyModel>(this: M, conditions: Conditions): Promise<InstanceType<M>>;
   findByTokenFor<M extends AnyModel>(
     this: M,
     purpose: string,
