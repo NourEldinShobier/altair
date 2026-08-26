@@ -111,21 +111,6 @@ function typecheck(): { output: string; code: number | null } {
   return { output, code: result.exitCode };
 }
 
-/**
- * Errors in the application's own files.
- *
- * `tsc` follows imports into the framework's source, and the framework does
- * not currently typecheck cleanly under the tsconfig this generator writes —
- * a real disagreement about which lib types are in scope, and a separate thing
- * to fix. This test is about the templates, so it reads only what `tsc` said
- * about the files the generator wrote.
- */
-const applicationErrors = (output: string): string[] =>
-  output
-    .split("\n")
-    .filter((line) => /^(app|config|db|bin)[\\/]/.test(line))
-    .filter((line) => line.includes("error"));
-
 describe("the generated application", () => {
   it("typechecks once it has been migrated", async () => {
     expect(
@@ -138,13 +123,12 @@ describe("the generated application", () => {
     // The exit code first: a compiler that never ran says nothing, and nothing
     // is exactly what "no errors" looks like. Zero means it compiled and was
     // happy; anything else has to be explained by the errors below.
-    // Only the application's files. `tsc` follows imports into the framework,
-    // which does not yet typecheck cleanly under the tsconfig this generator
-    // writes — `BodyInit` means different things in the two lib
-    // configurations. That is a real disagreement and a separate change; this
-    // test is about the templates.
-    expect(applicationErrors(output)).toEqual([]);
-    void code;
+    // Everything, not only the application's own files. `tsc` follows imports
+    // into the framework, and the framework has to typecheck inside the
+    // application that installed it — which it did not until the generated
+    // tsconfig stopped pulling in the DOM library.
+    expect(output.trim()).toBe("");
+    expect(code).toBe(0);
   }, 120_000);
 
   // The cost of taking types from the real schema rather than from the

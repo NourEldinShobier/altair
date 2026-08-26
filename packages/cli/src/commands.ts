@@ -365,6 +365,11 @@ export default async function seed(): Promise<void> {}
             noUncheckedIndexedAccess: true,
             noEmit: true,
             skipLibCheck: true,
+            // Without this, `target: ESNext` pulls in the DOM library, whose
+            // `Response` and `BodyInit` are not Bun's — and the framework then
+            // does not typecheck inside the application that installed it. An
+            // application that runs on a server has no DOM to describe.
+            lib: ["ESNext"],
             types: ["bun"],
           },
           include: ["app/**/*.ts", "app/**/*.tsx", "config/**/*.ts", "db/**/*.ts", "bin/**/*.ts"],
