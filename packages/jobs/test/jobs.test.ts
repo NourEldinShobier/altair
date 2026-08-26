@@ -6,8 +6,22 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Job, UnknownJob, assertSerializable, beforePerform, afterPerform } from "../src/job.js";
-import { MemoryQueue, RedisQueue, Worker, runJob, type RedisQueueClient } from "../src/worker.js";
+import {
+  Job,
+  UnknownJob,
+  assertSerializable,
+  beforePerform,
+  afterPerform,
+  defaultAdapter,
+} from "../src/job.js";
+import {
+  InlineQueue,
+  MemoryQueue,
+  RedisQueue,
+  Worker,
+  runJob,
+  type RedisQueueClient,
+} from "../src/worker.js";
 
 let queue: MemoryQueue;
 const ran: string[] = [];
@@ -123,9 +137,17 @@ describe("enqueuing", () => {
     expect(first.id).not.toBe(second.id);
   });
 
-  it("refuses to enqueue without an adapter", async () => {
-    Job.adapter = undefined;
-    await expect(Greet.performLater("Ada")).rejects.toThrow("No queue adapter");
+  // Production is the environment with no default: every adapter that needs
+  // no configuration keeps its jobs in memory, and a job that has to outlive
+  // the process that enqueued it cannot live there.
+  it("refuses to guess an adapter in production", () => {
+    expect(() => defaultAdapter("production")).toThrow("No queue adapter");
+  });
+
+  // Neither default can lose work — one collects it, the other runs it.
+  it("picks one that cannot lose the job everywhere else", () => {
+    expect(defaultAdapter("test")).toBeInstanceOf(MemoryQueue);
+    expect(defaultAdapter("development")).toBeInstanceOf(InlineQueue);
   });
 });
 

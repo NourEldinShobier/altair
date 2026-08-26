@@ -27,11 +27,14 @@
  * payload and a body rendered at enqueue time rather than at send time.
  */
 
+import { currentEnvironment, type Environment } from "@altair/support";
 import { renderToString, type Node } from "@altair/view";
 import {
   assertHeaderSafe,
   runInterceptors,
   runObservers,
+  LogDelivery,
+  TestDelivery,
   UnconfiguredDelivery,
   type Address,
   type DeliveryMethod,
@@ -151,14 +154,29 @@ export class Mailer {
   /**
    * Where messages go.
    *
-   * Refuses by default, so a misconfigured application fails at the first
-   * delivery rather than silently dropping mail — the failure nobody notices
-   * until a customer asks where their receipt went.
+   * Chosen from the environment, as Rails picks a delivery method per
+   * environment: collected in test so a case can assert on them, written to
+   * the terminal in development so somebody can read what would have been
+   * sent, and refused in production.
+   *
+   * Production keeps refusing on purpose. A default that logged there would
+   * drop mail silently — the failure nobody notices until a customer asks
+   * where their receipt went.
    */
-  static delivery: DeliveryMethod = new UnconfiguredDelivery();
+  static delivery: DeliveryMethod = defaultDelivery();
 
   /** Used by `deliverLater`. */
   static queue: DeliveryQueue | undefined;
+
+  /**
+   * The collected messages, when the environment collects them.
+   *
+   * Rails' `ActionMailer::Base.deliveries`. Empty rather than absent when the
+   * delivery method is something else, so a test reads the same either way.
+   */
+  static get deliveries(): readonly MessageFields[] {
+    return this.delivery instanceof TestDelivery ? this.delivery.deliveries : [];
+  }
 
   static get mailerName(): string {
     return this.name;
@@ -168,4 +186,18 @@ export class Mailer {
   static mail(options: MailOptions): MailMessage {
     return new MailMessage(options, this);
   }
+}
+
+/**
+ * The delivery method an environment gets when nothing says otherwise.
+ *
+ * Rails sets this per environment in `config/environments/*.rb`, which means a
+ * generated application can send mail on the first day. Here it comes from the
+ * environment itself, so an application that was not generated gets the same.
+ */
+export function defaultDelivery(env: Environment = currentEnvironment()): DeliveryMethod {
+  if (env === "test") return new TestDelivery();
+  if (env === "development") return new LogDelivery();
+
+  return new UnconfiguredDelivery();
 }
