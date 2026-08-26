@@ -76,6 +76,14 @@ export interface ApplicationConfig {
    * application that is not can name its hosts here.
    */
   hosts: (string | RegExp)[];
+  /**
+   * Extra exception-to-status mappings, layered over the built-in ones.
+   *
+   *     rescueResponses: { PaymentRequired: 402 }
+   *
+   * Keyed on the error's `name`, as Rails keys on the class name.
+   */
+  rescueResponses: Record<string, number>;
   /** Directory the app was loaded from, used to resolve app files. */
   root: string;
   log: LogConfig;
@@ -109,6 +117,7 @@ export function defaultsFor(
     },
     showDetailedErrors: !production,
     forceSsl: production,
+    rescueResponses: {},
     publicFileServer: true,
     forgeryProtection: env !== "test",
     // Development only, which is where Rails sets it and where the attack is
