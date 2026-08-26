@@ -70,6 +70,7 @@ import {
 } from "./validations.js";
 import { fingerprintMatches, generateToken, readToken, type TokenDefinition } from "./token_for.js";
 import {
+  PRELOAD_PREFIX,
   cacheKey,
   defaultForeignKey,
   preloadAssociation,
@@ -2633,16 +2634,34 @@ export function serialize(value: unknown, connection?: Connection): unknown {
   return value;
 }
 
+/**
+ * Whether a name is the record's own bookkeeping rather than a column.
+ *
+ * Anything the proxy does not recognise becomes an attribute, which is what
+ * makes `post.title = "x"` work without declaring a column — and it caught the
+ * preload cache too. Preloading an association wrote `__preloaded_comments`
+ * into the attributes, `changed()` then listed it, and the next save built an
+ * UPDATE naming a column that does not exist:
+ *
+ *     Post.all().includes("comments")  ->  edit  ->  save
+ *     SQLiteError: no such column: __preloaded_comments
+ *
+ * Which is an ordinary thing to do, and it threw.
+ */
+function isInternal(property: string): boolean {
+  return property.startsWith(PRELOAD_PREFIX);
+}
+
 const PROXY_HANDLER: ProxyHandler<{ [ATTRIBUTES]: Record<string, unknown> }> = {
   get(target, property, receiver) {
-    if (typeof property === "string" && !Reflect.has(target, property)) {
+    if (typeof property === "string" && !isInternal(property) && !Reflect.has(target, property)) {
       return target[ATTRIBUTES][property];
     }
     return Reflect.get(target, property, receiver) as unknown;
   },
 
   set(target, property, value, receiver) {
-    if (typeof property === "string" && !Reflect.has(target, property)) {
+    if (typeof property === "string" && !isInternal(property) && !Reflect.has(target, property)) {
       target[ATTRIBUTES][property] = value;
       return true;
     }
