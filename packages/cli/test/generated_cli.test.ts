@@ -129,6 +129,54 @@ describe("the binstub", () => {
   });
 });
 
+/**
+ * `altair server`, and whether stopping it stops the server.
+ *
+ * It spawned "bun" by name, which on Windows is a shim: the CLI held the shim
+ * and the real bun ran underneath it. Killing the CLI reaped the shim and left
+ * the server running with the port still open — so the next `altair server`
+ * met "address already in use" for a process nothing appeared to own.
+ */
+describe("altair server", () => {
+  it("serves, and stops when it is stopped", async () => {
+    await altair("db:migrate");
+
+    const child = Bun.spawn([process.execPath, "run", join(root, "bin", "altair.ts"), "server"], {
+      cwd: root,
+      env: { ...process.env, PORT: "0", NODE_ENV: "development", ALTAIR_ENV: "development" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    let port = 0;
+
+    try {
+      port = await portFrom(child.stdout);
+      expect(port).toBeGreaterThan(0);
+      // robots.txt rather than `/`: this file's routes are only `widgets`, and
+      // what is being checked is that something is answering at all.
+      expect((await fetch(`http://localhost:${port}/robots.txt`)).status).toBe(200);
+    } finally {
+      child.kill();
+      await child.exited;
+    }
+
+    // The real check: nothing is answering on that port any more. A survivor
+    // would still be serving here, which is exactly what used to happen.
+    // Given a moment, and retried: a listening socket does not always close
+    // the instant the process holding it is signalled.
+    let answering: Response | null = null;
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await Bun.sleep(100);
+      answering = await fetch(`http://localhost:${port}/robots.txt`).catch(() => null);
+      if (answering === null) break;
+    }
+
+    expect(answering).toBeNull();
+  });
+});
+
 describe("altair routes", () => {
   it("lists what the application draws", async () => {
     const { code, output } = await altair("routes");
@@ -239,3 +287,22 @@ describe("altair db:status", () => {
     expect(output).toContain("up");
   });
 });
+
+/** Reads the port off the server's own output rather than sleeping for it. */
+async function portFrom(stdout: ReadableStream<Uint8Array>): Promise<number> {
+  const decoder = new TextDecoder();
+  const reader = stdout.getReader();
+  const deadline = Date.now() + 30_000;
+  let text = "";
+
+  while (Date.now() < deadline) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    text += decoder.decode(value);
+    const port = Number(/localhost:(\d+)/.exec(text)?.[1] ?? 0);
+    if (port > 0) return port;
+  }
+
+  return 0;
+}

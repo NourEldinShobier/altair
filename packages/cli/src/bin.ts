@@ -363,10 +363,29 @@ switch (command) {
     }
 
     const port = args[0]?.replace(/^--port=?/, "");
-    const child = Bun.spawn(["bun", "run", "--hot", entry], {
+
+    // The bun binary rather than the name. On Windows the name resolves to a
+    // shim, so this would start the shim and the real bun would be its child —
+    // and when the shim goes, the server does not. That is a dev server still
+    // holding the port after Ctrl-C, and "address already in use" on the next
+    // `altair server`.
+    const child = Bun.spawn([process.execPath, "run", "--hot", entry], {
       stdio: ["inherit", "inherit", "inherit"],
       env: { ...process.env, ...(port ? { PORT: port } : {}) },
     });
+
+    // Passed on rather than left to the operating system. Ctrl-C reaches this
+    // process, and the server is a child of it — without this the CLI exits
+    // and the server carries on holding the port, so the next `altair server`
+    // meets "address already in use" for a process nothing appears to own.
+    //
+    // Both signals: Ctrl-C sends SIGINT, and anything supervising this (a
+    // container stopping, a test harness) sends SIGTERM.
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.on(signal, () => {
+        child.kill(signal);
+      });
+    }
 
     process.exit(await child.exited);
   }
