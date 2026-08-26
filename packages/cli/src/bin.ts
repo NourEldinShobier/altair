@@ -360,6 +360,32 @@ switch (command) {
     process.exit(await child.exited);
   }
 
+  case "runner":
+  case "r": {
+    const { runnerTarget, runTarget } = await import("./runner.js");
+
+    let target;
+    try {
+      target = runnerTarget(args);
+    } catch (error) {
+      console.error((error as Error).message);
+      process.exit(1);
+    }
+
+    const connection = await connect();
+    setConnection(connection);
+
+    try {
+      await runTarget(target, process.cwd());
+    } finally {
+      // Closed even when the script threw, or the process hangs on an open
+      // pool rather than reporting what went wrong.
+      await connection.close();
+    }
+
+    break;
+  }
+
   case "secret":
     console.log(generateSecret());
     break;
