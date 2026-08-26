@@ -63,7 +63,33 @@ export async function loadMigrations(directory: string): Promise<LoadedMigration
     });
   }
 
+  assertVersionsUnique(migrations);
+
   return migrations;
+}
+
+/**
+ * Refuses two migrations that claim the same version.
+ *
+ * Without this the database is what notices, and what it says is
+ * `UNIQUE constraint failed: schema_migrations.version` — which names neither
+ * file, and arrives after the first migration has already run. Two files
+ * generated in the same second is all it takes.
+ */
+function assertVersionsUnique(migrations: LoadedMigration[]): void {
+  const seen = new Map<string, string>();
+
+  for (const migration of migrations) {
+    const first = seen.get(migration.version);
+
+    if (first) {
+      throw new Error(
+        `Two migrations claim version ${migration.version}: ${first} and ${migration.file}. Rename one — the version is the part before the underscore.`,
+      );
+    }
+
+    seen.set(migration.version, migration.file);
+  }
 }
 
 /** Reads a directory of modules and returns their exports, keyed by file name. */
