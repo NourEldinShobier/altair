@@ -120,6 +120,17 @@ export class StorageBlob extends Model<BlobRow>("active_storage_blobs") {
     await this.service.delete(this.key as string);
     await this.destroy();
   }
+
+  /**
+   * The same, on a worker. Rails' `purge_later`.
+   *
+   * Needs a queue adapter, which production has none of until an application
+   * configures one — so this is the caller's choice rather than the default.
+   */
+  async purgeLater(): Promise<void> {
+    const { PurgeBlobJob } = await import("./purge_job.js");
+    await PurgeBlobJob.performLater(this.id as number);
+  }
 }
 
 export interface UploadedFile {

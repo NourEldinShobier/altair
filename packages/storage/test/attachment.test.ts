@@ -12,6 +12,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Connection, Model, SchemaStatements, setConnection } from "@altair/orm";
+import { Job, MemoryQueue, runJob } from "@altair/jobs";
 import {
   Attachment,
   AttachedMany,
@@ -59,6 +60,15 @@ class Archive extends Model<UserRow>("archives") {
   }
 }
 
+/** Bytes deleted by a worker rather than by the request. */
+class Gallery extends Model<UserRow>("galleries") {
+  declare photos: AttachedMany;
+
+  static {
+    hasManyAttached(this, "photos", { dependent: "purgeLater" });
+  }
+}
+
 let root: string;
 let connection: Connection;
 
@@ -74,7 +84,7 @@ beforeEach(async () => {
   connection = new Connection("sqlite://:memory:");
   setConnection(connection);
 
-  for (const model of [StorageBlob, Attachment, User, Team, Archive]) {
+  for (const model of [StorageBlob, Attachment, User, Team, Archive, Gallery]) {
     model.columnCache = undefined;
     model.columnTypeCache = undefined;
   }
@@ -84,6 +94,7 @@ beforeEach(async () => {
   await schema.createTable("users", (t) => t.string("name"));
   await schema.createTable("teams", (t) => t.string("name"));
   await schema.createTable("archives", (t) => t.string("name"));
+  await schema.createTable("galleries", (t) => t.string("name"));
 });
 
 afterEach(async () => {
@@ -366,3 +377,79 @@ describe("destroying the record", () => {
     expect(await StorageBlob.count()).toBe(1);
   });
 });
+
+/**
+ * Purging on a worker, Rails' `purge_later`.
+ *
+ * Deleting bytes is a round trip to the service each, and a record with twenty
+ * attachments makes the person who pressed the button wait for twenty. The
+ * rows still go immediately, because the page reads those: an attachment
+ * pointing at a blob a worker is about to delete is the broken image the
+ * ordering exists to avoid.
+ */
+describe("purging on a worker", () => {
+  beforeEach(() => {
+    Job.adapter = new MemoryQueue();
+  });
+
+  afterEach(() => {
+    Job.adapter = undefined;
+  });
+
+  it("takes the rows now and the bytes later", async () => {
+    const gallery = await Gallery.create({ name: "Trip" });
+    await gallery.photos.attach(file("one.png", "first"), file("two.png", "second"));
+
+    const keys = (await gallery.photos.blobs()).map((blob) => blob.key as string);
+
+    await gallery.destroy();
+
+    // The rows are gone, so nothing renders a link to bytes on their way out.
+    expect(await Attachment.count()).toBe(0);
+
+    // The bytes are not, yet — that is the whole point.
+    for (const key of keys) expect(await storageService().exists(key)).toBe(true);
+    expect(await (Job.adapter as MemoryQueue).size("default")).toBe(2);
+  });
+
+  it("deletes them when the worker runs", async () => {
+    const gallery = await Gallery.create({ name: "Trip" });
+    await gallery.photos.attach(file("one.png", "first"));
+
+    const key = ((await gallery.photos.blobs())[0] as StorageBlob).key as string;
+
+    await gallery.destroy();
+    await drain();
+
+    expect(await storageService().exists(key)).toBe(false);
+    expect(await StorageBlob.count()).toBe(0);
+  });
+
+  // Two purges racing, or a retry after the first got as far as the row.
+  it("is not an error when the blob is already gone", async () => {
+    const gallery = await Gallery.create({ name: "Trip" });
+    await gallery.photos.attach(file("one.png", "first"));
+
+    await gallery.destroy();
+    await StorageBlob.all().deleteAll();
+
+    expect(await drain()).toBe(1);
+  });
+});
+
+/** Runs everything waiting, and answers how many ran. */
+async function drain(): Promise<number> {
+  const queue = Job.adapter as MemoryQueue;
+  let ran = 0;
+
+  for (
+    let payload = await queue.dequeue("default");
+    payload;
+    payload = await queue.dequeue("default")
+  ) {
+    await runJob(payload, queue);
+    ran += 1;
+  }
+
+  return ran;
+}
