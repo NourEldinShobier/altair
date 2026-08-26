@@ -162,6 +162,19 @@ export interface QueueAdapter {
   dequeue(queue: string): Promise<JobPayload | null>;
   /** Number of jobs waiting, for tests and monitoring. */
   size(queue: string): Promise<number>;
+  /**
+   * Every payload at once, for an adapter that can do better than a loop.
+   *
+   * Optional: `performAllLater` falls back to enqueuing one at a time, which
+   * is correct and slower. The difference is throughput, never whether the
+   * jobs were enqueued.
+   */
+  enqueueAll?(payloads: JobPayload[]): Promise<void>;
+}
+
+/** A job described but not yet enqueued, for `performAllLater`. */
+export interface PendingJob {
+  payload: JobPayload;
 }
 
 const REGISTRY = new Map<string, typeof Job>();
@@ -299,12 +312,49 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
     };
   }
 
-  static async enqueueWith(options: EnqueueOptions, args: unknown[]): Promise<JobPayload> {
-    // Serializing here rather than at dequeue time means an unserializable
-    // argument fails at the call site, where the stack trace is useful.
+  /**
+   * Enqueues several jobs in one go. Rails 7.1's `perform_all_later`.
+   *
+   *     await Job.performAllLater(
+   *       ChargeCard.later(order.id),
+   *       SendReceipt.later(order.id),
+   *     )
+   *
+   * A hundred jobs enqueued in a loop is a hundred round trips, and the loop
+   * is the obvious way to write it.
+   *
+   * The enqueue callbacks do not run, which is what Rails does and is worth
+   * knowing before reaching for this: a `beforeEnqueue` that refuses a job, or
+   * an `afterEnqueue` that records one, is skipped for everything in the
+   * batch. A job that depends on either should be enqueued on its own.
+   */
+  static async performAllLater(...jobs: PendingJob[]): Promise<JobPayload[]> {
+    const payloads = jobs.map((job) => job.payload);
+    if (payloads.length === 0) return [];
+
+    const queue = this.queue;
+
+    if (queue.enqueueAll) await queue.enqueueAll(payloads);
+    else for (const payload of payloads) await queue.enqueue(payload);
+
+    return payloads;
+  }
+
+  /**
+   * Describes a job without enqueueing it, for `performAllLater`.
+   *
+   * `performLater` cannot be used here: it enqueues as it builds, and the
+   * point of a batch is that nothing is written until all of them are ready.
+   */
+  static later(...args: unknown[]): PendingJob {
     assertSerializable(args, this.jobName);
 
-    const payload: JobPayload = {
+    return { payload: this.buildPayload({}, args) };
+  }
+
+  /** The payload an enqueue would write, without writing it. */
+  static buildPayload(options: EnqueueOptions, args: unknown[]): JobPayload {
+    return {
       id: crypto.randomUUID(),
       jobClass: this.jobName,
       arguments: args,
@@ -314,6 +364,14 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       enqueuedAt: Date.now(),
       priority: options.priority ?? this.priority,
     };
+  }
+
+  static async enqueueWith(options: EnqueueOptions, args: unknown[]): Promise<JobPayload> {
+    // Serializing here rather than at dequeue time means an unserializable
+    // argument fails at the call site, where the stack trace is useful.
+    assertSerializable(args, this.jobName);
+
+    const payload = this.buildPayload(options, args);
 
     // Deferred until the transaction commits, which Rails made the default in
     // 7.2 because the alternative kept biting people. A job enqueued inside a

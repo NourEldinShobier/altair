@@ -109,6 +109,23 @@ async function hasColumn(
   return Number(rows[0]?.count ?? 0) > 0;
 }
 
+/**
+ * The columns an insert writes, and where each value comes from.
+ *
+ * One list rather than a list of names and a matching list of values: keeping
+ * two in step by hand is what wrote every job at priority zero.
+ */
+const COLUMNS: { name: string; read: (payload: JobPayload) => unknown }[] = [
+  { name: "job_id", read: (payload) => payload.id },
+  { name: "job_class", read: (payload) => payload.jobClass },
+  { name: "arguments", read: (payload) => JSON.stringify(payload.arguments) },
+  { name: "queue", read: (payload) => payload.queue },
+  { name: "run_at", read: (payload) => payload.runAt },
+  { name: "attempts", read: (payload) => payload.attempts },
+  { name: "enqueued_at", read: (payload) => payload.enqueuedAt },
+  { name: "priority", read: (payload) => payload.priority ?? 0 },
+];
+
 interface Row {
   id: number | string;
   job_id: string;
@@ -138,26 +155,47 @@ export class DatabaseQueue implements QueueAdapter {
   constructor(private readonly connection: QueueConnection) {}
 
   async enqueue(payload: JobPayload): Promise<void> {
-    const q = (name: string) => this.connection.quote(name);
-    const bindings = [
-      payload.id,
-      payload.jobClass,
-      JSON.stringify(payload.arguments),
-      payload.queue,
-      payload.runAt,
-      payload.attempts,
-      payload.enqueuedAt,
-      payload.priority ?? 0,
-    ];
+    await this.insert([payload]);
+  }
 
-    // Built from the bindings rather than a hardcoded list: the first version
-    // of this counted to six by hand, and adding a column to the table and to
-    // the ordering while forgetting this one wrote every job at priority zero.
-    const values = bindings.map((_, index) => this.connection.placeholder(index));
+  /**
+   * Writes every payload in one statement.
+   *
+   * A hundred jobs enqueued in a loop is a hundred round trips, and the loop
+   * is the obvious way to write it.
+   */
+  async enqueueAll(payloads: JobPayload[]): Promise<void> {
+    if (payloads.length === 0) return;
+
+    await this.insert(payloads);
+  }
+
+  /**
+   * The one INSERT both paths use.
+   *
+   * Shared rather than written twice, and for a specific reason: `priority`
+   * went into the table, the index and the ordering and not into the insert,
+   * so every job was written at zero while its payload said otherwise. Two
+   * inserts would be two places for that to happen again.
+   */
+  private async insert(payloads: JobPayload[]): Promise<void> {
+    const q = (name: string) => this.connection.quote(name);
+    const bindings: unknown[] = [];
+
+    const rows = payloads.map((payload) => {
+      const values = COLUMNS.map((column) => column.read(payload));
+      const placeholders = values.map((_, index) =>
+        this.connection.placeholder(bindings.length + index),
+      );
+
+      bindings.push(...values);
+
+      return `(${placeholders.join(", ")})`;
+    });
 
     await this.connection.execute(
-      `INSERT INTO ${q(JOBS_TABLE)} (${q("job_id")}, ${q("job_class")}, ${q("arguments")}, ${q("queue")}, ${q("run_at")}, ${q("attempts")}, ${q("enqueued_at")}, ${q("priority")}) ` +
-        `VALUES (${values.join(", ")})`,
+      `INSERT INTO ${q(JOBS_TABLE)} (${COLUMNS.map((column) => q(column.name)).join(", ")}) ` +
+        `VALUES ${rows.join(", ")}`,
       bindings,
     );
   }
