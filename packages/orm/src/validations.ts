@@ -53,6 +53,55 @@ export interface ValidationOptions {
   allowBlank?: boolean;
   /** Override the message for every rule in this declaration. */
   message?: string;
+  /**
+   * Only validate when this says so. Rails' `if:`.
+   *
+   * Takes the record, so a rule can depend on another attribute — the card
+   * number that is only required when the order was paid by card.
+   */
+  if?: (record: never) => boolean | Promise<boolean>;
+  /** The other way round. Rails' `unless:`. */
+  unless?: (record: never) => boolean | Promise<boolean>;
+  /**
+   * Only validate in this context. Rails' `on:`.
+   *
+   * `"create"` and `"update"` are decided by whether the record has been
+   * saved; anything else is a name a caller passes to `validate(context)`.
+   * A password required on create and not on update is the reason this
+   * exists, and there was no way to say it.
+   */
+  on?: string;
+}
+
+/**
+ * Whether a declaration applies to this record right now.
+ *
+ * Read before the rules rather than inside each one: `if` and `on` are about
+ * whether to look at all, and a rule that ran and then discarded its own
+ * result would still have done the work — a uniqueness check is a query.
+ */
+export async function declarationApplies(
+  options: ValidationOptions,
+  record: object,
+  context: string,
+): Promise<boolean> {
+  if (options.on !== undefined && options.on !== context) return false;
+
+  if (
+    options.if &&
+    !(await (options.if as (value: object) => boolean | Promise<boolean>)(record))
+  ) {
+    return false;
+  }
+
+  if (
+    options.unless &&
+    (await (options.unless as (value: object) => boolean | Promise<boolean>)(record))
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 export interface ValidationDeclaration {
