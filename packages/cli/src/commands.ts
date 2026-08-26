@@ -210,6 +210,14 @@ export function newApplication(name: string): GeneratedFile[] {
             "@altair/cable": "workspace:*",
             "@altair/cli": "workspace:*",
           },
+          // `tsconfig.json` asks for the bun types by name, so something has
+          // to provide them. Without this a new application installs, runs,
+          // and fails to typecheck: "Cannot find type definition file for
+          // 'bun'".
+          devDependencies: {
+            "@types/bun": "latest",
+            typescript: "^5",
+          },
         },
         null,
         2,

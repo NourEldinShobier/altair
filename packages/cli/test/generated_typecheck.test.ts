@@ -55,6 +55,18 @@ beforeEach(async () => {
   for (const name of PACKAGES) {
     symlinkSync(join(workspace, name), join(root, "node_modules", "@altair", name), "junction");
   }
+
+  // What `bun install` would fetch for the types the tsconfig names. Missing
+  // here, the compiler stops at "Cannot find type definition file for 'bun'"
+  // and never reaches the application's own files — which is how this test
+  // passed on one machine and reported the wrong thing on another.
+  const root_ = join(import.meta.dir, "..", "..", "..");
+  mkdirSync(join(root, "node_modules", "@types"), { recursive: true });
+  symlinkSync(
+    join(root_, "node_modules", "@types", "bun"),
+    join(root, "node_modules", "@types", "bun"),
+    "junction",
+  );
 });
 
 afterEach(() => {
@@ -146,9 +158,9 @@ describe("the generated application", () => {
     // CI while passing here.
     const generated = altair("generate", "model", "Widget", "title:string");
 
-    expect(
-      { code: generated.exitCode, output: generated.stderr.toString() },
-    ).toMatchObject({ code: 0 });
+    expect({ code: generated.exitCode, output: generated.stderr.toString() }).toMatchObject({
+      code: 0,
+    });
 
     const { output, code } = typecheck();
 
