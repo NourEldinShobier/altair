@@ -211,7 +211,31 @@ ${body}}`
  * The class name stays plural. `classify` singularizes — correct for turning a
  * table into a model, wrong here, where Rails names the class PostsController.
  */
+/**
+ * Refuses an action or method name that is not one.
+ *
+ * `altair generate mailer User title:string` is a plausible slip — it is
+ * exactly the shape the model generator wants — and the name went straight
+ * into the generated source, which then did not parse:
+ *
+ *     const message = await UserMailer.title:string("someone@example.com")
+ *
+ * A generator that writes a file nobody can run is worse than one that
+ * refuses, because the error arrives later and points somewhere else.
+ */
+export function assertActionName(name: string, kind: string): void {
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return;
+
+  const hint = name.includes(":")
+    ? ` A ${kind} takes method names, not columns — did you mean \`${name.split(":")[0]}\`?`
+    : "";
+
+  throw new Error(`"${name}" is not a name a method can have.${hint}`);
+}
+
 export function generateController(name: string, actions: string[] = []): GeneratedFile {
+  for (const action of actions) assertActionName(action, "controller");
+
   const resource = pluralize(underscore(name));
   const className = `${camelize(resource)}Controller`;
 
@@ -319,6 +343,8 @@ export class ${controllerName} extends Controller {
  * a template, so there is one file rather than three.
  */
 export function generateMailer(name: string, actions: string[] = []): GeneratedFile[] {
+  for (const action of actions) assertActionName(action, "mailer");
+
   // Not singularized: a mailer name is whatever the person chose, and
   // `singularize` would turn `Notifications` into `Notification`.
   const base = underscore(name).replace(/_mailer$/, "");
