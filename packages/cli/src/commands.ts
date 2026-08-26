@@ -246,6 +246,7 @@ export class HomeController extends Controller {
     {
       path: "bin/server.ts",
       contents: `import { createApplication } from "@altair/core";
+import { mountCable } from "@altair/cable";
 import routes from "../config/routes.js";
 import { HomeController } from "#controllers/home_controller";
 
@@ -253,6 +254,11 @@ const app = createApplication({
   routes,
   controllers: { home: HomeController },
 });
+
+// Every channel in app/channels, served at /cable. Here rather than something
+// to remember later: a generated channel that nothing mounts cannot receive a
+// connection however correct it is.
+await mountCable(app);
 
 const server = await app.listen();
 console.log(\`Listening on http://localhost:\${server.port}\`);

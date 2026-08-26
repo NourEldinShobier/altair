@@ -9,6 +9,7 @@
  */
 
 import { Glob } from "bun";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Job } from "@altair/jobs";
 
@@ -22,8 +23,14 @@ import { Job } from "@altair/jobs";
  */
 export async function registerJobs(root: string): Promise<string[]> {
   const registered: string[] = [];
+  const directory = join(root, "app", "jobs");
 
-  for await (const file of new Glob("**/*.{ts,tsx}").scan(join(root, "app", "jobs"))) {
+  // An application with no jobs has no directory, which `Glob.scan` reports as
+  // ENOENT rather than as an empty result — so `jobs:work` in an application
+  // that has not written a job yet crashed instead of idling.
+  if (!existsSync(directory)) return registered;
+
+  for await (const file of new Glob("**/*.{ts,tsx}").scan(directory)) {
     const module = (await import(
       Bun.pathToFileURL(join(root, "app", "jobs", file)).href
     )) as Record<string, unknown>;
