@@ -140,11 +140,19 @@ describe("a request", () => {
     expect(body.params).toMatchObject({ post: { title: "Hello" } });
   });
 
-  // A GET asking an endpoint for JSON has no body to declare a type on.
+  /**
+   * A GET asking an endpoint for JSON has no body to declare a type on, so the
+   * `Accept` header is the whole of what `as: "json"` does here — and the echo
+   * hands it back, which is what this asks about.
+   *
+   * It used to assert that `json()` returned something defined. `json()` parses
+   * or throws, so a defined result is the only result it can have; the case
+   * passed whatever the header said.
+   */
   it("asks for JSON back even with nothing to send", async () => {
     const response = await session.get("/echo", { as: "json" });
 
-    expect(response.json<{ params: unknown }>()).toBeDefined();
+    expect(response.json<{ accept: string }>().accept).toContain("application/json");
   });
 
   it("keeps headers that were given", async () => {

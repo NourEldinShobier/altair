@@ -141,16 +141,32 @@ describe("changeColumnDefault", () => {
     expect(await inserted()).toBe(5);
   });
 
+  /**
+   * This asked whether a SELECT returned anything, which it does whatever the
+   * default is. The question is what a row that does not name the column gets,
+   * and only inserting one answers it.
+   *
+   * Not through `inserted()`: that reads the value through `Number`, which
+   * turns the null this is looking for into a 0 indistinguishable from a real
+   * default of zero.
+   */
   it("removes one", async () => {
     if (sqlite()) return;
 
+    await schema.changeColumnDefault("widgets", "count", 5);
+    expect(await inserted()).toBe(5);
+
     await schema.changeColumnDefault("widgets", "count", null);
 
-    const rows = await connection.query<{ count: number | null }>(
-      `SELECT ${connection.quote("count")} FROM ${connection.quote("widgets")}`,
+    await connection.execute(
+      `INSERT INTO ${connection.quote("widgets")} (${connection.quote("title")}) VALUES ('after')`,
     );
 
-    expect(rows).toBeDefined();
+    const rows = await connection.query<{ count: number | null }>(
+      `SELECT ${connection.quote("count")} FROM ${connection.quote("widgets")} WHERE ${connection.quote("title")} = 'after'`,
+    );
+
+    expect(rows[0]?.count).toBeNull();
   });
 
   // A default is part of a table's definition rather than of a statement, so
