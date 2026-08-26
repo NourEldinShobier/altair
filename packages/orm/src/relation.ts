@@ -211,6 +211,34 @@ function countFor(what: string, count: number): number {
   return count;
 }
 
+/** The parts of a relation `unscope`, `only` and `except` can name. */
+export type RelationClause =
+  | "where"
+  | "order"
+  | "limit"
+  | "offset"
+  | "select"
+  | "includes"
+  | "group"
+  | "having"
+  | "distinct"
+  | "lock"
+  | "joins";
+
+const ALL_CLAUSES: readonly RelationClause[] = [
+  "where",
+  "order",
+  "limit",
+  "offset",
+  "select",
+  "includes",
+  "group",
+  "having",
+  "distinct",
+  "lock",
+  "joins",
+];
+
 export class Relation<T> implements PromiseLike<T[]> {
   #source: RelationSource<T>;
   #wheres: WhereClause[] = [];
@@ -858,6 +886,117 @@ export class Relation<T> implements PromiseLike<T[]> {
     const next = this.#clone();
     next.#none = true;
     return next;
+  }
+
+  /**
+   * Replaces the ordering instead of adding to it. Rails' `reorder`.
+   *
+   * `order` appends, which is right when a caller is refining — and wrong when
+   * one is overriding. An association or a default scope that already ordered
+   * leaves its column first, so a later `order` only breaks ties and the
+   * caller's intent quietly does nothing.
+   */
+  reorder(column: string, direction: Direction = "asc"): Relation<T> {
+    const next = this.#clone();
+    next.#orders = [{ column, direction }];
+    return next;
+  }
+
+  /**
+   * Replaces the conditions on the named columns. Rails' `rewhere`.
+   *
+   * `where` conjoins, so narrowing a relation that already has a condition on
+   * the same column gives `status = 'draft' AND status = 'published'` — which
+   * matches nothing and reads like it should match something.
+   */
+  rewhere(conditions: Conditions): Relation<T> {
+    const columns = new Set(Object.keys(conditions));
+    const next = this.#clone();
+
+    // Only the object-form conditions can be matched by column; a string
+    // condition is opaque, so it is left alone rather than guessed at.
+    next.#wheres = next.#wheres.filter(
+      (clause) => !(clause.column !== undefined && columns.has(clause.column)),
+    );
+
+    return next.where(conditions);
+  }
+
+  /**
+   * Drops whole clauses. Rails' `unscope`.
+   *
+   *     Post.published().unscope("order", "limit")
+   *
+   * For undoing what a scope or an association put there, which is the only
+   * way to get out from under a default that does not suit one caller.
+   */
+  unscope(...clauses: RelationClause[]): Relation<T> {
+    const next = this.#clone();
+
+    for (const clause of clauses) next.#clear(clause);
+
+    return next;
+  }
+
+  /** Keeps only the named clauses, dropping the rest. Rails' `only`. */
+  only(...clauses: RelationClause[]): Relation<T> {
+    const next = this.#clone();
+    const kept = new Set(clauses);
+
+    for (const clause of ALL_CLAUSES) {
+      if (!kept.has(clause)) next.#clear(clause);
+    }
+
+    return next;
+  }
+
+  /** Drops the named clauses, keeping the rest. Rails' `except`. */
+  except(...clauses: RelationClause[]): Relation<T> {
+    return this.unscope(...clauses);
+  }
+
+  /**
+   * Empties one clause.
+   *
+   * A method rather than a module function: `#private` fields are reachable
+   * only from inside the class that declares them.
+   */
+  #clear(clause: RelationClause): void {
+    switch (clause) {
+      case "where":
+        this.#wheres = [];
+        return;
+      case "order":
+        this.#orders = [];
+        return;
+      case "limit":
+        this.#limit = undefined;
+        return;
+      case "offset":
+        this.#offset = undefined;
+        return;
+      case "select":
+        this.#selects = undefined;
+        return;
+      case "includes":
+        this.#includes = [];
+        return;
+      case "group":
+        this.#groups = [];
+        return;
+      case "having":
+        this.#havings = [];
+        return;
+      case "distinct":
+        this.#distinct = false;
+        return;
+      case "lock":
+        this.#lock = undefined;
+        return;
+      case "joins":
+        this.#joins = [];
+        return;
+    }
   }
 
   /** Whether this relation was emptied by `none`. */
