@@ -53,6 +53,35 @@ export class MemoryQueue implements QueueAdapter {
   }
 }
 
+/**
+ * Runs a job the moment it is enqueued. Rails' `:inline` adapter.
+ *
+ * The default in development, where the alternative is that `performLater`
+ * quietly puts work somewhere nothing is watching. Running it here is visible:
+ * it happens, or it throws where the person who asked for it can see.
+ *
+ * A delay is ignored, as Rails' inline adapter ignores it — `set({ wait })`
+ * runs now. Nothing waits, so there is nothing to wait for.
+ */
+export class InlineQueue implements QueueAdapter {
+  async enqueue(payload: JobPayload): Promise<void> {
+    const klass = Job.lookup(payload.jobClass) as unknown as {
+      performNow(...args: unknown[]): Promise<unknown>;
+    };
+
+    await klass.performNow(...payload.arguments);
+  }
+
+  /** Nothing is ever waiting: it ran on the way in. */
+  async dequeue(): Promise<JobPayload | null> {
+    return null;
+  }
+
+  async size(): Promise<number> {
+    return 0;
+  }
+}
+
 /** The subset of `Bun.RedisClient` the queue adapter uses. */
 export interface RedisQueueClient {
   lpush(key: string, ...values: string[]): Promise<number>;

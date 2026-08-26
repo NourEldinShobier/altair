@@ -16,7 +16,14 @@
  * enqueued it, and may not exist yet.
  */
 
-import { runCallbacks, Callbacks, callbackDecorators } from "@altair/support";
+import {
+  runCallbacks,
+  Callbacks,
+  callbackDecorators,
+  currentEnvironment,
+  type Environment,
+} from "@altair/support";
+import { InlineQueue, MemoryQueue } from "./worker.js";
 import { afterCommit, isDeferring } from "@altair/orm";
 
 const {
@@ -179,6 +186,14 @@ export interface PendingJob {
 
 const REGISTRY = new Map<string, typeof Job>();
 
+/** The environment's adapter, made once and shared. See `Job.queue`. */
+let FALLBACK_ADAPTER: QueueAdapter | undefined;
+
+/** Forgets the environment's adapter, so a test can start from nothing. */
+export function resetDefaultAdapter(): void {
+  FALLBACK_ADAPTER = undefined;
+}
+
 export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
   /** The queue this class enqueues to. Rails' `queue_as`. */
   static queueName = "default";
@@ -228,10 +243,12 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
   }
 
   static get queue(): QueueAdapter {
-    if (!this.adapter) {
-      throw new Error("No queue adapter configured. Set Job.adapter before enqueuing.");
-    }
-    return this.adapter;
+    // Not cached onto `this`: a subclass assigning here would create its own
+    // static and stop seeing anything later set on `Job`, which is the same
+    // copy-on-write trap the callback and validation statics avoid. The
+    // fallback is one per process instead, so what a test enqueues and what it
+    // asserts on are the same queue.
+    return this.adapter ?? (FALLBACK_ADAPTER ??= defaultAdapter());
   }
 
   /**
@@ -354,6 +371,13 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
 
   /** The payload an enqueue would write, without writing it. */
   static buildPayload(options: EnqueueOptions, args: unknown[]): JobPayload {
+    // Every path that makes a payload comes through here, so this is the one
+    // place registration cannot be missed. A job is enqueued by name and
+    // something on the other end has to turn that name back into a class;
+    // leaving it to the application means the failure waits until a worker
+    // picks the job up, in another process, possibly after a deploy.
+    this.register(this as unknown as typeof Job);
+
     return {
       id: crypto.randomUUID(),
       jobClass: this.jobName,
@@ -445,4 +469,25 @@ export function assertSerializable(args: unknown[], jobName: string): void {
       }
     }
   }
+}
+
+/**
+ * The adapter an environment gets when nothing says otherwise.
+ *
+ * Rails defaults `queue_adapter` per environment so a generated application
+ * can enqueue on the first day. The same here, and chosen so that neither
+ * default can lose work: test collects, so a case can assert on what was
+ * enqueued; development runs the job then and there, so nothing sits in a
+ * queue nobody is draining.
+ *
+ * Production refuses. Its jobs have to outlive the process that enqueued them,
+ * and every default here is in memory.
+ */
+export function defaultAdapter(env: Environment = currentEnvironment()): QueueAdapter {
+  if (env === "test") return new MemoryQueue();
+  if (env === "development") return new InlineQueue();
+
+  throw new Error(
+    "No queue adapter configured. Set Job.adapter to a DatabaseQueue, a RedisQueue, or your own.",
+  );
 }

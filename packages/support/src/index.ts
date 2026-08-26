@@ -14,3 +14,4 @@ export * from "./error_reporter.js";
 export * from "./pretty.js";
 export * from "./time_travel.js";
 export * from "./sanitize.js";
+export * from "./environment.js";

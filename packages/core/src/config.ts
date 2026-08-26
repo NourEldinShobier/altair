@@ -6,10 +6,12 @@
  * so development is convenient and production is safe.
  */
 
-import type { Level } from "@altair/support";
+import { currentEnvironment, type Environment, type Level } from "@altair/support";
 import { secretKeyBaseFromCredentials } from "./credentials.js";
 
-export type Environment = "development" | "test" | "production";
+// Moved to @altair/support, where the packages that cannot depend on core can
+// reach it. Re-exported here, where it has always been imported from.
+export { currentEnvironment, type Environment };
 
 export interface DatabaseConfig {
   url: string;
@@ -77,15 +79,6 @@ export interface ApplicationConfig {
   /** Directory the app was loaded from, used to resolve app files. */
   root: string;
   log: LogConfig;
-}
-
-/** Reads the environment, defaulting to development as Rails does. */
-export function currentEnvironment(
-  env: Record<string, string | undefined> = process.env,
-): Environment {
-  const value = env.ALTAIR_ENV ?? env.NODE_ENV;
-  if (value === "production" || value === "test") return value;
-  return "development";
 }
 
 /**
