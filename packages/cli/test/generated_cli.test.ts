@@ -304,6 +304,29 @@ describe("altair jobs:work with no jobs", () => {
   });
 });
 
+describe("altair destroy", () => {
+  it("takes back what generate wrote", async () => {
+    await altair("generate", "model", "Gadget", "name:string");
+
+    expect(await Bun.file(join(root, "app", "models", "gadget.ts")).exists()).toBe(true);
+
+    const { code, output } = await altair("destroy", "model", "Gadget", "name:string");
+
+    expect(code).toBe(0);
+    expect(output).toContain("remove");
+    expect(await Bun.file(join(root, "app", "models", "gadget.ts")).exists()).toBe(false);
+  });
+
+  // A name that was never generated is almost always a typo, and a command
+  // that says "done" leaves somebody looking for files that are still there.
+  it("says so when there was nothing to take back", async () => {
+    const { code, output } = await altair("destroy", "model", "Ghost");
+
+    expect(code).toBe(1);
+    expect(output).toContain("Nothing to remove");
+  });
+});
+
 describe("altair routes", () => {
   it("lists what the application draws", async () => {
     const { code, output } = await altair("routes");
