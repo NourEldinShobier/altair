@@ -50,6 +50,15 @@ class Team extends Model<UserRow>("teams") {
   }
 }
 
+/** For the case where the files outlive the record on purpose. */
+class Archive extends Model<UserRow>("archives") {
+  declare avatar: AttachedOne;
+
+  static {
+    hasOneAttached(this, "avatar", { dependent: false });
+  }
+}
+
 let root: string;
 let connection: Connection;
 
@@ -65,7 +74,7 @@ beforeEach(async () => {
   connection = new Connection("sqlite://:memory:");
   setConnection(connection);
 
-  for (const model of [StorageBlob, Attachment, User, Team]) {
+  for (const model of [StorageBlob, Attachment, User, Team, Archive]) {
     model.columnCache = undefined;
     model.columnTypeCache = undefined;
   }
@@ -74,6 +83,7 @@ beforeEach(async () => {
   await createStorageTables(schema);
   await schema.createTable("users", (t) => t.string("name"));
   await schema.createTable("teams", (t) => t.string("name"));
+  await schema.createTable("archives", (t) => t.string("name"));
 });
 
 afterEach(async () => {
@@ -271,5 +281,88 @@ describe("the attachment record", () => {
     expect(attachment.record_type).toBe("User");
     expect(attachment.record_id).toBe(user.id);
     expect((await attachment.blob()).filename).toBe("face.png");
+  });
+});
+
+/**
+ * What happens to the files when the record goes.
+ *
+ * Nothing did. Destroying a user left the attachment row, the blob row, and
+ * the bytes — so a deleted person's avatar stayed downloadable by anyone
+ * holding the key, and the bill for storing it went on arriving. Rails purges
+ * on destroy and has since Active Storage shipped.
+ */
+describe("destroying the record", () => {
+  it("takes the attachment, the blob, and the bytes with it", async () => {
+    const user = await User.create({ name: "Ada" });
+    await user.avatar.attach(file("avatar.png", "pixels"));
+
+    const blob = (await user.avatar.blob()) as StorageBlob;
+    const key = blob.key as string;
+
+    await user.destroy();
+
+    expect(await Attachment.count()).toBe(0);
+    expect(await StorageBlob.count()).toBe(0);
+    expect(await storageService().exists(key)).toBe(false);
+  });
+
+  it("takes all of them when there are many", async () => {
+    const user = await User.create({ name: "Ada" });
+    await user.documents.attach(file("a.txt", "one"), file("b.txt", "two"));
+
+    const keys = (await user.documents.blobs()).map((blob) => blob.key as string);
+    expect(keys).toHaveLength(2);
+
+    await user.destroy();
+
+    expect(await StorageBlob.count()).toBe(0);
+    for (const key of keys) expect(await storageService().exists(key)).toBe(false);
+  });
+
+  it("leaves another record's files alone", async () => {
+    const ada = await User.create({ name: "Ada" });
+    const grace = await User.create({ name: "Grace" });
+
+    await ada.avatar.attach(file("ada.png", "one"));
+    await grace.avatar.attach(file("grace.png", "two"));
+
+    await ada.destroy();
+
+    expect(await grace.avatar.attached()).toBe(true);
+    expect(await StorageBlob.count()).toBe(1);
+  });
+
+  // Several records sharing a blob, or files something outside the
+  // application owns.
+  it("keeps them when the declaration says to", async () => {
+    const archive = await Archive.create({ name: "Old" });
+    await archive.avatar.attach(file("keep.txt", "kept"));
+
+    const key = ((await archive.avatar.blob()) as StorageBlob).key as string;
+
+    await archive.destroy();
+
+    expect(await StorageBlob.count()).toBe(1);
+    expect(await storageService().exists(key)).toBe(true);
+  });
+
+  /**
+   * Deleting the bytes is the one step no rollback can undo, so it waits for
+   * the commit. Purging on `after_destroy` instead would delete the files of
+   * a record that is still there.
+   */
+  it("does not touch them when the transaction rolls back", async () => {
+    const user = await User.create({ name: "Ada" });
+    await user.avatar.attach(file("avatar.png", "pixels"));
+    const key = ((await user.avatar.blob()) as StorageBlob).key as string;
+
+    await User.transaction(async () => {
+      await user.destroy();
+      throw new Error("changed my mind");
+    }).catch(() => undefined);
+
+    expect(await storageService().exists(key)).toBe(true);
+    expect(await StorageBlob.count()).toBe(1);
   });
 });

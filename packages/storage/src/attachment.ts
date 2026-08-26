@@ -174,7 +174,23 @@ export class AttachedMany extends Attached {
 }
 
 /** Any model class, for declaring an attachment on it. */
-type ModelClass = abstract new (...args: never[]) => object;
+type ModelClass = (abstract new (...args: never[]) => object) & {
+  afterCommit(
+    callback: (this: never) => unknown | Promise<unknown>,
+    options?: { on?: "create" | "update" | "destroy" },
+  ): void;
+};
+
+export interface AttachedOptions {
+  /**
+   * What happens to the files when the record is destroyed.
+   *
+   * `purge` — the default, and Rails' — deletes the attachment rows, the blob
+   * rows, and the bytes. `false` keeps them, for the case where several
+   * records share a blob or something outside the application owns the files.
+   */
+  dependent?: "purge" | false;
+}
 
 /** The name an attachment is declared under has to be a declared property. */
 type AttachmentName<M extends ModelClass> = keyof InstanceType<M> & string;
@@ -183,6 +199,7 @@ function defineAttached<M extends ModelClass>(
   model: M,
   name: AttachmentName<M>,
   build: (record: AttachedRecord, name: string) => Attached,
+  options: AttachedOptions = {},
 ): void {
   // A getter on the prototype rather than a field: a field would be an own
   // property on every instance, and the Proxy a model is wrapped in resolves
@@ -193,6 +210,21 @@ function defineAttached<M extends ModelClass>(
       return build(this, name);
     },
   });
+
+  if (options.dependent === false) return;
+
+  // After the commit, not after the destroy: deleting the bytes is the one
+  // step no rollback can undo, so it waits until the row is really gone.
+  //
+  // ponytail: purged in line with the request, so a record with many large
+  // attachments waits on that many round trips to the service. Rails enqueues
+  // a job instead; do that here too the day it costs somebody a timeout.
+  model.afterCommit(
+    async function (this: never) {
+      await build(this as unknown as AttachedRecord, name).purge();
+    },
+    { on: "destroy" },
+  );
 }
 
 /**
@@ -203,11 +235,29 @@ function defineAttached<M extends ModelClass>(
  *       static { hasOneAttached(this, "avatar") }
  *     }
  */
-export function hasOneAttached<M extends ModelClass>(model: M, name: AttachmentName<M>): void {
-  defineAttached(model, name, (record, attachmentName) => new AttachedOne(record, attachmentName));
+export function hasOneAttached<M extends ModelClass>(
+  model: M,
+  name: AttachmentName<M>,
+  options: AttachedOptions = {},
+): void {
+  defineAttached(
+    model,
+    name,
+    (record, attachmentName) => new AttachedOne(record, attachmentName),
+    options,
+  );
 }
 
 /** Rails' `has_many_attached :images`. */
-export function hasManyAttached<M extends ModelClass>(model: M, name: AttachmentName<M>): void {
-  defineAttached(model, name, (record, attachmentName) => new AttachedMany(record, attachmentName));
+export function hasManyAttached<M extends ModelClass>(
+  model: M,
+  name: AttachmentName<M>,
+  options: AttachedOptions = {},
+): void {
+  defineAttached(
+    model,
+    name,
+    (record, attachmentName) => new AttachedMany(record, attachmentName),
+    options,
+  );
 }
