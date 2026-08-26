@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { newApplication } from "../src/commands.js";
+import { generate, newApplication } from "../src/commands.js";
 
 /**
  * These spawn `bun` — a generator, a migration, a server — so they are bounded
@@ -49,7 +49,8 @@ let root: string;
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "altair-new-app-"));
 
-  for (const file of newApplication("myapp")) {
+  // A channel too, so there is something for the cable to serve.
+  for (const file of [...newApplication("myapp"), ...generate("channel", "Room")]) {
     const path = join(root, file.path);
     mkdirSync(dirname(path), { recursive: true });
     await Bun.write(path, file.contents);
@@ -157,6 +158,14 @@ describe("the generated application", () => {
       expect(missing.headers.get("content-type")).toContain("text/html");
       expect(await missing.text()).toContain("Page not found");
 
+      // A generated channel used to be a class nothing served: no cable was
+      // mounted, so it could not receive a connection however correct it was.
+      // The only way to find that out is to open one.
+      const frames = await subscribeTo(`ws://localhost:${port}/cable`, "RoomChannel");
+
+      expect(JSON.parse(frames[0] as string)).toEqual({ type: "welcome" });
+      expect(JSON.parse(frames[1] as string).type).toBe("confirm_subscription");
+
       // Percent-encoded, because `fetch` collapses a plain `../` before the
       // request is ever sent — so the unencoded form would prove nothing about
       // the server. This one arrives at it intact.
@@ -204,4 +213,37 @@ It said: ${seen || "(nothing)"}
 And failed with:
 ${failure}`,
   );
+}
+
+/** Opens a cable, subscribes, and answers the first two frames it is sent. */
+async function subscribeTo(url: string, channel: string): Promise<string[]> {
+  const socket = new WebSocket(url);
+  const frames: string[] = [];
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("the cable never answered")), 15_000);
+
+    socket.addEventListener("message", (event) => {
+      frames.push(String(event.data));
+
+      // The welcome comes first, unasked; the subscription is answered second.
+      if (frames.length === 1) {
+        socket.send(
+          JSON.stringify({ command: "subscribe", identifier: JSON.stringify({ channel }) }),
+        );
+        return;
+      }
+
+      clearTimeout(timer);
+      socket.close();
+      resolve();
+    });
+
+    socket.addEventListener("error", () => {
+      clearTimeout(timer);
+      reject(new Error("the cable refused the connection"));
+    });
+  });
+
+  return frames;
 }
