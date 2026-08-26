@@ -206,7 +206,11 @@ describe("errors", () => {
     }).boot();
     running = application;
 
-    const response = await application.handler()(new Request("http://test.host/boom"));
+    // `localhost` rather than `test.host`: a development application answers
+    // only to the hosts a development server actually sees, which is what
+    // stops a page on another site reaching this one after re-resolving its
+    // own domain to 127.0.0.1.
+    const response = await application.handler()(new Request("http://localhost/boom"));
 
     expect(response.status).toBe(500);
     expect(await response.text()).toContain("kaboom");

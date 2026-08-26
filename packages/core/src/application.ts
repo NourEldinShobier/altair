@@ -22,6 +22,7 @@ import { Router, type Mapper } from "@altair/router";
 import {
   MiddlewareStack,
   createDispatcher,
+  hostAuthorization,
   methodOverride,
   forceSsl,
   requestId,
@@ -167,6 +168,15 @@ export class Application {
    */
   #defaultMiddleware(): void {
     if (this.config.forceSsl) this.middleware.use("ssl", forceSsl());
+
+    // First of all: a request from a host this application does not answer to
+    // should not reach anything that logs, sets a cookie, or touches a session.
+    if (this.config.hosts.length > 0) {
+      this.middleware.use(
+        "hostAuthorization",
+        hostAuthorization({ allowed: this.config.hosts, exclude: (path) => path === "/up" }),
+      );
+    }
 
     // Before anything that reads the method: a request that says it is a
     // DELETE should be one by the time the router looks at it.

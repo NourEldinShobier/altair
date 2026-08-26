@@ -55,6 +55,16 @@ export interface ApplicationConfig {
    * it fail is on their own machine and not in production.
    */
   forgeryProtection: boolean;
+  /**
+   * Hosts this application answers to. Empty answers to any, as Rails does.
+   *
+   * Defaulted in development and test, where the attack this stops is aimed:
+   * a development server is on the same machine as the browser, so a page that
+   * re-resolves its own domain to 127.0.0.1 can reach it. A production server
+   * is normally behind something that already rejects an unknown Host, and an
+   * application that is not can name its hosts here.
+   */
+  hosts: (string | RegExp)[];
   /** Directory the app was loaded from, used to resolve app files. */
   root: string;
   log: LogConfig;
@@ -98,6 +108,12 @@ export function defaultsFor(
     showDetailedErrors: !production,
     forceSsl: production,
     forgeryProtection: env !== "test",
+    // Development only, which is where Rails sets it and where the attack is
+    // aimed. Test leaves it empty so a suite can call itself whatever it likes,
+    // and production leaves it to the application — a server behind a load
+    // balancer that already rejects unknown hosts does not need this, and one
+    // that is not can say so.
+    hosts: env === "development" ? ["localhost", "127.0.0.1", "[::1]", ".localhost", ".test"] : [],
     log: {
       // Quiet in tests: a suite that prints a line per request buries the one
       // assertion failure anybody cares about.
