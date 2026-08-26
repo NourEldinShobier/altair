@@ -14,11 +14,21 @@
  * always true, but "can the application this framework generates send one".
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { generate, newApplication } from "../src/commands.js";
+
+/**
+ * These spawn `bun` — a generator, a migration, a server — so they are bounded
+ * by process startup rather than by anything this file does. Bun's default is
+ * five seconds, which is comfortable on an idle machine and not comfortable
+ * when the rest of the suite is running beside it: the failure moved between
+ * tests from run to run, which is what a shared timeout looks like rather than
+ * a broken test.
+ */
+setDefaultTimeout(60_000);
 
 const PACKAGES = [
   "core",
@@ -96,6 +106,7 @@ export default function routes(r: Mapper): void {
 import { NotifierMailer } from "#mailers/notifier_mailer";
 import { CleanupJob } from "#jobs/cleanup_job";
 import { Widget } from "#models/widget";
+
 
 export class HomeController extends Controller {
   async index() {

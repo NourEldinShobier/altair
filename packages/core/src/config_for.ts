@@ -20,6 +20,7 @@
  * in `production` would silently drop every shared one beside it.
  */
 
+import { currentEnvironment } from "@altair/support";
 import type { Environment } from "./config.js";
 
 /** Raised when the file is missing, unreadable, or not a mapping. */
@@ -113,7 +114,7 @@ export async function configFor(
   options: ConfigForOptions = {},
 ): Promise<Record<string, unknown>> {
   const root = options.root ?? process.cwd();
-  const env = options.env ?? process.env.ALTAIR_ENV ?? process.env.NODE_ENV ?? "development";
+  const env = options.env ?? currentEnvironment();
   const path = `${root}/config/${name}.yml`;
 
   const file = Bun.file(path);

@@ -206,6 +206,35 @@ describe("per environment", () => {
     expect(credentialsFor("production", root, {}).get<number>("extra")).toBe(1);
     expect(credentialsFor("development", root, {}).exists).toBe(false);
   });
+
+  /**
+   * The CLI used to read only ALTAIR_ENV here while the application read both,
+   * so `NODE_ENV=production altair credentials:show` printed the development
+   * credentials — the two disagreeing about which environment they were in,
+   * silently, over the one file where being wrong matters most.
+   */
+  it("reads the same environment the application would", () => {
+    const previous = { altair: process.env.ALTAIR_ENV, node: process.env.NODE_ENV };
+    delete process.env.ALTAIR_ENV;
+    process.env.NODE_ENV = "production";
+
+    try {
+      const scoped = new Credentials({
+        contentPath: join(root, "config", "credentials", "production.yml.enc"),
+        keyPath: join(root, "config", "credentials", "production.key"),
+        env: {},
+      });
+      scoped.file.ensureKey();
+      scoped.write("who: production\n");
+
+      expect(showCredentials({ root }).output).toContain("who: production");
+    } finally {
+      if (previous.altair === undefined) delete process.env.ALTAIR_ENV;
+      else process.env.ALTAIR_ENV = previous.altair;
+      if (previous.node === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous.node;
+    }
+  });
 });
 
 describe("the gitignore", () => {

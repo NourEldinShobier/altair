@@ -22,7 +22,7 @@ import {
   type Credentials,
   type Environment,
 } from "@altair/core";
-import { secureToken } from "@altair/support";
+import { currentEnvironment, secureToken } from "@altair/support";
 
 export interface CredentialsCommandOptions {
   root?: string;
@@ -39,7 +39,10 @@ export interface CredentialsResult {
 }
 
 function credentials(options: CredentialsCommandOptions): Credentials {
-  const env = options.env ?? ((process.env.ALTAIR_ENV ?? "development") as Environment);
+  // Through the shared reader, which honours NODE_ENV too. Reading only
+  // ALTAIR_ENV meant `NODE_ENV=production altair credentials:show` printed the
+  // development credentials while the application read the production ones.
+  const env = options.env ?? currentEnvironment();
   return credentialsFor(env, options.root ?? process.cwd());
 }
 

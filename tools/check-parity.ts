@@ -43,6 +43,24 @@ async function countFor(name: string): Promise<number> {
   const match = /^\s*(\d+)\s+pass/m.exec(output);
 
   if (!match) throw new Error(`Could not read a test count for ${name}.`);
+
+  // A red suite has no count worth writing down. Without this a single flaky
+  // failure came back as "says 3,303, actually 3,302" — which reads as a stale
+  // number and sends you to `--fix`, quietly recording the smaller figure as
+  // the truth. It cost two wrong diagnoses before anyone looked at the exit
+  // code.
+  const failed = /^\s*(\d+)\s+fail/m.exec(output);
+
+  if (result.exitCode !== 0 || (failed && Number(failed[1]) > 0)) {
+    const names = [...output.matchAll(/^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/gm)].map(
+      (line) => `    ${line[1]}`,
+    );
+
+    throw new Error(
+      `packages/${name} is not green, so its test count means nothing:\n${names.join("\n")}`,
+    );
+  }
+
   return Number(match[1]);
 }
 
@@ -99,6 +117,26 @@ if (!foundTotal) {
     totalRow,
     `| **Total** | **${total.toLocaleString("en-US")}**$2| ${foundTotal[3]}    | ${share}% |`,
   );
+
+  // The same figure written out in the closing paragraph. It said 8% while the
+  // table said 12.3%, because only the table was ever checked — and the
+  // sentence is the part somebody reads.
+  const prose = /depth: ([\d.]+)% of Rails' test count, not ([\d.]+)% of Rails\./;
+  const foundProse = prose.exec(source);
+
+  if (!foundProse) {
+    problems.push({ what: "the closing sentence", claimed: "not found", actual: `${share}%` });
+  } else if (foundProse[1] !== share) {
+    problems.push({
+      what: "the closing sentence",
+      claimed: `${foundProse[1]}%`,
+      actual: `${share}%`,
+    });
+    source = source.replace(
+      prose,
+      `depth: ${share}% of Rails' test count, not ${share}% of Rails.`,
+    );
+  }
 }
 
 if (Bun.argv.includes("--fix")) {
