@@ -30,6 +30,8 @@
 import { renderToString, type Node } from "@altair/view";
 import {
   assertHeaderSafe,
+  runInterceptors,
+  runObservers,
   UnconfiguredDelivery,
   type Address,
   type DeliveryMethod,
@@ -68,18 +70,38 @@ export class MailMessage {
   /** Renders the body and hands the message to the delivery method. */
   async deliverNow(): Promise<MessageFields> {
     const message = await this.toMessage();
+
+    // Between rendering and sending, which is the only place a rule that must
+    // hold for every message can be applied once.
+    if (!(await runInterceptors(message))) return message;
+
     await this.mailer.delivery.sendMail(message);
+    await runObservers(message);
+
     return message;
   }
 
-  /** Renders the body and puts the message on the queue. */
+  /**
+   * Renders the body and puts the message on the queue.
+   *
+   * Returns undefined when an interceptor dropped it, which is the same answer
+   * `deliverNow` gives: nothing was sent.
+   */
   async deliverLater(): Promise<unknown> {
     if (!this.mailer.queue) {
       throw new Error(
         "No delivery queue configured. Set Mailer.queue before calling deliverLater().",
       );
     }
-    return await this.mailer.queue.enqueue(await this.toMessage());
+    const message = await this.toMessage();
+
+    // Run here rather than when the worker sends, so a queued message passes
+    // through them exactly once and does not depend on what the application's
+    // worker remembers to call. `deliverNow` runs them at the same point in
+    // its own path: after rendering, before the message leaves.
+    if (!(await runInterceptors(message))) return undefined;
+
+    return await this.mailer.queue.enqueue(message);
   }
 
   /** The message as a delivery method receives it, with the body rendered. */
