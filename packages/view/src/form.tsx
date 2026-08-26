@@ -23,6 +23,7 @@
 
 import { humanize, underscore } from "@altair/support";
 import type { Attributes, Node } from "./render.js";
+import { useCsrfToken } from "./context.js";
 
 /** What a builder needs from a record. Structural, so any model qualifies. */
 export interface FormRecord {
@@ -38,8 +39,14 @@ export interface FormOptions {
   scope?: string;
   url?: string;
   method?: "get" | "post" | "patch" | "put" | "delete";
-  /** Rendered as a hidden input, which is how Rails ships CSRF tokens. */
-  authenticityToken?: string;
+  /**
+   * Rendered as a hidden input, which is how Rails ships CSRF tokens.
+   *
+   * Taken from the request when it is not given, which is what `useCsrfToken`
+   * is for: a form deep in a partial should not have to be handed one. Passing
+   * `null` leaves it out, for the rare form that posts to another origin.
+   */
+  authenticityToken?: string | null;
   id?: string;
   class?: string;
   /** Anything else lands on the form element. */
@@ -316,6 +323,18 @@ export function FormWith(props: FormOptions & { children: (f: FormBuilder) => No
   const intended = props.method ?? (props.model?.isNewRecord === false ? "patch" : "post");
   const sent = NATIVE_METHODS.has(intended) ? intended : "post";
 
+  // The token the request carries, unless the caller said otherwise. Without
+  // this every form had to be handed one, and a form that was not simply
+  // failed its own POST with a 422 — the check working exactly as intended,
+  // against the application's own pages.
+  //
+  // Not on a GET: it changes nothing so it needs no token, and putting one in
+  // a query string leaves it in browser history and server logs.
+  const token =
+    props.authenticityToken === null || intended === "get"
+      ? undefined
+      : (props.authenticityToken ?? useCsrfToken());
+
   return (
     <form
       action={props.url}
@@ -325,9 +344,7 @@ export function FormWith(props: FormOptions & { children: (f: FormBuilder) => No
       {...(props.attributes ?? {})}
     >
       {intended === sent ? null : <input type="hidden" name="_method" value={intended} />}
-      {props.authenticityToken ? (
-        <input type="hidden" name="authenticity_token" value={props.authenticityToken} />
-      ) : null}
+      {token ? <input type="hidden" name="authenticity_token" value={token} /> : null}
       {props.children(builder)}
     </form>
   );
