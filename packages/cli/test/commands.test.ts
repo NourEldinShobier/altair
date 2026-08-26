@@ -187,6 +187,8 @@ describe("new", () => {
       "db/.gitkeep",
       "db/seeds.ts",
       "package.json",
+      "public/404.html",
+      "public/500.html",
       "public/robots.txt",
       "tsconfig.json",
     ]);

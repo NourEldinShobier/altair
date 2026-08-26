@@ -55,3 +55,38 @@ export function statusForError(
 
   return overrides[error.name] ?? RESCUE_RESPONSES[error.name] ?? 500;
 }
+
+/** The short name of a status, for an error body that has nothing else to say. */
+const STATUS_TEXT: Readonly<Record<number, string>> = {
+  400: "Bad Request",
+  404: "Not Found",
+  405: "Method Not Allowed",
+  406: "Not Acceptable",
+  409: "Conflict",
+  415: "Unsupported Media Type",
+  422: "Unprocessable Entity",
+  500: "Internal Server Error",
+};
+
+export function statusText(status: number): string {
+  return STATUS_TEXT[status] ?? "Error";
+}
+
+/**
+ * Whether the client asked for JSON.
+ *
+ * Both the header and the request's own content type, because a client that
+ * `fetch`es an API with a JSON body and no `Accept` still cannot parse a
+ * plain-text 404 — and answering one to `response.json()` is a parse error
+ * rather than the 404 it actually got.
+ */
+export function wantsJson(request: Request): boolean {
+  const accept = request.headers.get("accept") ?? "";
+
+  if (accept.includes("application/json")) return true;
+  // `*/*` is a browser or curl saying it has no preference, so it is not a
+  // request for JSON — only an explicit one is.
+  if (accept.includes("text/html")) return false;
+
+  return (request.headers.get("content-type") ?? "").includes("application/json");
+}

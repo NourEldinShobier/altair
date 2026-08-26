@@ -320,6 +320,81 @@ export default {
 } satisfies Partial<ApplicationConfig>;
 `,
     },
+    // Served when a request fails, and editable — an application should be
+    // able to put a 404 in its own design without the framework having an
+    // opinion about typography. Rails generates these for the same reason.
+    {
+      path: "public/404.html",
+      contents: `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Page not found</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        color: #1f2328;
+        background: #fff;
+      }
+      main { text-align: center; padding: 2rem; }
+      h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+      p { margin: 0; color: #59636e; }
+      @media (prefers-color-scheme: dark) {
+        body { color: #f0f6fc; background: #0d1117; }
+        p { color: #9198a1; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Page not found</h1>
+      <p>The page you were looking for does not exist.</p>
+    </main>
+  </body>
+</html>
+`,
+    },
+    {
+      path: "public/500.html",
+      contents: `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Something went wrong</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        color: #1f2328;
+        background: #fff;
+      }
+      main { text-align: center; padding: 2rem; }
+      h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+      p { margin: 0; color: #59636e; }
+      @media (prefers-color-scheme: dark) {
+        body { color: #f0f6fc; background: #0d1117; }
+        p { color: #9198a1; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Something went wrong</h1>
+      <p>We have been notified and are looking into it.</p>
+    </main>
+  </body>
+</html>
+`,
+    },
     {
       // Rails writes one too. It is also the smallest proof that the static
       // file server in the default stack is actually reachable.
