@@ -14,6 +14,7 @@
  * go, rather than a middleware somebody has to find.
  */
 
+import { directUploads, type DirectUploadsMiddlewareOptions } from "./direct_upload.js";
 import { serveDisk } from "./serve.js";
 import { DiskService, storageService } from "./service.js";
 
@@ -33,6 +34,19 @@ export interface MiddlewareHost {
 export interface StorageProviderOptions {
   /** Which configured service to serve. Defaults to the default one. */
   service?: string;
+  /**
+   * Mounts the direct upload endpoint, which hands a browser a signed URL to
+   * PUT a file to.
+   *
+   * Off unless asked for, and it takes an `authorize` because there is no safe
+   * default: an endpoint that mints signed upload URLs for anyone who asks is
+   * a way to pay for someone else's file hosting. Requiring the decision here
+   * is the difference between a feature nobody can reach and one everybody
+   * can.
+   */
+  directUploads?: DirectUploadsMiddlewareOptions & {
+    authorize: NonNullable<DirectUploadsMiddlewareOptions["authorize"]>;
+  };
 }
 
 /** Serves the disk service's own URLs, when the app is configured for one. */
@@ -44,11 +58,18 @@ export function storageProvider(options: StorageProviderOptions = {}): {
     name: "storage",
 
     boot(app: MiddlewareHost) {
+      // Mounted whatever the service is: a bucket signs its own download URLs,
+      // but the endpoint that hands out an upload URL is the application's
+      // either way.
+      if (options.directUploads) {
+        app.middleware.use("directUploads", directUploads(options.directUploads));
+      }
+
       const service = storageService(options.service);
 
       // S3 signs its own URLs and the browser goes straight there, so there is
-      // nothing to mount. Silently, because "no disk service" is the ordinary
-      // production case rather than a mistake.
+      // nothing more to mount. Silently, because "no disk service" is the
+      // ordinary production case rather than a mistake.
       if (!(service instanceof DiskService)) return;
 
       app.middleware.use("storage", serveDisk(service));

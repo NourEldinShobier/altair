@@ -27,10 +27,10 @@ import {
 let root: string;
 let connection: Connection;
 
-const application = async () => {
+const application = async (options: Parameters<typeof storageProvider>[0] = {}) => {
   const app = createApplication({
     routes: () => undefined,
-    providers: [storageProvider()],
+    providers: [storageProvider(options)],
     secretKeyBase: "x".repeat(64),
     database: { url: "sqlite://:memory:" },
   });
@@ -49,6 +49,10 @@ beforeEach(async () => {
   configureStorage({
     services: { disk: new DiskService({ root, secret: "a".repeat(32) }) },
     default: "disk",
+    // Signs the blob ids a direct upload hands back. Without it the endpoint
+    // refuses rather than minting an unsigned id, which would let a form
+    // attach any file in the table.
+    secret: "b".repeat(32),
   });
 
   connection = new Connection("sqlite://:memory:");
@@ -126,5 +130,47 @@ describe("a bucket", () => {
     const app = await application();
 
     expect(app.middleware.names).not.toContain("storage");
+  });
+});
+
+/**
+ * The endpoint that hands a browser a signed URL to PUT a file to.
+ *
+ * Written and tested and mounted nowhere, so a direct upload could not start.
+ * It stays opt-in rather than joining the default, and it takes an `authorize`
+ * because there is no safe default: an endpoint that mints signed upload URLs
+ * for anyone who asks is a way to pay for someone else's file hosting.
+ */
+describe("direct uploads", () => {
+  const upload = (app: { handler(): (request: Request) => Promise<Response> }) =>
+    app.handler()(
+      new Request("https://app.example/rails/active_storage/direct_uploads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          blob: { filename: "a.txt", byte_size: 9, content_type: "text/plain", checksum: "x" },
+        }),
+      }),
+    );
+
+  it("is not there unless the application asks for it", async () => {
+    expect((await upload(await application())).status).toBe(404);
+  });
+
+  it("answers with somewhere to put the file", async () => {
+    const app = await application({ directUploads: { authorize: () => true } });
+    const response = await upload(app);
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { direct_upload: { url: string } };
+    expect(body.direct_upload.url).toContain("/storage/");
+  });
+
+  // The whole reason `authorize` has no default.
+  it("refuses when the application says no", async () => {
+    const app = await application({ directUploads: { authorize: () => false } });
+
+    expect((await upload(app)).status).toBe(403);
   });
 });
