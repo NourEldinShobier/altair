@@ -12,10 +12,21 @@
  * window boundary. That is a known and accepted shape, not an oversight.
  */
 
+import { errors } from "@altair/support";
 import type { CacheStore, Duration } from "@altair/support";
 
 /** What a middleware is handed to continue the chain. */
 type Next = (request: Request) => Promise<Response>;
+
+/** Raised when the counters cannot be reached, so nothing is being counted. */
+export class RateLimiterUnavailable extends Error {
+  constructor(readonly limit: string | undefined) {
+    super(
+      `The rate limiter${limit ? ` "${limit}"` : ""} could not reach its store, so nothing is being counted.`,
+    );
+    this.name = "RateLimiterUnavailable";
+  }
+}
 
 export interface RateLimitOptions {
   /** How many requests are allowed in the window. */
@@ -34,6 +45,20 @@ export interface RateLimitOptions {
   by?: (request: Request) => string | Promise<string>;
   /** What to answer when the limit is reached. */
   with?: (request: Request) => Response | Promise<Response>;
+  /**
+   * What to do when the counters cannot be reached.
+   *
+   * A failsafe cache answers a failed increment with 0, which reads as "under
+   * the limit" — so a limit backed by a Redis that is down stops limiting, and
+   * stops silently. That is the window a credential-stuffing run waits for.
+   *
+   * `block` by default: a limit exists to protect something, and a limit that
+   * is not working is not protecting it. The cost is real and worth knowing —
+   * a cache outage makes the limited endpoint unavailable rather than
+   * unlimited — so `allow` is there for an application that would rather stay
+   * up, on a limit where that is the better trade.
+   */
+  onStoreFailure?: "block" | "allow";
   /** Distinguishes one limit from another on the same caller. */
   name?: string;
 }
@@ -83,6 +108,14 @@ export interface RateLimitState {
   /** Seconds until this window ends. */
   resetIn: number;
   exceeded: boolean;
+  /**
+   * Whether the counters could not be reached.
+   *
+   * A failsafe store answers a failed increment with 0, and a successful one
+   * always answers at least 1 — the request that just counted. So zero is an
+   * outage, and is the only way to tell one from a first request.
+   */
+  storeFailed: boolean;
 }
 
 /**
@@ -107,12 +140,20 @@ export async function recordRequest(
 
   const elapsed = (now / 1000) % seconds;
 
+  // A successful increment always answers at least 1 — the request that just
+  // counted. Zero is the failsafe store saying it could not count at all, and
+  // is the only way to tell an outage from a first request.
+  const storeFailed = count < 1;
+
   return {
     count,
     limit: options.to,
-    remaining: Math.max(0, options.to - count),
+    // Not the full allowance: nothing was counted, so a client told it has
+    // its whole allowance left has been told something that is not true.
+    remaining: storeFailed ? 0 : Math.max(0, options.to - count),
     resetIn: seconds - elapsed,
     exceeded: count > options.to,
+    storeFailed,
   };
 }
 
@@ -135,6 +176,22 @@ export function withRateLimitHeaders(response: Response, state: RateLimitState):
 export function rateLimit(options: RateLimitOptions) {
   return async (request: Request, next: Next): Promise<Response> => {
     const state = await recordRequest(options, request);
+
+    if (state.storeFailed) {
+      // Reported, not swallowed: an endpoint that has quietly stopped being
+      // limited looks exactly like one that is working.
+      errors.report(new RateLimiterUnavailable(options.name), {
+        source: "rate_limit",
+        severity: "error",
+      });
+
+      if ((options.onStoreFailure ?? "block") === "block") {
+        return withRateLimitHeaders(
+          options.with ? await options.with(request) : tooManyRequests(state.resetIn),
+          state,
+        );
+      }
+    }
 
     if (state.exceeded) {
       const response = options.with ? await options.with(request) : tooManyRequests(state.resetIn);
