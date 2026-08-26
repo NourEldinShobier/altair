@@ -108,6 +108,15 @@ export interface AssociationOptions {
   scope?: (relation: Relation<InstanceLike>) => Relation<InstanceLike>;
 
   /**
+   * Saves loaded records of this association when the owner is saved.
+   *
+   * Rails' `autosave: true`. Only what is already in memory: an association
+   * nobody read is not fetched in order to be saved, which would turn every
+   * save into a query per association.
+   */
+  autosave?: boolean;
+
+  /**
    * Lets a `belongsTo` have no parent. Rails' `optional: true`.
    *
    * A `belongsTo` is required by default, as Rails has had it since 5.0: a

@@ -1974,9 +1974,13 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      */
     async save(): Promise<boolean> {
       checkWritable("save");
-      if (Object.keys(this[NESTED]).length === 0) return await this.saveRecord();
 
       const klass = this.constructor as typeof BaseModel;
+      const autosaving = this.loadedAutosaves(klass);
+
+      if (Object.keys(this[NESTED]).length === 0 && autosaving.length === 0) {
+        return await this.saveRecord();
+      }
 
       // ponytail: the children run on the class's connection, which is the
       // same one on SQLite and on any adapter handing out a single connection.
@@ -1984,13 +1988,87 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // transactional test helper documents.
       try {
         return await klass.connection.transaction(async () => {
+          // Before the owner, because the owner holds the key and cannot
+          // point at a row that does not exist yet.
+          for (const { definition, records } of autosaving) {
+            if (definition.kind !== "belongsTo") continue;
+
+            await this.saveAutosaved(definition, records);
+          }
+
           if (!(await this.saveWithNested(klass))) throw NESTED_ROLLBACK;
+
+          // After it, because these are the side holding the key and it is
+          // the owner's id they need.
+          for (const { definition, records } of autosaving) {
+            if (definition.kind === "belongsTo") continue;
+
+            await this.saveAutosaved(definition, records);
+          }
+
           return true;
         });
       } catch (error) {
         // A form that half-saves is not a state an application can reach.
         if (error === NESTED_ROLLBACK) return false;
         throw error;
+      }
+    }
+
+    /**
+     * The autosaving associations that have something loaded.
+     *
+     * Only what is in memory. Fetching an association in order to save it
+     * would turn every save into a query per association, and nothing that
+     * was never read can have been changed.
+     */
+    private loadedAutosaves(
+      klass: typeof BaseModel,
+    ): { definition: AssociationDefinition; records: InstanceLike[] }[] {
+      const found: { definition: AssociationDefinition; records: InstanceLike[] }[] = [];
+
+      for (const definition of Object.values(klass.associations)) {
+        if (!definition.autosave) continue;
+
+        const loaded = (this as unknown as Record<string, unknown>)[cacheKey(definition.name)];
+        if (loaded === undefined || loaded === null) continue;
+
+        const records = (Array.isArray(loaded) ? loaded : [loaded]) as InstanceLike[];
+        if (records.length > 0) found.push({ definition, records });
+      }
+
+      return found;
+    }
+
+    /** Saves the loaded records of one autosaving association. */
+    private async saveAutosaved(
+      definition: AssociationDefinition,
+      records: InstanceLike[],
+    ): Promise<void> {
+      const klass = this.constructor as typeof BaseModel;
+
+      for (const record of records) {
+        const child = record as unknown as {
+          isNewRecord: boolean;
+          changed(): string[];
+          save(): Promise<boolean>;
+        };
+
+        // Untouched records are skipped rather than saved and found clean:
+        // a loaded collection of a hundred comments should not be a hundred
+        // statements because one of them changed.
+        if (!child.isNewRecord && child.changed().length === 0) continue;
+
+        // A child of a to-many association needs the key pointing back, which
+        // it will not have if it was built rather than loaded.
+        if (definition.kind !== "belongsTo") {
+          const foreignKey = definition.foreignKey ?? defaultForeignKey(klass.name);
+          const owner = this[ATTRIBUTES][definition.primaryKey ?? klass.primaryKey];
+
+          (record as Record<string, unknown>)[foreignKey] ??= owner;
+        }
+
+        if (!(await child.save())) throw NESTED_ROLLBACK;
       }
     }
 
