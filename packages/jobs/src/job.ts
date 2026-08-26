@@ -25,7 +25,26 @@ const {
   after: afterPerform,
 } = callbackDecorators("perform");
 
+/**
+ * Callbacks around the enqueue rather than around the run.
+ *
+ * Rails' `before_enqueue`, `around_enqueue`, `after_enqueue`. They run in the
+ * process that decided to enqueue, where the request that caused it is still
+ * in scope — which is the point. A `beforePerform` runs in a worker minutes
+ * later with none of that, so anything that needs to know who asked has to
+ * happen here.
+ *
+ * A `beforeEnqueue` that throws stops the enqueue, and the error reaches the
+ * caller: they are still there to hear it.
+ */
+const {
+  before: beforeEnqueue,
+  around: aroundEnqueue,
+  after: afterEnqueue,
+} = callbackDecorators("enqueue");
+
 export { beforePerform, aroundPerform, afterPerform };
+export { beforeEnqueue, aroundEnqueue, afterEnqueue };
 
 export interface JobPayload {
   id: string;
@@ -157,8 +176,16 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
   /** Per-error rules, first match wins. Rails' `retry_on` and `discard_on`. */
   static errorRules: ErrorRule[] = [];
 
+  /**
+   * What is about to be enqueued, for an `enqueue` callback to read.
+   *
+   * Only set on the instance the callbacks run on: a job that is performing
+   * was built from a payload rather than about to become one.
+   */
+  declare payload?: JobPayload;
+
   static {
-    this.defineCallbacks("perform");
+    this.defineCallbacks(["perform", "enqueue"]);
   }
 
   /**
@@ -298,15 +325,27 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
     // transaction an enqueue that fails has to reach the caller, who is still
     // there to hear it. Inside one it cannot — they returned long ago — so it
     // goes to the error reporter instead.
-    if ((options.enqueueAfterCommit ?? true) && isDeferring()) {
-      await afterCommit(async () => {
+    // The callbacks wrap the enqueue itself rather than this method, so
+    // `afterEnqueue` runs after the adapter took it and not before. Inside a
+    // transaction that is at commit time, which is also when a `beforeEnqueue`
+    // that throws can no longer reach the caller — the same trade the deferred
+    // enqueue already makes, and for the same reason.
+    const enqueue = async () => {
+      const job = new this() as unknown as { payload: JobPayload };
+      job.payload = payload;
+
+      await runCallbacks(job, "enqueue", async () => {
         await this.queue.enqueue(payload);
       });
+    };
+
+    if ((options.enqueueAfterCommit ?? true) && isDeferring()) {
+      await afterCommit(enqueue);
 
       return payload;
     }
 
-    await this.queue.enqueue(payload);
+    await enqueue();
     return payload;
   }
 
