@@ -90,8 +90,47 @@ export class MessageVerifier {
     return `${payload}${SEPARATOR}${this.#digestFor(payload)}`;
   }
 
+  /**
+   * Older secrets this verifier will still accept. Rails' `rotate`.
+   *
+   * What makes changing a secret possible at all. A cookie signed with the old
+   * one is still in a browser, and a deploy that only knows the new secret
+   * signs everybody out — so the new secret signs, and the old ones are tried
+   * when the new one does not match.
+   *
+   * They are tried in the order given, so the most recent goes first.
+   */
+  #rotations: MessageVerifier[] = [];
+
+  rotate(secret: string | Buffer): this {
+    this.#rotations.push(new MessageVerifier(secret));
+
+    return this;
+  }
+
+  /** Forgets the older secrets. For a test, and for the day one is retired. */
+  clearRotations(): this {
+    this.#rotations = [];
+
+    return this;
+  }
+
   /** Returns the value, or null when the message is missing or tampered with. */
   verified<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
+    const current = this.#verifiedWith(message, purpose);
+    if (current !== null) return current as T;
+
+    // Only after the current secret has failed, so the common path costs
+    // nothing and a rotation is not a way to make verification slower.
+    for (const older of this.#rotations) {
+      const value = older.verified<T>(message, purpose);
+      if (value !== null) return value;
+    }
+
+    return null;
+  }
+
+  #verifiedWith<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
     if (!message) return null;
 
     const parts = message.split(SEPARATOR);
