@@ -129,18 +129,15 @@ describe("replacing rather than adding", () => {
  */
 describe("leaving records out", () => {
   it("excludes one it was given", async () => {
-    const first = (await Post.all().first()) as PostRow;
+    const first = await Post.find(1);
 
     expect(await titles(Post.all().excluding(first))).toEqual(["B", "C", "D"]);
   });
 
   it("excludes several", async () => {
-    const [first, second] = await Post.all().toArray();
+    const [first, second] = await Post.find([1, 2]);
 
-    expect(await titles(Post.all().excluding(first as PostRow, second as PostRow))).toEqual([
-      "C",
-      "D",
-    ]);
+    expect(await titles(Post.all().excluding(first!, second!))).toEqual(["C", "D"]);
   });
 
   it("takes ids as well as records", async () => {
