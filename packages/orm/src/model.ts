@@ -21,7 +21,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { secureToken } from "@altair/support";
-import { camelize, pluralize, t, tableize, underscore } from "@altair/support";
+import { camelize, humanize, pluralize, t, tableize, underscore } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
@@ -1463,6 +1463,75 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       this.afterCommit(callback, { on: "update" });
     }
 
+    /**
+     * Columns that may be set once and never changed. Rails' `attr_readonly`.
+     *
+     * Enforced on update rather than refused: the value is simply not written,
+     * which is what Rails does. An audit column or a slug that something else
+     * already points at is the case — a rule the application holds even where
+     * a validation would not, because it applies to every write path.
+     */
+    static attrReadonly(...names: string[]): void {
+      if (!Object.hasOwn(this, "readonlyAttributes")) {
+        this.readonlyAttributes = [...this.readonlyAttributes];
+      }
+
+      this.readonlyAttributes.push(...names);
+    }
+
+    static readonlyAttributes: string[] = [];
+
+    /**
+     * Columns the model should pretend are not there. Rails' `ignored_columns`.
+     *
+     * What makes dropping a column safe: name it here, deploy, then drop it.
+     * Without that the running application selects a column the migration has
+     * just removed, and every query fails until the deploy catches up.
+     */
+    static ignoreColumns(...names: string[]): void {
+      if (!Object.hasOwn(this, "ignoredColumns")) this.ignoredColumns = [...this.ignoredColumns];
+
+      this.ignoredColumns.push(...names);
+      this.columnCache = undefined;
+      this.columnTypeCache = undefined;
+    }
+
+    static ignoredColumns: string[] = [];
+
+    /** The name a person sees. Rails' `model_name.human`. */
+    static humanName(): string {
+      return humanize(underscore(this.name));
+    }
+
+    /** Where this model's translations live. Rails' `i18n_scope`. */
+    static get i18nScope(): string {
+      return "activerecord";
+    }
+
+    /** The class at the top of an STI hierarchy, or this one. Rails' `base_class`. */
+    static get baseClass(): typeof BaseModel {
+      return this.stiRoot ?? this;
+    }
+
+    /** Adds to a column on a row that is not in hand. Rails' `increment_counter`. */
+    static async incrementCounter(column: string, id: unknown, by = 1): Promise<void> {
+      const connection = this.connection;
+      const columns = await this.columnNames();
+
+      if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+
+      const quoted = connection.quote(column);
+
+      await connection.execute(
+        `UPDATE ${connection.quote(this.table)} SET ${quoted} = COALESCE(${quoted}, 0) + ${connection.placeholder(0)} WHERE ${connection.quote(this.primaryKey)} = ${connection.placeholder(1)}`,
+        [by, id],
+      );
+    }
+
+    static async decrementCounter(column: string, id: unknown, by = 1): Promise<void> {
+      await this.incrementCounter(column, id, -by);
+    }
+
     /** The model class a delegated type name stands for. */
     static delegatedClassFor(name: string, type: string): ModelLike | undefined {
       return this.associations[name]?.types?.[type]?.();
@@ -2847,6 +2916,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = klass.connection;
       const changes = this.changedAttributes() as Record<string, unknown>;
 
+      // Set once and never changed. Dropped from the update rather than
+      // refused, which is what Rails does — a save that touched one is not an
+      // error, it simply does not write that column.
+      for (const column of klass.readonlyAttributes) delete changes[column];
+
       if ((await klass.columnNames()).includes("updated_at")) changes.updated_at = new Date();
 
       // A save that writes nothing still happened, and what it changed is
@@ -3007,7 +3081,16 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      */
     static async columnNames(): Promise<string[]> {
       if (this.columnCache) return this.columnCache;
-      this.columnCache = await this.readColumns();
+
+      const columns = await this.readColumns();
+
+      // What makes dropping a column safe: named here, the running
+      // application stops selecting it, and only then does the migration
+      // remove it. Without the gap the deploy and the migration race.
+      this.columnCache = this.ignoredColumns.length
+        ? columns.filter((column) => !this.ignoredColumns.includes(column))
+        : columns;
+
       return this.columnCache;
     }
 
@@ -3485,6 +3568,15 @@ export interface ModelClass<A extends object> {
     options?: AssociationOptions,
   ): void;
   delegatedClassFor(name: string, type: string): unknown;
+  attrReadonly(...names: string[]): void;
+  readonlyAttributes: string[];
+  ignoreColumns(...names: string[]): void;
+  ignoredColumns: string[];
+  humanName(): string;
+  readonly baseClass: unknown;
+  readonly i18nScope: string;
+  incrementCounter(column: string, id: unknown, by?: number): Promise<void>;
+  decrementCounter(column: string, id: unknown, by?: number): Promise<void>;
   afterCreateCommit(callback: unknown): void;
   afterUpdateCommit(callback: unknown): void;
   afterDestroyCommit(callback: unknown): void;

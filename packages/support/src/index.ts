@@ -19,3 +19,4 @@ export * from "./dates.js";
 export * from "./enumerable.js";
 export * from "./filter.js";
 export * from "./misc.js";
+export * from "./cache_multi.js";
