@@ -111,14 +111,19 @@ export function serializeCookie(record: CookieRecord): string {
 
   const parts = [`${record.name}=${encodeURIComponent(record.value)}`];
 
-  parts.push(`Path=${record.path ?? "/"}`);
-  if (record.domain) parts.push(`Domain=${record.domain}`);
+  // The application's defaults fill in what this cookie did not say. A
+  // `SameSite` set on eleven cookies and forgotten on the twelfth is a hole in
+  // one place, and the twelfth is always the one added in a hurry.
+  const applied = { ...defaults, ...stripUndefined(record) };
+
+  parts.push(`Path=${applied.path ?? "/"}`);
+  if (applied.domain) parts.push(`Domain=${applied.domain}`);
   if (record.maxAge !== undefined) parts.push(`Max-Age=${Math.floor(record.maxAge)}`);
   if (record.expires) parts.push(`Expires=${record.expires.toUTCString()}`);
-  if (record.secure) parts.push("Secure");
-  if (record.httpOnly !== false) parts.push("HttpOnly");
+  if (applied.secure) parts.push("Secure");
+  if (applied.httpOnly !== false) parts.push("HttpOnly");
 
-  const sameSite = record.sameSite ?? "lax";
+  const sameSite = applied.sameSite ?? "lax";
   parts.push(`SameSite=${sameSite.charAt(0).toUpperCase()}${sameSite.slice(1)}`);
 
   return parts.join("; ");
@@ -147,6 +152,66 @@ export class SecureJar {
   delete(name: string, options: CookieOptions = {}): void {
     this.jar.delete(name, options);
   }
+}
+
+/**
+ * How cookies are written across an application, ported from Rails'
+ * `config.action_dispatch.cookies_*` settings.
+ *
+ * Defaults rather than options on every call: a `SameSite` set on eleven
+ * cookies and forgotten on the twelfth is a CSRF hole in one place, and the
+ * twelfth is always the one somebody added in a hurry.
+ */
+export interface CookieDefaults {
+  sameSite?: "strict" | "lax" | "none";
+  secure?: boolean;
+  httpOnly?: boolean;
+  path?: string;
+  domain?: string;
+}
+
+let defaults: CookieDefaults = { sameSite: "lax", httpOnly: true, path: "/" };
+
+/** Rails' `cookies_same_site_protection` and the settings beside it. */
+export function configureCookies(options: CookieDefaults): void {
+  defaults = { ...defaults, ...options };
+}
+
+/** Only the keys a cookie actually set, so a default is not overwritten by undefined. */
+function stripUndefined<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, one]) => one !== undefined),
+  ) as Partial<T>;
+}
+
+export function cookieDefaults(): CookieDefaults {
+  return { ...defaults };
+}
+
+export function resetCookieDefaults(): void {
+  defaults = { sameSite: "lax", httpOnly: true, path: "/" };
+}
+
+/**
+ * Older secrets a signed or encrypted cookie will still be read with. Rails'
+ * `cookies_rotations`.
+ *
+ * The same reason the message verifier has them: a cookie signed with the old
+ * secret is still in a browser, and a deploy that only knows the new one signs
+ * everybody out at once.
+ */
+const rotations: string[] = [];
+
+export function rotateCookieSecret(secret: string): void {
+  if (!rotations.includes(secret)) rotations.push(secret);
+}
+
+export function cookieRotations(): readonly string[] {
+  return rotations;
+}
+
+export function clearCookieRotations(): void {
+  rotations.length = 0;
 }
 
 export class CookieJar {
