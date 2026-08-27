@@ -7,6 +7,7 @@
  * rather than dropping it.
  */
 
+import { deserializeArguments } from "./serializers.js";
 import { Job, type JobPayload, type QueueAdapter } from "./job.js";
 
 /**
@@ -69,7 +70,7 @@ export class InlineQueue implements QueueAdapter {
       performNow(...args: unknown[]): Promise<unknown>;
     };
 
-    await klass.performNow(...payload.arguments);
+    await klass.performNow(...deserializeArguments(payload.arguments));
   }
 
   /** Nothing is ever waiting: it ran on the way in. */
@@ -164,7 +165,7 @@ export async function runJob(payload: JobPayload, adapter: QueueAdapter): Promis
 
   try {
     await (klass as unknown as { performNow: (...args: unknown[]) => Promise<unknown> }).performNow(
-      ...payload.arguments,
+      ...deserializeArguments(payload.arguments),
     );
     return { status: "completed", payload };
   } catch (error) {

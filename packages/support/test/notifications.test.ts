@@ -7,7 +7,13 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Notifications, type Event } from "../src/notifications.js";
+import {
+  captureNotifications,
+  countNotifications,
+  notifications,
+  Notifications,
+  type Event,
+} from "../src/notifications.js";
 
 let bus: Notifications;
 
@@ -172,5 +178,69 @@ describe("publishing directly", () => {
 
     bus.publish("external", {});
     expect(events[0]!.duration).toBe(0);
+  });
+});
+
+/**
+ * Collecting events without the bookkeeping, ported from
+ * `activesupport/test/notifications/instrumenter_test.rb`.
+ *
+ * The subscribe-and-unsubscribe around every case is where a leaked subscriber
+ * comes from, and a leaked one reports events from every test after it.
+ */
+describe("capturing what a block emits", () => {
+  it("collects the matching events", async () => {
+    const [result, events] = await captureNotifications("thing.test", async () => {
+      await notifications.instrument("thing.test", { n: 1 }, async () => undefined);
+      await notifications.instrument("thing.test", { n: 2 }, async () => undefined);
+
+      return "done";
+    });
+
+    expect(result).toBe("done");
+    expect(events.map((event) => event.payload.n)).toEqual([1, 2]);
+  });
+
+  it("leaves other events alone", async () => {
+    const [, events] = await captureNotifications("wanted.test", async () => {
+      await notifications.instrument("unwanted.test", {}, async () => undefined);
+      await notifications.instrument("wanted.test", {}, async () => undefined);
+    });
+
+    expect(events).toHaveLength(1);
+  });
+
+  it("takes a pattern", async () => {
+    const [, events] = await captureNotifications(/\.test$/, async () => {
+      await notifications.instrument("a.test", {}, async () => undefined);
+      await notifications.instrument("b.other", {}, async () => undefined);
+    });
+
+    expect(events).toHaveLength(1);
+  });
+
+  it("counts them for a caller that only wants the number", async () => {
+    const count = await countNotifications("thing.test", async () => {
+      await notifications.instrument("thing.test", {}, async () => undefined);
+    });
+
+    expect(count).toBe(1);
+  });
+
+  // A block that throws still has to take its subscriber with it, or every
+  // test after this one sees events it never asked for.
+  it("stops listening even when the block throws", async () => {
+    await expect(
+      captureNotifications("thing.test", async () => {
+        throw new Error("nope");
+      }),
+    ).rejects.toThrow("nope");
+
+    const after = await countNotifications("thing.test", async () => {
+      await notifications.instrument("thing.test", {}, async () => undefined);
+    });
+
+    // One, not two: the subscriber from the throwing block is gone.
+    expect(after).toBe(1);
   });
 });
