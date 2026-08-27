@@ -91,6 +91,15 @@ export interface RelationSource<T> {
    */
   prepareConditions?: (conditions: Conditions) => Conditions;
   /**
+   * The column a name means, following an attribute alias if there is one.
+   *
+   * Only for a bare identifier. `order("email")` on a model that aliases
+   * `email` should sort by the aliased column rather than fail with "no such
+   * column", and an expression is left alone because rewriting one means
+   * parsing SQL.
+   */
+  resolveColumn?: (name: string) => string;
+  /**
    * How to reach an association's table from this one.
    *
    * Supplied by the model, because only it knows the associations. A relation
@@ -482,8 +491,21 @@ export class Relation<T> implements PromiseLike<T[]> {
     }
 
     const next = this.#clone();
-    next.#orders.push({ column, direction });
+    next.#orders.push({ column: this.#resolve(column), direction });
     return next;
+  }
+
+  /**
+   * A bare identifier through the model's aliases; anything else untouched.
+   *
+   * The guard is the point: `order("created_at DESC")` and `select("count(*)")`
+   * are expressions, and rewriting one would mean parsing SQL.
+   */
+  #resolve(column: string): string {
+    if (!this.#source.resolveColumn) return column;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) return column;
+
+    return this.#source.resolveColumn(column);
   }
 
   limit(count: number): Relation<T> {
@@ -1411,11 +1433,16 @@ export class Relation<T> implements PromiseLike<T[]> {
   async pluck(...columns: string[]): Promise<unknown[] | unknown[][]> {
     if (this.#none) return [];
 
-    const { sql, bindings } = this.select(...columns).toSql();
+    // Resolved once and reused for both the query and the read-back, or a
+    // plucked alias would select the right column and then look for the wrong
+    // key in the row.
+    const resolved = columns.map((column) => this.#resolve(column));
+
+    const { sql, bindings } = this.select(...resolved).toSql();
     const rows = await this.connection.query<Row>(sql, bindings);
 
-    if (columns.length === 1) return rows.map((row) => row[columns[0] as string]);
-    return rows.map((row) => columns.map((column) => row[column]));
+    if (resolved.length === 1) return rows.map((row) => row[resolved[0] as string]);
+    return rows.map((row) => resolved.map((column) => row[column]));
   }
 
   /**

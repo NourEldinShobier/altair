@@ -24,6 +24,7 @@ import { secureToken } from "@altair/support";
 import {
   camelize,
   humanize,
+  isBlank,
   pluralize,
   singularize,
   t,
@@ -357,6 +358,12 @@ export interface BaseModelInstance<A> {
   decrement(column: keyof A & string, by?: number): Promise<unknown>;
   toggle(column: keyof A & string): Promise<unknown>;
   hasSavedChange(attribute?: keyof A & string): boolean;
+  previousChanges(): Record<string, [unknown, unknown]>;
+  attributePreviouslyChanged(attribute: keyof A & string): boolean;
+  attributePreviouslyWas(attribute: keyof A & string): unknown;
+  attributeChanged(attribute: keyof A & string): boolean;
+  queryAttribute(attribute: keyof A & string): boolean;
+  clearChangesInformation(): void;
   attributeBeforeLastSave(attribute: keyof A & string): unknown;
   changes(): Record<string, [unknown, unknown]>;
   changed(): (keyof A & string)[];
@@ -854,8 +861,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const columns: Record<string, unknown> = {};
 
       for (const [key, value] of Object.entries(attributes)) {
+        // Through the alias here too: the constructor writes columns directly
+        // rather than through the proxy, so an alias resolved only there would
+        // work for `record.email = x` and not for `new User({ email: x })`.
         if (hasSetter(this, key)) declared[key] = value;
-        else columns[key] = value;
+        else columns[klass.resolveAttributeName(key)] = value;
       }
 
       this[ATTRIBUTES] = columns;
@@ -907,6 +917,60 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       }
 
       return defaultConnection();
+    }
+
+    /** Second names for columns, by alias. Rails' `attribute_aliases`. */
+    static attributeAliases: Record<string, string> = {};
+
+    /**
+     * A second name for a column. Rails' `alias_attribute`.
+     *
+     *     class User extends Model<UserRow>("users") {
+     *       static { this.aliasAttribute("email", "email_address_txt") }
+     *     }
+     *
+     * For the schema you did not choose and cannot change — a legacy table, a
+     * column named by an import, a name a vendor owns. The alternative is the
+     * bad name spreading through every view and controller that touches it,
+     * which is how a rename stops being possible.
+     *
+     * Reading, writing and `where` all follow the alias. Ordering, `pluck` and
+     * raw SQL do not: those take a column name straight through to the
+     * database, and rewriting strings that might be expressions is how a query
+     * builder starts guessing.
+     */
+    static aliasAttribute(alias: string, column: string): void {
+      // Copy on write, so declaring on a subclass leaves the parent alone —
+      // the same rule the callbacks and associations follow.
+      if (!Object.hasOwn(this, "attributeAliases")) {
+        this.attributeAliases = { ...this.attributeAliases };
+      }
+
+      if (alias === column) {
+        throw new Error(
+          `"${alias}" cannot be an alias for itself: reading it would look itself up forever.`,
+        );
+      }
+
+      this.attributeAliases[alias] = column;
+    }
+
+    /** The column a name means here, following an alias if there is one. */
+    static resolveAttributeName(name: string): string {
+      return this.attributeAliases[name] ?? name;
+    }
+
+    /** Conditions with any aliased key replaced by the column it stands for. */
+    static aliasConditions(conditions: Conditions): Conditions {
+      if (Object.keys(this.attributeAliases).length === 0) return conditions;
+      if (typeof conditions !== "object" || conditions === null) return conditions;
+
+      return Object.fromEntries(
+        Object.entries(conditions as Record<string, unknown>).map(([key, value]) => [
+          this.resolveAttributeName(key),
+          value,
+        ]),
+      ) as Conditions;
     }
 
     static all<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
@@ -992,8 +1056,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         },
         prepareConditions: (conditions) =>
           this.encryptConditions(
-            this.enumConditions(normalizeConditions(this.normalizers, conditions)),
+            this.enumConditions(
+              normalizeConditions(this.normalizers, this.aliasConditions(conditions)),
+            ),
           ),
+        resolveColumn: (name) => this.resolveAttributeName(name),
         joinFor: (name) => this.joinFor(name),
         preload: async (records, names) => {
           for (const name of names) {
@@ -2474,6 +2541,59 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return this[SAVED_CHANGES]?.[attribute]?.[0];
     }
 
+    /**
+     * Rails' `previous_changes`: what the last save changed.
+     *
+     * The same answer as `savedChanges`, under the name Rails also gives it.
+     * Both spellings are in the wild and in the guides.
+     */
+    previousChanges(): Record<string, [unknown, unknown]> {
+      return this.savedChanges();
+    }
+
+    /** Rails' `attribute_previously_changed?`. */
+    attributePreviouslyChanged(attribute: keyof A & string): boolean {
+      return this.hasSavedChange(attribute);
+    }
+
+    /** Rails' `attribute_previously_was`. */
+    attributePreviouslyWas(attribute: keyof A & string): unknown {
+      return this.attributeBeforeLastSave(attribute);
+    }
+
+    /** Whether this attribute differs from the last load or save. */
+    attributeChanged(attribute: keyof A & string): boolean {
+      return attribute in this.changedAttributes();
+    }
+
+    /**
+     * Rails' `title?`: whether the attribute holds something worth having.
+     *
+     * Not `!= null`. Rails treats `0`, `""` and `false` as absent here, which
+     * is what makes `if user.name?` read the way it does — and is exactly the
+     * behaviour a hand-written truthiness check gets wrong for `0`.
+     */
+    queryAttribute(attribute: keyof A & string): boolean {
+      const value =
+        this[ATTRIBUTES][(this.constructor as typeof BaseModel).resolveAttributeName(attribute)];
+
+      if (typeof value === "number") return value !== 0;
+
+      return !isBlank(value);
+    }
+
+    /**
+     * Forgets every recorded change. Rails' `clear_changes_information`.
+     *
+     * For a record synced by hand — written by a raw statement, reloaded from
+     * elsewhere — where the tracked "before" is no longer what the row holds
+     * and a later save would write stale values back over it.
+     */
+    clearChangesInformation(): void {
+      this[ORIGINAL] = { ...this[ATTRIBUTES] };
+      this[SAVED_CHANGES] = undefined;
+    }
+
     /** Whether the model has this column at all. Rails' `has_attribute?`. */
     hasAttribute(name: string): boolean {
       return name in this[ATTRIBUTES];
@@ -3577,24 +3697,39 @@ function isInternal(property: string): boolean {
   return property.startsWith(PRELOAD_PREFIX);
 }
 
+/**
+ * The column a name means on this record, following an alias if there is one.
+ *
+ * Read from the constructor rather than closed over, so a subclass that
+ * declares its own alias is honoured by the record it built.
+ */
+function columnFor(target: object, property: string): string {
+  const aliases = (target.constructor as { attributeAliases?: Record<string, string> })
+    .attributeAliases;
+
+  return aliases?.[property] ?? property;
+}
+
 const PROXY_HANDLER: ProxyHandler<{ [ATTRIBUTES]: Record<string, unknown> }> = {
   get(target, property, receiver) {
     if (typeof property === "string" && !isInternal(property) && !Reflect.has(target, property)) {
-      return target[ATTRIBUTES][property];
+      return target[ATTRIBUTES][columnFor(target, property)];
     }
     return Reflect.get(target, property, receiver) as unknown;
   },
 
   set(target, property, value, receiver) {
     if (typeof property === "string" && !isInternal(property) && !Reflect.has(target, property)) {
-      target[ATTRIBUTES][property] = value;
+      target[ATTRIBUTES][columnFor(target, property)] = value;
       return true;
     }
     return Reflect.set(target, property, value, receiver);
   },
 
   has(target, property) {
-    if (typeof property === "string" && property in target[ATTRIBUTES]) return true;
+    if (typeof property === "string" && columnFor(target, property) in target[ATTRIBUTES]) {
+      return true;
+    }
     return Reflect.has(target, property);
   },
 };
@@ -3772,6 +3907,10 @@ export interface ModelClass<A extends object> {
     through: string,
     options?: AssociationOptions & { source?: string },
   ): void;
+  attributeAliases: Record<string, string>;
+  aliasAttribute(alias: string, column: string): void;
+  resolveAttributeName(name: string): string;
+  aliasConditions(conditions: Conditions): Conditions;
   hasAndBelongsToMany<M extends AnyModel>(
     this: M,
     name: AssociationName<M>,
