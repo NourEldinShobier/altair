@@ -69,10 +69,23 @@ export class StreamRegistry implements Broadcaster {
   readonly published: { topic: string; payload: string }[] = [];
   readonly #streams = new Map<string, Set<CableSocket & { data: SocketData }>>();
 
+  /**
+   * Told when a stream gains its first local socket, or loses its last.
+   *
+   * What a cross-process adapter needs: a process has to subscribe because
+   * somebody here is listening, not because somebody here is broadcasting. A
+   * worker that only receives would otherwise never subscribe at all.
+   */
+  onInterest?: (stream: string, interested: boolean) => void;
+
   add(stream: string, socket: CableSocket & { data: SocketData }): void {
     const sockets = this.#streams.get(stream) ?? new Set();
+    const first = sockets.size === 0;
+
     sockets.add(socket);
     this.#streams.set(stream, sockets);
+
+    if (first) this.onInterest?.(stream, true);
   }
 
   remove(stream: string, socket: CableSocket & { data: SocketData }): void {
@@ -80,7 +93,11 @@ export class StreamRegistry implements Broadcaster {
     if (!sockets) return;
 
     sockets.delete(socket);
-    if (sockets.size === 0) this.#streams.delete(stream);
+
+    if (sockets.size === 0) {
+      this.#streams.delete(stream);
+      this.onInterest?.(stream, false);
+    }
   }
 
   /** Drops a socket from every stream it was on. */
@@ -150,6 +167,17 @@ export class Cable {
 
   get broadcaster(): Broadcaster {
     return this.#broadcaster;
+  }
+
+  /**
+   * Sends broadcasts somewhere other than this process.
+   *
+   * The local registry stays as it is and keeps delivering to the sockets held
+   * here; what changes is where a broadcast goes first. `useRedis` puts it on
+   * Redis, and every process — including this one — hears it back.
+   */
+  useBroadcaster(broadcaster: Broadcaster): void {
+    this.#broadcaster = broadcaster;
   }
 
   /**
