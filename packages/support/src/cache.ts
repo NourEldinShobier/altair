@@ -353,12 +353,21 @@ export class RedisStore implements CacheStore {
 export class Cache {
   constructor(readonly store: CacheStore = new MemoryStore()) {}
 
+  /**
+   * Boxed on the way in and unboxed on the way out, the same as `fetch`.
+   *
+   * They have to agree. Boxing in one and not the other means a value written
+   * with `write` and read with `fetch` comes back `undefined` — a hit that
+   * hands over nothing, which reads as a cold cache that never warms.
+   */
   async read<T = unknown>(key: unknown): Promise<T | null> {
-    return await this.store.read<T>(expandKey(key));
+    const hit = await this.store.read<{ value: T }>(expandKey(key));
+
+    return hit === null ? null : hit.value;
   }
 
   async write(key: unknown, value: unknown, options?: CacheEntryOptions): Promise<void> {
-    await this.store.write(expandKey(key), value, options);
+    await this.store.write(expandKey(key), { value }, options);
   }
 
   async delete(key: unknown): Promise<boolean> {

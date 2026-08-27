@@ -54,11 +54,146 @@ export interface InboundResult {
 /** A route's pattern: an exact address, or something matching one. */
 export type MailboxPattern = string | RegExp | ((address: string) => boolean);
 
+/** Something to run around handling a message. */
+export type ProcessingHook = (mailbox: Mailbox) => void | Promise<void>;
+export type AroundProcessingHook = (mailbox: Mailbox, body: () => Promise<void>) => Promise<void>;
+
+interface Hooks {
+  before: ProcessingHook[];
+  after: ProcessingHook[];
+  around: AroundProcessingHook[];
+}
+
+/**
+ * Keyed by the class rather than stored on it, so a subclass declaring a hook
+ * does not push it onto the base class's array and run it for every sibling.
+ */
+const HOOKS = new WeakMap<object, Hooks>();
+
+function ownHooks(klass: object): Hooks {
+  let own = HOOKS.get(klass);
+
+  if (!own) {
+    own = { before: [], after: [], around: [] };
+    HOOKS.set(klass, own);
+  }
+
+  return own;
+}
+
+function hookChain<K extends keyof Hooks>(klass: object, kind: K): Hooks[K] {
+  const chain: Hooks[K] = [] as Hooks[K];
+
+  // Walked upwards and unshifted, so a base class's hook runs outside a
+  // subclass's — an application-wide `beforeProcessing` that sets the current
+  // account has to be in place before the mailbox that reads it.
+  for (let at: object | null = klass; at; at = Object.getPrototypeOf(at)) {
+    const own = HOOKS.get(at);
+    if (own) chain.unshift(...(own[kind] as never[]));
+  }
+
+  return chain;
+}
+
+/** Thrown by `bounceNowWith` to stop processing where it stands. */
+class Bounced extends Error {
+  constructor(readonly fields: MessageFields) {
+    super("The mailbox bounced this message.");
+    this.name = "Bounced";
+  }
+}
+
 export abstract class Mailbox {
   constructor(readonly message: InboundMessage) {}
 
   /** Handles the message. Throwing marks it failed, so the provider retries. */
   abstract process(): Promise<void>;
+
+  /** Runs before `process`. Rails' `before_processing`. */
+  static beforeProcessing(hook: ProcessingHook): void {
+    ownHooks(this).before.push(hook);
+  }
+
+  /** Runs after `process` returns. Skipped when the message bounced or threw. */
+  static afterProcessing(hook: ProcessingHook): void {
+    ownHooks(this).after.push(hook);
+  }
+
+  /**
+   * Wraps `process`. Rails' `around_processing`.
+   *
+   * For the things that have to happen on both sides of a failure — a
+   * transaction, a timer, a tag on the log lines.
+   */
+  static aroundProcessing(hook: AroundProcessingHook): void {
+    ownHooks(this).around.push(hook);
+  }
+
+  #outcome: InboundStatus = "pending";
+  #bounce: MessageFields | undefined;
+
+  /**
+   * Refuses the message and stops. Rails' `bounce_now_with`.
+   *
+   * The reply is built and handed back rather than sent, for the same reason
+   * the router does not send one: whether a bounce actually goes out is the
+   * application's decision, and a mailbox that sent mail as a side effect of
+   * being called would be untestable.
+   */
+  bounceNowWith(fields: MessageFields): never {
+    this.#bounce = fields;
+    this.#outcome = "bounced";
+
+    throw new Bounced(fields);
+  }
+
+  /** Whether this message is no longer pending. Rails' `finished_processing?`. */
+  finishedProcessing(): boolean {
+    return this.#outcome !== "pending";
+  }
+
+  /**
+   * Handles the message with the hooks around it. Rails' `perform_processing`.
+   *
+   * This is what the router calls; `process` is what a mailbox writes. Calling
+   * `process` directly skips every hook, which is the sort of thing that works
+   * in a unit test and drops the account scope in production.
+   */
+  async performProcessing(): Promise<InboundResult> {
+    const klass = this.constructor as typeof Mailbox;
+
+    const body = async () => {
+      for (const hook of hookChain(klass, "before")) await hook(this);
+
+      await this.process();
+      this.#outcome = "delivered";
+
+      for (const hook of hookChain(klass, "after")) await hook(this);
+    };
+
+    // Folded from the inside out, so the first declared hook is the outermost.
+    const wrapped = hookChain(klass, "around").reduceRight<() => Promise<void>>(
+      (inner, hook) => () => hook(this, inner),
+      body,
+    );
+
+    try {
+      await wrapped();
+    } catch (error) {
+      if (error instanceof Bounced) {
+        return {
+          status: "bounced",
+          mailbox: klass.name,
+          reason: "the mailbox bounced it",
+          bounce: this.#bounce,
+        };
+      }
+
+      throw error;
+    }
+
+    return { status: "delivered", mailbox: klass.name };
+  }
 
   /**
    * Whether this mailbox will take the message.
@@ -186,8 +321,8 @@ export class MailboxRouter {
     }
 
     try {
-      await mailbox.process();
-      const result: InboundResult = { status: "delivered", mailbox: claimed.mailbox.name };
+      // `performProcessing` rather than `process`: the hooks are the point.
+      const result = await mailbox.performProcessing();
       await this.#log.record(message.messageId, result);
       return result;
     } catch (error) {

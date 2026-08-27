@@ -179,3 +179,101 @@ describe("counting on a row not in hand", () => {
     await expect(Post.incrementCounter("nope", 1)).rejects.toThrow(/Invalid column name/);
   });
 });
+
+/**
+ * A cache key in two halves, ported from
+ * `activerecord/test/cases/cache_key_test.rb`.
+ *
+ * Kept apart so a store that understands versions holds one entry per record
+ * rather than one per version — the difference between a cache that reuses its
+ * space and one that fills with yesterday's copies of the same page.
+ */
+describe("a cache key and its version", () => {
+  // Its own table: the version is read from `updated_at`, and the table the
+  // rest of this file uses has no timestamps.
+  class Article extends Model<{ id: number; title: string }>("articles") {}
+
+  beforeEach(async () => {
+    await new SchemaStatements(connection).createTable("articles", (t) => {
+      t.string("title");
+      t.timestamps();
+    });
+
+    Article.columnCache = undefined;
+    Article.columnTypeCache = undefined;
+  });
+
+  it("has a version that moves when the record does", async () => {
+    const article = await Article.create({ title: "A" });
+    const before = article.cacheVersion();
+
+    expect(before).toBeDefined();
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    article.title = "B";
+    await article.save();
+
+    expect(article.cacheVersion()).not.toBe(before);
+  });
+
+  it("joins them for a store that wants one string", async () => {
+    const article = await Article.create({ title: "A" });
+
+    expect(article.cacheKeyWithVersion()).toBe(`articles/${article.id}-${article.cacheVersion()}`);
+  });
+
+  it("has no version before there is a timestamp", () => {
+    const article = new Article({ title: "A" });
+
+    expect(article.cacheVersion()).toBeUndefined();
+    expect(article.cacheKeyWithVersion()).toBe("articles/new");
+  });
+});
+
+/**
+ * For a bulk import, where every row touching its parent means one update per
+ * row on the same handful of parents — both slow and a deadlock waiting to
+ * happen.
+ */
+describe("turning touch off for a block", () => {
+  it("puts it back afterwards, even when the block throws", async () => {
+    const Post = modelWith(() => undefined);
+
+    await Post.noTouching(async () => {
+      expect(Post.touchingDisabled).toBe(true);
+    });
+
+    expect(Post.touchingDisabled).toBe(false);
+
+    await Post.noTouching(async () => {
+      throw new Error("nope");
+    }).catch(() => undefined);
+
+    expect(Post.touchingDisabled).toBe(false);
+  });
+
+  it("hands back what the block returned", async () => {
+    expect(await modelWith(() => undefined).noTouching(async () => "done")).toBe("done");
+  });
+});
+
+describe("a token no two records share", () => {
+  it("is different every time", () => {
+    const Post = modelWith(() => undefined);
+    const tokens = new Set(Array.from({ length: 50 }, () => Post.generateUniqueSecureToken()));
+
+    expect(tokens.size).toBe(50);
+  });
+
+  it("takes a length in bytes of entropy", () => {
+    const Post = modelWith(() => undefined);
+
+    expect(Post.generateUniqueSecureToken(8).length).toBeLessThan(
+      Post.generateUniqueSecureToken(32).length,
+    );
+  });
+
+  it("names the column an STI hierarchy reads", () => {
+    expect(modelWith(() => undefined).inheritanceColumnName).toBe("type");
+  });
+});

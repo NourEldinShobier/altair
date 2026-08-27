@@ -34,7 +34,7 @@
  * answer: put the per-person part outside the block.
  */
 
-import { Cache, i18n, type CacheEntryOptions } from "@altair/support";
+import { Cache, deleteMatched, i18n, type CacheEntryOptions } from "@altair/support";
 import { RawHtml, renderToString, type Node } from "./render.js";
 
 let configured: Cache | undefined;
@@ -53,6 +53,58 @@ export function fragmentCache(): Cache {
 
 export function configureFragmentCache(cache: Cache | undefined): void {
   configured = cache;
+}
+
+/**
+ * The key a fragment is stored under. Rails' `fragment_cache_key`.
+ *
+ * Public because everything below needs the same one: an `expireFragment` that
+ * builds the key a different way from `Cached` deletes nothing and reports
+ * success, which is the worst kind of cache bug — it looks like it worked.
+ */
+export function fragmentCacheKey(on: unknown): unknown[] {
+  return ["views", i18n.locale, on];
+}
+
+/** A fragment already rendered, or null. Rails' `read_fragment`. */
+export async function readFragment(on: unknown): Promise<string | null> {
+  return await fragmentCache().read<string>(fragmentCacheKey(on));
+}
+
+/**
+ * Stores a fragment directly. Rails' `write_fragment`.
+ *
+ * For the rare case of warming a cache — rendering the expensive fragments
+ * after a deploy rather than making the first visitor pay for them.
+ */
+export async function writeFragment(
+  on: unknown,
+  html: string,
+  options: CacheEntryOptions = {},
+): Promise<void> {
+  await fragmentCache().write(fragmentCacheKey(on), html, options);
+}
+
+/** Whether a fragment is already there. Rails' `exist_fragment?`. */
+export async function existFragment(on: unknown): Promise<boolean> {
+  return await fragmentCache().exists(fragmentCacheKey(on));
+}
+
+/**
+ * Throws a fragment away. Rails' `expire_fragment`.
+ *
+ * A key expires by becoming unreachable most of the time — that is what the
+ * record's `cacheKey` is for. This is for the fragments whose key does not
+ * move: a sidebar keyed on nothing in particular, a footer with a count in it.
+ *
+ * A `RegExp` sweeps several, and only against a store that can list its keys.
+ */
+export async function expireFragment(on: unknown | RegExp): Promise<boolean | number> {
+  const cache = fragmentCache();
+
+  if (on instanceof RegExp) return await deleteMatched(cache.store, on);
+
+  return await cache.delete(fragmentCacheKey(on));
 }
 
 export interface CachedProps extends CacheEntryOptions {
@@ -90,7 +142,7 @@ export async function Cached(props: CachedProps): Promise<Node> {
   // wrong language. Rails leaves this to the application and it is a
   // well-worn way to lose an afternoon; the framework ships i18n, so the
   // framework can pay the one extra path segment.
-  const html = await cache.fetch(["views", i18n.locale, on], options, async () => {
+  const html = await cache.fetch(fragmentCacheKey(on), options, async () => {
     return await renderToString(children ?? null);
   });
 

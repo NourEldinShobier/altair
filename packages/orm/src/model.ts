@@ -368,6 +368,8 @@ export interface BaseModelInstance<A> {
   toJSON(): A;
   toParam(): string;
   cacheKey(): string;
+  cacheVersion(): string | undefined;
+  cacheKeyWithVersion(): string;
   /** Signs a token for one purpose. Rails' `generate_token_for`. */
   generateTokenFor(purpose: string): string;
   touch(...columns: string[]): Promise<void>;
@@ -1051,6 +1053,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const columns = typeof option === "string" ? [option] : [];
 
       const run = async function (this: BaseModel) {
+        // Checked here rather than only recorded, so `noTouching` actually
+        // stops the touch — a flag nothing consults is the shape this
+        // codebase has spent a day removing.
+        if ((this.constructor as typeof BaseModel).touchingDisabled) return;
+
         await touchParent(this, name, columns);
       };
 
@@ -1530,6 +1537,43 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     static async decrementCounter(column: string, id: unknown, by = 1): Promise<void> {
       await this.incrementCounter(column, id, -by);
+    }
+
+    /**
+     * Runs a block with `touch` turned off. Rails' `no_touching`.
+     *
+     * For a bulk import, where every row touching its parent means one update
+     * per row on the same handful of parents — which is both slow and a
+     * deadlock waiting to happen.
+     */
+    static async noTouching<T>(body: () => T | Promise<T>): Promise<T> {
+      const before = this.touchingDisabled;
+      this.touchingDisabled = true;
+
+      try {
+        return await body();
+      } finally {
+        // In a finally, or an import that throws leaves touching off for the
+        // rest of the process and every cache key stops moving.
+        this.touchingDisabled = before;
+      }
+    }
+
+    static touchingDisabled = false;
+
+    /** The column an STI hierarchy reads its type from. */
+    static get inheritanceColumnName(): string {
+      return this.inheritanceColumn;
+    }
+
+    /**
+     * A token no two records share. Rails' `generate_unique_secure_token`.
+     *
+     * The length is bytes of entropy rather than characters of output, because
+     * the question a token has to answer is how hard it is to guess.
+     */
+    static generateUniqueSecureToken(length = 24): string {
+      return secureToken(length);
     }
 
     /** The model class a delegated type name stands for. */
@@ -2109,6 +2153,33 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         this,
         this[ATTRIBUTES][klass.primaryKey],
       );
+    }
+
+    /**
+     * The part of a cache key that changes when the record does. Rails'
+     * `cache_version`.
+     *
+     * Kept apart from the key so a store that understands versions can hold
+     * one entry per record rather than one per version — the difference
+     * between a cache that reuses its space and one that fills up with
+     * yesterday's copies of the same page.
+     */
+    cacheVersion(): string | undefined {
+      const stamp = this[ATTRIBUTES].updated_at;
+      if (stamp === undefined || stamp === null) return undefined;
+
+      const at = stamp instanceof Date ? stamp : new Date(String(stamp));
+
+      return String(at.getTime());
+    }
+
+    /** Both halves together, which is what a plain store needs. */
+    cacheKeyWithVersion(): string {
+      const version = this.cacheVersion();
+      const klass = this.constructor as typeof BaseModel;
+      const id = String(this[ATTRIBUTES][klass.primaryKey] ?? "new");
+
+      return version ? `${klass.table}/${id}-${version}` : `${klass.table}/${id}`;
     }
 
     cacheKey(): string {
@@ -3568,6 +3639,10 @@ export interface ModelClass<A extends object> {
     options?: AssociationOptions,
   ): void;
   delegatedClassFor(name: string, type: string): unknown;
+  noTouching<T>(body: () => T | Promise<T>): Promise<T>;
+  touchingDisabled: boolean;
+  readonly inheritanceColumnName: string;
+  generateUniqueSecureToken(length?: number): string;
   attrReadonly(...names: string[]): void;
   readonlyAttributes: string[];
   ignoreColumns(...names: string[]): void;
