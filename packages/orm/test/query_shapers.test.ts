@@ -91,10 +91,9 @@ describe("inverting a where", () => {
 
 describe("adding methods to a relation", () => {
   it("puts them on this relation and what chains off it", async () => {
-    const posts = Post.all().extending({
-      drafts(this: ReturnType<typeof Post.all>) {
-        return this.where({ state: "draft" });
-      },
+    const base = Post.all();
+    const posts = base.extending({
+      drafts: () => base.where({ state: "draft" }),
     });
 
     expect(await titles(posts.drafts())).toEqual(["A", "C"]);
