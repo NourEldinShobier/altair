@@ -10,6 +10,8 @@
 import { Model } from "@altair/orm";
 import { createBlob, StorageBlob, type UploadedFile } from "./blob.js";
 import type { UrlOptions } from "./service.js";
+import { declareVariants } from "./named_variants.js";
+import type { Transformations } from "./variant.js";
 
 export interface AttachmentRow {
   id: number;
@@ -218,6 +220,16 @@ export interface AttachedOptions {
    * something outside the application owns.
    */
   dependent?: "purge" | "purgeLater" | false;
+  /**
+   * Transformations under a name. Rails' `variant` declarations.
+   *
+   *     hasOneAttached(this, "avatar", { variants: { thumb: { resize: [100, 100] } } })
+   *
+   * The decision lives in the model rather than at each call site, which is
+   * what stops eleven pages each resizing slightly differently and the twelfth
+   * being missed the day the design changes.
+   */
+  variants?: Record<string, Transformations>;
 }
 
 /** The name an attachment is declared under has to be a declared property. */
@@ -229,6 +241,11 @@ function defineAttached<M extends ModelClass>(
   build: (record: AttachedRecord, name: string) => Attached,
   options: AttachedOptions = {},
 ): void {
+  // Recorded here rather than only accepted, so `variant("thumb")` resolves.
+  // A declaration nothing consults is the shape this codebase has spent a day
+  // removing.
+  if (options.variants) declareVariants(model.name, name, options.variants);
+
   // A getter on the prototype rather than a field: a field would be an own
   // property on every instance, and the Proxy a model is wrapped in resolves
   // attributes only for names the object does not already have.
