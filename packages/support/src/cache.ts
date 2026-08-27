@@ -86,6 +86,17 @@ function isExpired(entry: Entry): boolean {
 export class MemoryStore implements CacheStore {
   readonly #entries = new Map<string, Entry>();
 
+  /**
+   * Every key it holds, for `deleteMatched`.
+   *
+   * Only a store that can list its keys can delete by pattern, and this one
+   * can. A Redis cannot without scanning, which is why the pattern delete
+   * refuses rather than pretending.
+   */
+  async keys(): Promise<string[]> {
+    return [...this.#entries.keys()];
+  }
+
   constructor(private readonly maxEntries = 10_000) {}
 
   async read<T = unknown>(key: string): Promise<T | null> {
