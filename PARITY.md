@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |       |
 | --------- | --------- | --------- | ----- |
-| **Total** | **3,928** | 26,775    | 14.7% |
+| **Total** | **3,948** | 26,775    | 14.7% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -23,13 +23,13 @@ one that needs no server.
 
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
-| `@altair/support`    | 981   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
+| `@altair/support`    | 989   | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
 | `@altair/orm`        | 1085  | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 499   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 182   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 97    | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 67    | Action Cable, protocol-compatible with Rails' client                       |
-| `@altair/storage`    | 179   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
+| `@altair/storage`    | 191   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
 | `@altair/view`       | 304   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 132   | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 100   | Transactional tests, fixtures, factories, test databases                   |
