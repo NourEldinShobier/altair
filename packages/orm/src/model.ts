@@ -21,7 +21,15 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { secureToken } from "@altair/support";
-import { camelize, humanize, pluralize, t, tableize, underscore } from "@altair/support";
+import {
+  camelize,
+  humanize,
+  pluralize,
+  singularize,
+  t,
+  tableize,
+  underscore,
+} from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
@@ -1165,6 +1173,156 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         through,
         ...options,
       });
+    }
+
+    /**
+     * Rails' `has_and_belongs_to_many :tags`.
+     *
+     *     Post.hasAndBelongsToMany("tags", () => Tag)
+     *
+     *     await post.tags();            // Tag[]
+     *     await post.tagIds();          // the ids, for a form
+     *     await post.setTagIds([1, 3]); // rewrites the join rows
+     *
+     * Two tables joined by a third that has no model of its own — the shape
+     * for a plain many-to-many with nothing to say about the pairing itself.
+     * The moment the pairing has something to say (when it was made, by whom,
+     * whether it is approved) it wants a model, and this is the wrong tool:
+     * reach for `hasManyThrough` and a real join model instead.
+     *
+     * Built on `hasManyThrough` over a join model made here, which is what
+     * Rails does too. Reads, preloading and `includes` therefore behave
+     * exactly as they do for any other through association, because they are
+     * the same code.
+     */
+    static hasAndBelongsToMany(
+      name: string,
+      target: () => unknown,
+      options: {
+        /** Defaults to both table names sorted and joined, as Rails does. */
+        joinTable?: string;
+        /** This model's column in the join table. Defaults to `<singular>_id`. */
+        foreignKey?: string;
+        /** The target's column in the join table. Defaults to `<singular>_id`. */
+        associationForeignKey?: string;
+      } = {},
+    ): void {
+      const singular = singularize(name);
+      const joins = `${name}$joins`;
+
+      // Everything about the join is resolved on first use rather than now:
+      // `target()` is a thunk precisely because the two models usually import
+      // each other, and calling it at declaration time gets `undefined` for
+      // whichever file loaded second.
+      interface Join {
+        model: ModelClass<Record<string, unknown>>;
+        table: string;
+        ownerKey: string;
+        targetKey: string;
+      }
+
+      let resolved: Join | undefined;
+
+      const join = (): Join => {
+        if (resolved) return resolved;
+
+        const other = target() as typeof BaseModel;
+        const table = options.joinTable ?? [this.table, other.table].sort().join("_");
+        const ownerKey = options.foreignKey ?? defaultForeignKey(this.name);
+        const targetKey = options.associationForeignKey ?? defaultForeignKey(other.name);
+
+        // The owner's column stands in for a primary key. A HABTM join table
+        // has none in Rails, and asking a model to read back an `id` that the
+        // table does not have fails on the first insert.
+        const model = Model<Record<string, unknown>>(table, { primaryKey: ownerKey });
+        model.belongsTo(singular, target, { foreignKey: targetKey });
+
+        return (resolved = { model, table, ownerKey, targetKey });
+      };
+
+      this.hasMany(joins, () => join().model, { foreignKey: options.foreignKey });
+      this.hasManyThrough(name, joins, { source: singular });
+
+      /** Rails' `collection_singular_ids`. What a form needs, without the rows. */
+      Object.defineProperty(this.prototype, `${singular}Ids`, {
+        configurable: true,
+        writable: true,
+        value: async function ids(this: InstanceLike): Promise<unknown[]> {
+          const { table, ownerKey, targetKey } = join();
+          const owner = this.constructor as typeof BaseModel;
+          const connection = owner.connection;
+
+          const rows = await connection.query<Record<string, unknown>>(
+            `SELECT ${connection.quote(targetKey)} FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(1)}`,
+            [this[owner.primaryKey]],
+          );
+
+          return rows.map((row) => row[targetKey]);
+        },
+      });
+
+      /**
+       * Rails' `collection_singular_ids=`.
+       *
+       * A diff rather than delete-then-insert: rewriting every row would churn
+       * the table on a form submission that changed nothing, and on a database
+       * with a foreign key onto the join row it would break anything pointing
+       * at it.
+       */
+      Object.defineProperty(
+        this.prototype,
+        `set${name.charAt(0).toUpperCase()}${name.slice(1, -1)}Ids`,
+        {
+          configurable: true,
+          writable: true,
+          value: async function setIds(this: InstanceLike, ids: readonly unknown[]): Promise<void> {
+            const { table, ownerKey, targetKey } = join();
+            const owner = this.constructor as typeof BaseModel;
+            const connection = owner.connection;
+            const id = this[owner.primaryKey];
+
+            if (id === undefined || id === null) {
+              throw new Error(
+                `${owner.name} must be saved before its ${name} can be set: a join row needs an id to point at.`,
+              );
+            }
+
+            const current = new Set(
+              (
+                await connection.query<Record<string, unknown>>(
+                  `SELECT ${connection.quote(targetKey)} FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(1)}`,
+                  [id],
+                )
+              ).map((row) => row[targetKey]),
+            );
+
+            const wanted = new Set(ids);
+
+            for (const gone of current) {
+              if (wanted.has(gone)) continue;
+
+              await connection.execute(
+                `DELETE FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(1)} AND ${connection.quote(targetKey)} = ${connection.placeholder(2)}`,
+                [id, gone],
+              );
+            }
+
+            for (const added of wanted) {
+              if (current.has(added)) continue;
+
+              await connection.execute(
+                `INSERT INTO ${connection.quote(table)} (${connection.quote(ownerKey)}, ${connection.quote(targetKey)}) VALUES (${connection.placeholder(1)}, ${connection.placeholder(2)})`,
+                [id, added],
+              );
+            }
+
+            // The loaded copies are now wrong, and a stale association is worse
+            // than an unloaded one — it looks like an answer.
+            delete this[cacheKey(name)];
+            delete this[cacheKey(joins)];
+          },
+        },
+      );
     }
 
     /**
@@ -3613,6 +3771,12 @@ export interface ModelClass<A extends object> {
     name: AssociationName<M>,
     through: string,
     options?: AssociationOptions & { source?: string },
+  ): void;
+  hasAndBelongsToMany<M extends AnyModel>(
+    this: M,
+    name: AssociationName<M>,
+    target: () => unknown,
+    options?: { joinTable?: string; foreignKey?: string; associationForeignKey?: string },
   ): void;
   tokenDefinitions: Record<string, TokenDefinition>;
   generatesTokenFor(

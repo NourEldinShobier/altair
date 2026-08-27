@@ -13,15 +13,15 @@
  * count moved and by how much.
  */
 
-import { notifications } from "@altair/support";
+import { AssertionFailed, notifications } from "@altair/support";
 
-/** Raised when an assertion does not hold, with a message a person can act on. */
-export class AssertionFailed extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AssertionFailed";
-  }
-}
+/**
+ * Raised when an assertion does not hold, with a message a person can act on.
+ *
+ * Re-exported: it lives in `@altair/support` so the components can raise it
+ * from their own assertions without depending on this package.
+ */
+export { AssertionFailed } from "@altair/support";
 
 function fail(message: string): never {
   throw new AssertionFailed(message);

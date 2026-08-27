@@ -21,3 +21,4 @@ export * from "./filter.js";
 export * from "./misc.js";
 export * from "./cache_multi.js";
 export * from "./formats.js";
+export * from "./assertion.js";
