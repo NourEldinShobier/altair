@@ -118,6 +118,60 @@ export class Logger {
    * Nested calls merge rather than replace, so a job inside a request keeps
    * the request's id alongside its own.
    */
+  /**
+   * Adds tags for the rest of the current scope. Rails' `push_tags`.
+   *
+   * `tagged` is the one to reach for: it takes them away again at the end of
+   * the block, and a pushed tag that nobody pops is a tag on every line for
+   * the rest of the request. This is for the case a block cannot express —
+   * a tag learned halfway through, after the work has started.
+   */
+  pushTags(tags: Record<string, unknown>): void {
+    const store = tagStore.getStore();
+
+    if (!store) {
+      throw new Error(
+        "There is no logging scope to push tags onto. Use `tagged({ ... }, body)`, which makes one.",
+      );
+    }
+
+    Object.assign(store, tags);
+  }
+
+  /** Takes named tags away again. Rails' `pop_tags`. */
+  popTags(...names: string[]): void {
+    const store = tagStore.getStore();
+    if (!store) return;
+
+    for (const name of names) delete store[name];
+  }
+
+  /** Takes all of them away. Rails' `clear_tags!`. */
+  clearTags(): void {
+    const store = tagStore.getStore();
+    if (!store) return;
+
+    for (const name of Object.keys(store)) delete store[name];
+  }
+
+  /** The tags as they would appear on a line, for a format that writes text. */
+  tagsText(): string {
+    return Object.entries(this.tags)
+      .map(([name, value]) => `[${name}=${String(value)}]`)
+      .join("");
+  }
+
+  /**
+   * Runs a block at a named level. Rails' `log_at`.
+   *
+   * `silence` already turns the volume down; this is the same mechanism said
+   * the other way round, for a block that needs to be heard rather than one
+   * that needs to be quiet.
+   */
+  async logAt<T>(level: Level, body: () => Promise<T>): Promise<T> {
+    return await this.silence(body, level);
+  }
+
   tagged<T>(tags: Record<string, unknown>, body: () => T): T {
     return tagStore.run({ ...this.tags, ...tags }, body);
   }

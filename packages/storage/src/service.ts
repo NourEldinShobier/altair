@@ -184,6 +184,27 @@ export class DiskService implements StorageService {
     return new Uint8Array(await file.arrayBuffer());
   }
 
+  /**
+   * Every key under a prefix, which is what `deletePrefixed` needs.
+   *
+   * A disk service can walk its own directories; a bucket can list too. The
+   * operations that need this say so rather than assuming every service can.
+   */
+  async keys(prefix = ""): Promise<string[]> {
+    const { Glob } = await import("bun");
+    const found: string[] = [];
+
+    for await (const file of new Glob("**/*").scan({ cwd: this.root, onlyFiles: true })) {
+      // Stored nested by the first four characters, so the path is not the key
+      // — the last segment is.
+      const key = file.split(/[\\/]/).pop() as string;
+
+      if (key.startsWith(prefix)) found.push(key);
+    }
+
+    return found;
+  }
+
   async delete(key: string): Promise<void> {
     // Deleting something that is already gone is the outcome asked for.
     await Bun.file(this.pathFor(key))

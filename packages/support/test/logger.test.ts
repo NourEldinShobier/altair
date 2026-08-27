@@ -326,3 +326,96 @@ describe("handle and record", () => {
     expect(await reporter.record(async () => "ok")).toBe("ok");
   });
 });
+
+/**
+ * Tags added and taken away inside a scope, ported from
+ * `activesupport/test/tagged_logging_test.rb`.
+ *
+ * `tagged` is the one to reach for, because it takes them away again. These
+ * are for the tag learned halfway through — after the work has started and the
+ * block was already opened.
+ */
+describe("changing the tags inside a scope", () => {
+  it("adds one to the lines that follow", () => {
+    const { logger, entries } = collector();
+
+    logger.tagged({ requestId: "abc" }, () => {
+      logger.info("before");
+      logger.pushTags({ userId: 7 });
+      logger.info("after");
+    });
+
+    expect(entries[0]?.payload.userId).toBeUndefined();
+    expect(entries[1]?.payload).toMatchObject({ requestId: "abc", userId: 7 });
+  });
+
+  it("takes one away again", () => {
+    const { logger, entries } = collector();
+
+    logger.tagged({ a: 1, b: 2 }, () => {
+      logger.popTags("a");
+      logger.info("x");
+    });
+
+    expect(entries[0]?.payload.a).toBeUndefined();
+    expect(entries[0]?.payload.b).toBe(2);
+  });
+
+  it("takes all of them away", () => {
+    const { logger, entries } = collector();
+
+    logger.tagged({ a: 1 }, () => {
+      logger.clearTags();
+      logger.info("x");
+    });
+
+    expect(entries[0]?.payload.a).toBeUndefined();
+  });
+
+  /**
+   * A pushed tag that nobody pops is a tag on every line for the rest of the
+   * request, so pushing outside a scope is refused rather than quietly
+   * starting one that never ends.
+   */
+  it("refuses to push outside a scope", () => {
+    expect(() => collector().logger.pushTags({ a: 1 })).toThrow(/no logging scope/);
+  });
+
+  it("says nothing when popping outside one", () => {
+    const { logger } = collector();
+
+    expect(() => logger.popTags("a")).not.toThrow();
+    expect(() => logger.clearTags()).not.toThrow();
+  });
+
+  it("writes them as text for a format that wants it", () => {
+    const { logger } = collector();
+
+    expect(logger.tagged({ requestId: "abc", userId: 7 }, () => logger.tagsText())).toBe(
+      "[requestId=abc][userId=7]",
+    );
+  });
+
+  it("leaves the scope's tags behind when it ends", () => {
+    const { logger, entries } = collector();
+
+    logger.tagged({ a: 1 }, () => logger.pushTags({ b: 2 }));
+    logger.info("after");
+
+    expect(entries[0]?.payload.a).toBeUndefined();
+    expect(entries[0]?.payload.b).toBeUndefined();
+  });
+});
+
+describe("logging at a named level", () => {
+  it("is the other way of saying silence", async () => {
+    const { logger, lines } = collector();
+
+    await logger.logAt("error", async () => {
+      logger.info("quiet");
+      logger.error("loud");
+    });
+
+    expect(lines).toHaveLength(1);
+  });
+});
