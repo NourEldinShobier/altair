@@ -8,3 +8,4 @@ export * from "./analyze.js";
 export * from "./provider.js";
 export * from "./purge_job.js";
 export * from "./mirror.js";
+export * from "./named_variants.js";
