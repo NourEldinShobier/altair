@@ -18,3 +18,4 @@ export * from "./nested_params.js";
 export * from "./permissions_policy.js";
 export * from "./static_files.js";
 export * from "./http_authentication.js";
+export * from "./request_info.js";
