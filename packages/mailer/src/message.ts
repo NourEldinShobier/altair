@@ -127,6 +127,63 @@ export function observeDelivery(observer: DeliveryObserver): () => void {
   };
 }
 
+/**
+ * Rails' names for the same two things.
+ *
+ * `interceptDelivery` and `observeDelivery` say what they do; these are what
+ * somebody arriving from Rails will look for, and a framework that keeps its
+ * conventions should answer to both.
+ */
+export const registerInterceptor = interceptDelivery;
+export const registerObserver = observeDelivery;
+
+export function registerInterceptors(...list: DeliveryInterceptor[]): () => void {
+  const removals = list.map((one) => interceptDelivery(one));
+
+  return () => {
+    for (const remove of removals) remove();
+  };
+}
+
+export function registerObservers(...list: DeliveryObserver[]): () => void {
+  const removals = list.map((one) => observeDelivery(one));
+
+  return () => {
+    for (const remove of removals) remove();
+  };
+}
+
+export function unregisterInterceptor(interceptor: DeliveryInterceptor): void {
+  const at = interceptors.indexOf(interceptor);
+  if (at !== -1) interceptors.splice(at, 1);
+}
+
+export function unregisterObserver(observer: DeliveryObserver): void {
+  const at = observers.indexOf(observer);
+  if (at !== -1) observers.splice(at, 1);
+}
+
+export function unregisterInterceptors(...list: DeliveryInterceptor[]): void {
+  for (const one of list) unregisterInterceptor(one);
+}
+
+export function unregisterObservers(...list: DeliveryObserver[]): void {
+  for (const one of list) unregisterObserver(one);
+}
+
+/**
+ * `"Ada Lovelace" <ada@example.com>`. Rails' `email_address_with_name`.
+ *
+ * The name is quoted and its own quotes dropped: a name containing one would
+ * end the quoted string and turn the rest into a second address, which is a
+ * header injection wearing a person's name.
+ */
+export function emailAddressWithName(address: string, name: string): string {
+  const safe = name.replaceAll('"', "").replaceAll(/[\r\n]/g, "");
+
+  return `"${safe}" <${address}>`;
+}
+
 /** Forgets every interceptor and observer. */
 export function resetDeliveryHooks(): void {
   interceptors.length = 0;

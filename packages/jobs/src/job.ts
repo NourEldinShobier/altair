@@ -321,6 +321,59 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
    *
    * Returns an object with `performLater` so the call reads the same way.
    */
+  /**
+   * The named callback helpers, which is how Rails is written.
+   *
+   * `setCallback("perform", "before", fn)` says the same thing; these are what
+   * appears in an application, and the difference between reading a name and
+   * reading a pair of string arguments is the difference between knowing what
+   * a line does and going to check.
+   */
+  static beforePerform(callback: Parameters<typeof Job.setCallback>[2]): void {
+    this.setCallback("perform", "before", callback);
+  }
+
+  static afterPerform(callback: Parameters<typeof Job.setCallback>[2]): void {
+    this.setCallback("perform", "after", callback);
+  }
+
+  static aroundPerform(callback: Parameters<typeof Job.setCallback>[2]): void {
+    this.setCallback("perform", "around", callback);
+  }
+
+  static beforeEnqueue(callback: Parameters<typeof Job.setCallback>[2]): void {
+    this.setCallback("enqueue", "before", callback);
+  }
+
+  static afterEnqueue(callback: Parameters<typeof Job.setCallback>[2]): void {
+    this.setCallback("enqueue", "after", callback);
+  }
+
+  static aroundEnqueue(callback: Parameters<typeof Job.setCallback>[2]): void {
+    this.setCallback("enqueue", "around", callback);
+  }
+
+  /**
+   * The queue this job goes on. Rails' `queue_as`.
+   *
+   * A declaration rather than a value passed at every call site: which queue a
+   * job belongs on is a property of the job, and saying it once is what stops
+   * half the calls putting it somewhere else.
+   */
+  static queueAs(name: string): void {
+    this.queueName = name;
+  }
+
+  /** The priority this job goes on with. Rails' `queue_with_priority`. */
+  static queueWithPriority(priority: number): void {
+    this.priority = priority;
+  }
+
+  /** The adapter's own name, for a log line that has to say where a job went. */
+  static get queueAdapterName(): string {
+    return this.queue.constructor.name;
+  }
+
   static set(options: EnqueueOptions): {
     performLater: (...args: unknown[]) => Promise<JobPayload>;
   } {
