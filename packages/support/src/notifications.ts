@@ -128,3 +128,41 @@ function matches(pattern: Pattern, name: string): boolean {
 
 /** The bus the framework reports through. */
 export const notifications = new Notifications();
+
+/**
+ * Collects every event a block emits. Rails' `capture_notifications`.
+ *
+ * What a test uses to say "this ran two queries" or "this sent one email"
+ * without the subscribe-and-unsubscribe bookkeeping around every case — and
+ * the bookkeeping is where a leaked subscriber comes from, which then reports
+ * events from every test after it.
+ */
+export async function captureNotifications<T>(
+  pattern: string | RegExp,
+  body: () => T | Promise<T>,
+): Promise<[T, Event[]]> {
+  const seen: Event[] = [];
+  // `subscribe` already takes a name or a pattern, so the filtering is its
+  // job rather than this one's.
+  const subscription = notifications.subscribe(pattern, (event) => {
+    seen.push(event as Event);
+  });
+
+  try {
+    return [await body(), seen];
+  } finally {
+    // In a finally, because a block that throws still has to take its
+    // subscriber with it.
+    subscription.unsubscribe();
+  }
+}
+
+/** How many of an event a block emitted. */
+export async function countNotifications(
+  pattern: string | RegExp,
+  body: () => unknown,
+): Promise<number> {
+  const [, seen] = await captureNotifications(pattern, body);
+
+  return seen.length;
+}

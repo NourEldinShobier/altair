@@ -16,6 +16,7 @@
  * enqueued it, and may not exist yet.
  */
 
+import { serializeArguments } from "./serializers.js";
 import {
   runCallbacks,
   Callbacks,
@@ -434,7 +435,11 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
     return {
       id: crypto.randomUUID(),
       jobClass: this.jobName,
-      arguments: args,
+      // Serialized on the way in rather than left to JSON. A Date through
+      // `JSON.stringify` and back is a string, and a job that took a date
+      // yesterday takes a string today — which throws inside a worker, hours
+      // after the code that enqueued it looked fine.
+      arguments: serializeArguments(args),
       queue: options.queue ?? this.queueName,
       runAt: runAtFor(options),
       attempts: 0,
