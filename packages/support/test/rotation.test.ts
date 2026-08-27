@@ -20,7 +20,7 @@ describe("a rotated secret", () => {
 
     const now = new MessageVerifier(NEW).rotate(OLD);
 
-    expect(now.verified(signed)).toEqual({ user: 1 });
+    expect(now.verified<{ user: number }>(signed)).toEqual({ user: 1 });
   });
 
   it("signs new messages with the new one", () => {
@@ -30,14 +30,14 @@ describe("a rotated secret", () => {
     // The old secret alone cannot read it, which is what makes the rotation a
     // rotation rather than two secrets that both work forever.
     expect(new MessageVerifier(OLD).verified(signed)).toBeNull();
-    expect(new MessageVerifier(NEW).verified(signed)).toEqual({ user: 1 });
+    expect(new MessageVerifier(NEW).verified<{ user: number }>(signed)).toEqual({ user: 1 });
   });
 
   it("takes more than one older secret", () => {
     const signed = new MessageVerifier(OLDER).generate("x");
     const now = new MessageVerifier(NEW).rotate(OLD).rotate(OLDER);
 
-    expect(now.verified(signed)).toBe("x");
+    expect(now.verified<string>(signed)).toBe("x");
   });
 
   it("still refuses a secret it was never told about", () => {
@@ -59,7 +59,7 @@ describe("a rotated secret", () => {
     const signed = new MessageVerifier(OLD).generate("x", "login");
     const now = new MessageVerifier(NEW).rotate(OLD);
 
-    expect(now.verified(signed, "login")).toBe("x");
+    expect(now.verified<string>(signed, "login")).toBe("x");
     expect(now.verified(signed, "password-reset")).toBeNull();
   });
 
@@ -67,7 +67,7 @@ describe("a rotated secret", () => {
     const signed = new MessageVerifier(OLD).generate("x");
     const now = new MessageVerifier(NEW).rotate(OLD);
 
-    expect(now.verified(signed)).toBe("x");
+    expect(now.verified<string>(signed)).toBe("x");
 
     now.clearRotations();
 
