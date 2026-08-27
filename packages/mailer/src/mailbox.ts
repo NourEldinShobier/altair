@@ -16,7 +16,7 @@
  * files a duplicate ticket for every retry is worse than one that misses mail.
  */
 
-import type { Address } from "./message.js";
+import type { Address, MessageFields } from "./message.js";
 
 /** A message as it arrived. */
 export interface InboundMessage {
@@ -41,6 +41,14 @@ export interface InboundResult {
   status: InboundStatus;
   mailbox?: string;
   reason?: string;
+  /**
+   * The reply to send back, when the answer is a bounce.
+   *
+   * Built rather than sent here: whether a bounce actually goes out is the
+   * application's decision, and a mailbox that sent mail as a side effect of
+   * being called would be untestable.
+   */
+  bounce?: MessageFields;
 }
 
 /** A route's pattern: an exact address, or something matching one. */
