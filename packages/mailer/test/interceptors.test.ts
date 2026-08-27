@@ -16,6 +16,11 @@ import {
   interceptDelivery,
   observeDelivery,
   resetDeliveryHooks,
+  registerInterceptor,
+  registerObserver,
+  registerObservers,
+  unregisterObserver,
+  emailAddressWithName,
   type MessageFields,
 } from "../src/message.js";
 
@@ -195,5 +200,70 @@ describe("an observer", () => {
 
     expect(UserMailer.welcome("a@b.c").deliverNow()).resolves.toBeDefined();
     expect(delivery.deliveries).toHaveLength(1);
+  });
+});
+
+/**
+ * The Rails spellings for the same two hooks, and the address formatter beside
+ * them.
+ *
+ * `interceptDelivery` and `observeDelivery` say what they do; these are what
+ * somebody arriving from Rails looks for, and a framework keeping its
+ * conventions should answer to both.
+ */
+describe("registering by Rails' names", () => {
+  it("registers an interceptor", async () => {
+    registerInterceptor((message) => {
+      message.to = "staging@example.com";
+    });
+
+    await UserMailer.welcome("real@example.com").deliverNow();
+
+    expect(delivery.deliveries[0]?.to).toBe("staging@example.com");
+  });
+
+  it("registers several at once, and takes them all back together", async () => {
+    const seen: string[] = [];
+    const remove = registerObservers(
+      () => void seen.push("one"),
+      () => void seen.push("two"),
+    );
+
+    await UserMailer.welcome("a@b.com").deliverNow();
+    expect(seen).toEqual(["one", "two"]);
+
+    remove();
+    await UserMailer.welcome("a@b.com").deliverNow();
+
+    expect(seen).toEqual(["one", "two"]);
+  });
+
+  it("unregisters one by reference", async () => {
+    const seen: string[] = [];
+    const observer = () => void seen.push("ran");
+
+    registerObserver(observer);
+    unregisterObserver(observer);
+
+    await UserMailer.welcome("a@b.com").deliverNow();
+
+    expect(seen).toEqual([]);
+  });
+});
+
+describe("an address with a name on it", () => {
+  it("quotes the name", () => {
+    expect(emailAddressWithName("ada@example.com", "Ada Lovelace")).toBe(
+      '"Ada Lovelace" <ada@example.com>',
+    );
+  });
+
+  /**
+   * A name containing a quote would end the quoted string and turn the rest
+   * into a second address — a header injection wearing a person's name.
+   */
+  it("cannot be broken by a quote or a line break in the name", () => {
+    expect(emailAddressWithName("a@b.com", 'Ada" <eve@evil.example>, "')).not.toContain('" <eve');
+    expect(emailAddressWithName("a@b.com", "Ada\r\nBcc: eve@evil.example")).not.toContain("\n");
   });
 });
