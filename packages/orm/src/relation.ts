@@ -1136,6 +1136,77 @@ export class Relation<T> implements PromiseLike<T[]> {
     return !(await this.exists());
   }
 
+  /**
+   * Every row this relation would not have matched. Rails' `invert_where`.
+   *
+   * Every condition inverted together rather than each one separately: the
+   * opposite of "draft and mine" is "not (draft and mine)", which includes
+   * somebody else's draft. Inverting them one at a time gives "published and
+   * not mine", which is a different and much smaller set.
+   */
+  invertWhere(): Relation<T> {
+    const next = this.#clone();
+
+    if (next.#wheres.length === 0) return next;
+
+    const inner = next.#wheres.map((clause) => `(${clause.sql})`).join(" AND ");
+
+    const bindings = next.#wheres.flatMap((clause) => clause.bindings);
+
+    next.#wheres = [{ sql: `NOT (${inner})`, bindings }];
+
+    return next;
+  }
+
+  /**
+   * Adds methods to this relation and everything chained off it. Rails'
+   * `extending`.
+   *
+   *     Post.all().extending({ published() { return this.where({ live: 1 }) } })
+   *
+   * For a query vocabulary that belongs to one call site rather than to the
+   * model — a report, an export — without a scope nobody else will ever use.
+   */
+  extending<E extends object>(methods: E): Relation<T> & E {
+    const next = this.#clone();
+
+    return Object.assign(next, methods) as Relation<T> & E;
+  }
+
+  /** Replaces the select list rather than adding to it. Rails' `reselect`. */
+  reselect(...columns: string[]): Relation<T> {
+    const next = this.#clone();
+    next.#selects = [];
+
+    return next.select(...columns);
+  }
+
+  /** Replaces the grouping rather than adding to it. Rails' `regroup`. */
+  regroup(...columns: string[]): Relation<T> {
+    const next = this.#clone();
+    next.#groups = [];
+
+    return next.group(...columns);
+  }
+
+  /**
+   * Everything but these records. Rails' `excluding`.
+   *
+   * Takes the records themselves rather than their ids, because that is what
+   * the caller has: "everything except the one I am showing".
+   */
+  excluding(...records: (T | number | string)[]): Relation<T> {
+    const ids = records
+      .flat()
+      .map((one) =>
+        typeof one === "object" && one !== null
+          ? (one as Record<string, unknown>)[this.#source.primaryKey]
+          : one,
+      );
+
+    return ids.length === 0 ? this.#clone() : this.whereNot({ [this.#source.primaryKey]: ids });
+  }
+
   async exists(): Promise<boolean> {
     return (await this.limit(1).toArray()).length > 0;
   }
