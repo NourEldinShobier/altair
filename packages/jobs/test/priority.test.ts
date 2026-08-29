@@ -12,9 +12,10 @@
  * things, and the first version of this had one without the other.
  */
 
-import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, connect } from "@altair/orm";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { Connection } from "@altair/orm";
 import { DatabaseQueue, Job, createJobsTable } from "../src/index.js";
+import { queueConnection, releaseConnection } from "./support/database.js";
 
 class Batch extends Job {
   static override priority = 10;
@@ -46,7 +47,7 @@ const drain = async (name = "default"): Promise<string[]> => {
 };
 
 beforeEach(async () => {
-  connection = await connect(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await queueConnection();
   await connection.execute("DROP TABLE IF EXISTS altair_jobs");
   await createJobsTable(connection as never);
 
@@ -54,6 +55,10 @@ beforeEach(async () => {
   Job.adapter = queue;
   Job.resetRegistry();
   Job.register(Batch as typeof Job, Reset as typeof Job, Ordinary as typeof Job);
+});
+
+afterEach(async () => {
+  await releaseConnection(connection);
 });
 
 describe("a class with a priority", () => {

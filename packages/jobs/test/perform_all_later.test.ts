@@ -7,9 +7,9 @@
  * the obvious way to write it.
  */
 
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { notifications } from "@altair/support";
-import { connect, type Connection } from "@altair/orm";
+import { type Connection } from "@altair/orm";
 import {
   DatabaseQueue,
   Job,
@@ -18,6 +18,7 @@ import {
   type JobPayload,
   type QueueAdapter,
 } from "../src/index.js";
+import { queueConnection, releaseConnection } from "./support/database.js";
 
 class Charge extends Job {
   static override priority = -1;
@@ -58,7 +59,7 @@ const drain = async (): Promise<JobPayload[]> => {
 };
 
 beforeEach(async () => {
-  connection = await connect(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await queueConnection();
   await connection.execute("DROP TABLE IF EXISTS altair_jobs");
   await createJobsTable(connection as never);
 
@@ -66,6 +67,10 @@ beforeEach(async () => {
   Job.adapter = queue;
   Job.resetRegistry();
   Job.register(Charge as typeof Job, Receipt as typeof Job);
+});
+
+afterEach(async () => {
+  await releaseConnection(connection);
 });
 
 describe("a batch", () => {
