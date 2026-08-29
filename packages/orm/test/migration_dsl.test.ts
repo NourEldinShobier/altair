@@ -175,7 +175,12 @@ describe("adding a reference", () => {
   it("can be told not to", async () => {
     await schema.addReference("posts", "user", { index: false });
 
-    expect(await schema.indexes("posts")).toEqual([]);
+    // Asserted as "no index mentions the column" rather than "no indexes at
+    // all": Postgres and MySQL list the primary key's own index here, and a
+    // count is an assertion about the database rather than about the code.
+    const names = await schema.indexes("posts");
+
+    expect(names.some((name) => name.includes("user_id"))).toBe(false);
   });
 
   it("adds a type column for a polymorphic one", async () => {

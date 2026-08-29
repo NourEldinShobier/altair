@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
+import { columnTypeFor } from "./dump.js";
 import { columnSchemas, indexSchemas, type ColumnSchema } from "./introspect.js";
 
 export type ColumnType =
@@ -534,13 +535,13 @@ export class SchemaStatements {
     if (!found) return false;
     if (type === undefined) return true;
 
-    // Compared on the leading word only: the database answers in its own
-    // spelling — VARCHAR(255) for a string, TINYINT(1) for a boolean — and a
-    // caller asking "is this a string?" should not have to know which of the
-    // three databases it is talking to.
-    const wanted = sqlType(this.connection, { name: column, type }).split("(")[0] as string;
-
-    return found.type.toUpperCase().startsWith(wanted.toUpperCase());
+    // Mapped back to a logical type rather than compared as SQL. The three
+    // databases answer in their own spellings — `character varying`, `int`,
+    // `TINYINT(1)` — and a caller asking "is this a string?" should not have to
+    // know which one it is talking to. Comparing the SQL text instead is a
+    // check that passes on SQLite and fails on the other two, which is exactly
+    // what it did before CI ran this against all three.
+    return columnTypeFor(found.type) === type;
   }
 
   /**
