@@ -117,6 +117,9 @@
         "@altair/support": "workspace:*",
         "@altair/view": "workspace:*",
       },
+      "devDependencies": {
+        "@altair/router": "workspace:*",
+      },
     },
     "packages/view": {
       "name": "@altair/view",
