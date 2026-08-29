@@ -11,12 +11,8 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import {
-  Connection,
-  SchemaStatements,
-  UnsupportedSchemaChange,
-  setConnection,
-} from "../src/index.js";
+import { SchemaStatements, UnsupportedSchemaChange, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
 import { testConnection } from "./support/database.js";
 
 let connection: Connection;
@@ -73,7 +69,7 @@ describe("renameColumn", () => {
   });
 
   it("works on every adapter", async () => {
-    expect(schema.renameColumn("widgets", "count", "total")).resolves.toBeUndefined();
+    await expect(schema.renameColumn("widgets", "count", "total")).resolves.toBeUndefined();
   });
 });
 
@@ -83,7 +79,9 @@ describe("changeColumnNull", () => {
 
     await schema.changeColumnNull("widgets", "title", false, "string");
 
-    expect(
+    // Awaited. Without it the assertion is never enforced and the rejection
+    // surfaces as an unhandled one instead of a failing test.
+    await expect(
       connection.execute(
         `INSERT INTO ${connection.quote("widgets")} (${connection.quote("count")}) VALUES (1)`,
       ),
@@ -104,7 +102,11 @@ describe("changeColumnNull", () => {
       `INSERT INTO ${connection.quote("widgets")} (${connection.quote("count")}) VALUES (1)`,
     );
 
-    const rows = await connection.query(`SELECT * FROM ${connection.quote("widgets")}`);
+    // The row this inserted, not every row: `beforeEach` seeds one. Asserted
+    // on the null title, which is the thing the constraint was blocking.
+    const rows = await connection.query(
+      `SELECT * FROM ${connection.quote("widgets")} WHERE ${connection.quote("title")} IS NULL`,
+    );
 
     expect(rows).toHaveLength(1);
   });

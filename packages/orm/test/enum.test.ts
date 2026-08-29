@@ -9,13 +9,13 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import {
-  Connection,
   Model,
   type Relation,
   SchemaStatements,
   setConnection,
   UnknownEnumValue,
 } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
 import { testConnection } from "./support/database.js";
 
 // The attributes interface describes what the application works with, which

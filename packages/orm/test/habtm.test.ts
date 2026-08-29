@@ -9,7 +9,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 let connection: Connection;
 
@@ -23,7 +25,7 @@ class Post extends Model<{ id: number; title: string }>("posts") {
 Post.hasAndBelongsToMany("tags", () => Tag);
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   const schema = new SchemaStatements(connection);
@@ -40,7 +42,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await connection.close();
+  if (isSqlite) await connection.close();
 });
 
 const seed = async () => {

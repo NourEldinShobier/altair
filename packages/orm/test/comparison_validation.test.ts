@@ -9,7 +9,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 interface EventRow {
   id: number;
@@ -22,7 +24,7 @@ interface EventRow {
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   await new SchemaStatements(connection).createTable("events", (t) => {
@@ -34,7 +36,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await connection.close();
+  if (isSqlite) await connection.close();
 });
 
 /** A model carrying one validation, so each case reads on its own. */

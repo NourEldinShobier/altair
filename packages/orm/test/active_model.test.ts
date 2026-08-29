@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { i18n } from "@altair/support";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
 import {
   ActiveModel,
   errorHeading,
@@ -19,6 +19,7 @@ import {
   partialPathFor,
   ValidationErrors,
 } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 class Signup extends ActiveModel {
   declare email: string;
@@ -394,7 +395,7 @@ describe("a database-backed model has the same API", () => {
   }
 
   const setup = async () => {
-    const connection = new Connection("sqlite://:memory:");
+    const connection = await testConnection();
     setConnection(connection);
     Article.columnCache = undefined;
     Article.columnTypeCache = undefined;
@@ -441,7 +442,7 @@ describe("a database-backed model has the same API", () => {
   // record does, so a cached copy expires by becoming unreachable rather than
   // by being swept.
   it("gives a cache key that carries its version", async () => {
-    const connection = new Connection("sqlite://:memory:");
+    const connection = await testConnection();
     setConnection(connection);
     Stamped.columnCache = undefined;
     Stamped.columnTypeCache = undefined;

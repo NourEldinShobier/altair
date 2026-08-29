@@ -8,7 +8,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, SchemaStatements, setConnection } from "../src/index.js";
+import { SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
 import { isSqlite, testConnection } from "./support/database.js";
 
 let connection: Connection;

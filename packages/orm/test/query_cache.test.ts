@@ -12,7 +12,6 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
-  Connection,
   Model,
   SchemaStatements,
   setConnection,
@@ -20,6 +19,7 @@ import {
   withoutQueryCache,
   isCacheable,
 } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
 import { notifications } from "@altair/support";
 import { testConnection } from "./support/database.js";
 

@@ -11,13 +11,13 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { travelTo } from "@altair/support";
 import {
-  Connection,
   Model,
   SchemaStatements,
   configureTokens,
   resetTokens,
   setConnection,
 } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
 import { testConnection } from "./support/database.js";
 
 interface UserRow {

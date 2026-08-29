@@ -11,7 +11,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, Relation, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, Relation, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 interface MessageRow {
   id: number;
@@ -53,7 +55,7 @@ class Entry extends Model<EntryRow>("entries") {
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   for (const model of [Message, Comment, Entry]) {
@@ -72,7 +74,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await connection.close();
+  if (isSqlite) await connection.close();
 });
 
 /** An entry over a message, and an entry over a comment. */

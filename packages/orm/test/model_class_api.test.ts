@@ -8,7 +8,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -21,7 +23,7 @@ interface PostRow {
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   await new SchemaStatements(connection).createTable("posts", (t) => {
@@ -33,7 +35,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await connection.close();
+  if (isSqlite) await connection.close();
 });
 
 /** A model with the declaration under test, and nothing else. */

@@ -8,7 +8,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 
 interface ItemRow {
   id: number;
@@ -21,7 +23,7 @@ class Item extends Model<ItemRow>("items") {}
 let connection: Connection;
 
 async function seed(count: number): Promise<void> {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Item.columnCache = undefined;
   Item.columnTypeCache = undefined;
