@@ -292,6 +292,7 @@ export class Relation<T> implements PromiseLike<T[]> {
   #distinct = false;
   #lock: LockMode | undefined;
   #annotations: string[] = [];
+  #strictLoading = false;
   #joins: JoinClause[] = [];
   /**
    * Records handed over by `includes`. Chaining clears this — `#clone` does not
@@ -634,6 +635,27 @@ export class Relation<T> implements PromiseLike<T[]> {
    * the one place a relation puts caller-supplied text into a statement
    * without a binding, so it is the one place that could be an injection.
    */
+  /**
+   * Refuses to load these records' associations lazily. Rails' `strict_loading`.
+   *
+   *     const posts = await Post.all().includes("author").strictLoading()
+   *
+   * The N+1 guard. A list page reads `post.author` inside a loop, one query per
+   * post, and nothing in the code says so — it looks exactly like reading an
+   * attribute. This turns it into a failure where it happens rather than a
+   * graph in a dashboard three weeks later.
+   *
+   * On the query rather than on the class, because the query is where an N+1
+   * costs something. A background job walking one record at a time carries on
+   * as it was.
+   */
+  strictLoading(on = true): Relation<T> {
+    const next = this.#clone();
+    next.#strictLoading = on;
+
+    return next;
+  }
+
   annotate(...comments: string[]): Relation<T> {
     const next = this.#clone();
 
@@ -797,6 +819,15 @@ export class Relation<T> implements PromiseLike<T[]> {
     const { sql, bindings } = this.toSql();
     const rows = await this.connection.query<Row>(sql, bindings);
     const records = rows.map((row) => this.#source.instantiate(row));
+
+    // Marked before preloading, not after: `includes` fills the associations
+    // it was given, and anything it did not fill is exactly what this is meant
+    // to catch.
+    if (this.#strictLoading) {
+      for (const record of records) {
+        (record as { strictLoading?: (on?: boolean) => unknown }).strictLoading?.();
+      }
+    }
 
     if (this.#includes.length > 0 && this.#source.preload) {
       await this.#source.preload(records, this.#includes);

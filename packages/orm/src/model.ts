@@ -321,6 +321,7 @@ const PERSISTED = Symbol("altair.model.persisted");
  * question and nothing else could answer it.
  */
 const SAVED_CHANGES = Symbol("altair.model.savedChanges");
+const STRICT_LOADING = Symbol("altair.model.strictLoading");
 /** Whether `destroy` has run, which "not persisted" alone cannot say. */
 const DESTROYED = Symbol("altair.model.destroyed");
 const NESTED = Symbol("altair.model.nested");
@@ -358,6 +359,8 @@ export interface BaseModelInstance<A> {
   decrement(column: keyof A & string, by?: number): Promise<unknown>;
   toggle(column: keyof A & string): Promise<unknown>;
   hasSavedChange(attribute?: keyof A & string): boolean;
+  strictLoading(on?: boolean): this;
+  readonly isStrictLoading: boolean;
   previousChanges(): Record<string, [unknown, unknown]>;
   attributePreviouslyChanged(attribute: keyof A & string): boolean;
   attributePreviouslyWas(attribute: keyof A & string): unknown;
@@ -400,6 +403,28 @@ export interface BaseModelInstance<A> {
  * The table name is inferred from the class name when it is omitted, following
  * Rails' convention — `class Post` reads and writes `posts`.
  */
+/**
+ * Raised when a record marked strict-loading is asked for an association that
+ * was not preloaded.
+ *
+ * The N+1 guard. A list page reads `post.author` inside a loop, one query per
+ * post, and nothing about the code says so — it looks exactly like reading an
+ * attribute. Marking the query strict turns that into a failure at the moment
+ * it happens rather than a graph in a dashboard three weeks later.
+ */
+export class StrictLoadingViolation extends Error {
+  constructor(
+    readonly model: string,
+    readonly association: string,
+  ) {
+    super(
+      `${model} is marked strict-loading, so "${association}" cannot be loaded here: ` +
+        `it would be one query per record. Preload it with .includes("${association}").`,
+    );
+    this.name = "StrictLoadingViolation";
+  }
+}
+
 export function Model<A extends object>(tableName?: string, options: ModelOptions = {}) {
   class BaseModel extends Callbacks {
     static tableName = tableName ?? "";
@@ -835,6 +860,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     declare [ATTRIBUTES]: Record<string, unknown>;
     declare [ORIGINAL]: Record<string, unknown>;
     declare [SAVED_CHANGES]: Record<string, [unknown, unknown]> | undefined;
+    declare [STRICT_LOADING]: boolean | undefined;
     declare [DESTROYED]: boolean | undefined;
 
     declare [PERSISTED]: boolean;
@@ -918,6 +944,15 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
       return defaultConnection();
     }
+
+    /**
+     * Whether records of this class refuse to load associations lazily.
+     *
+     * Rails' `strict_loading_by_default`. Off, because turning it on for an
+     * existing application breaks every page at once; a new one should turn it
+     * on in development and leave it on.
+     */
+    static strictLoadingByDefault = false;
 
     /** Second names for columns, by alias. Rails' `attribute_aliases`. */
     static attributeAliases: Record<string, string> = {};
@@ -1832,6 +1867,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         value: function associationAccessor(this: InstanceLike) {
           const cached = this[cacheKey(definition.name)];
 
+          // Checked before anything is built, so the failure names the read
+          // that would have run the query rather than something downstream of
+          // it. A preloaded association is always allowed: strict loading is
+          // about the query, not about the association.
+          if (cached === undefined && (this as Record<symbol, unknown>)[STRICT_LOADING] === true) {
+            throw new StrictLoadingViolation(this.constructor.name, definition.name);
+          }
+
           // A to-many association is always a Relation so the declared type is
           // honest. When it was preloaded the relation already holds the
           // records and runs no query.
@@ -2200,10 +2243,36 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
       if (typeof declared === "string" && declared !== this.name) {
         const subclass = (this.stiRoot ?? this).descendants[declared];
-        if (subclass) return new subclass(row as Partial<A>, true) as InstanceType<M>;
+
+        if (subclass) {
+          const record = new subclass(row as Partial<A>, true) as InstanceType<M>;
+          if (this.strictLoadingByDefault) record.strictLoading();
+
+          return record;
+        }
       }
 
-      return new this(row as Partial<A>, true) as InstanceType<M>;
+      const record = new this(row as Partial<A>, true) as InstanceType<M>;
+      if (this.strictLoadingByDefault) record.strictLoading();
+
+      return record;
+    }
+
+    /**
+     * Refuses to load this record's associations lazily. Rails' `strict_loading!`.
+     *
+     * Set on one record rather than on the class, for the query that builds a
+     * page — the one place an N+1 costs something — while a background job
+     * walking one record at a time carries on as it was.
+     */
+    strictLoading(on = true): this {
+      this[STRICT_LOADING] = on;
+      return this;
+    }
+
+    /** Whether this record refuses lazy association loads. */
+    get isStrictLoading(): boolean {
+      return this[STRICT_LOADING] === true;
     }
 
     get isNewRecord(): boolean {
@@ -3907,6 +3976,7 @@ export interface ModelClass<A extends object> {
     through: string,
     options?: AssociationOptions & { source?: string },
   ): void;
+  strictLoadingByDefault: boolean;
   attributeAliases: Record<string, string>;
   aliasAttribute(alias: string, column: string): void;
   resolveAttributeName(name: string): string;
