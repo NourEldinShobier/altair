@@ -175,6 +175,7 @@ describe("new", () => {
     expect(files.map((file) => file.path).sort()).toEqual([
       ".env.example",
       ".gitignore",
+      "app/controllers/application_controller.ts",
       "app/controllers/home_controller.ts",
       "bin/altair.ts",
       "bin/server.ts",
@@ -274,5 +275,54 @@ describe("install migrations", () => {
 
     expect(contents).toContain('dropTable("active_storage_blobs")');
     expect(contents).toContain('dropTable("active_storage_attachments")');
+  });
+});
+
+/**
+ * The features the framework ships are worth little if a new application does
+ * not get them. Rails generates `allow_browser` in every ApplicationController
+ * and query log tags in every development config, for the same reason.
+ */
+describe("what a new application starts with", () => {
+  const files = newApplication("Blog App");
+  const at = (path: string) => files.find((file) => file.path === path)?.contents ?? "";
+
+  it("has an ApplicationController for everything else to inherit", () => {
+    expect(at("app/controllers/application_controller.ts")).toContain(
+      "export class ApplicationController extends Controller",
+    );
+  });
+
+  it("turns away browsers too old to run it", () => {
+    expect(at("app/controllers/application_controller.ts")).toContain(
+      'this.allowBrowser({ versions: "modern" })',
+    );
+  });
+
+  it("says how to relax that, since not every application wants it", () => {
+    expect(at("app/controllers/application_controller.ts")).toContain("Remove this if you support");
+  });
+
+  /**
+   * A controller that extends `Controller` directly gets none of the
+   * application's own filters, which is how a rule meant to hold everywhere
+   * quietly holds nowhere.
+   */
+  it("has its own controllers inherit from it", () => {
+    expect(at("app/controllers/home_controller.ts")).toContain("extends ApplicationController");
+    expect(at("app/controllers/home_controller.ts")).not.toContain("extends Controller");
+  });
+
+  it("tags SQL with the controller and action in development", () => {
+    expect(at("config/environments/development.ts")).toContain("configureQueryLogs");
+    expect(at("config/environments/development.ts")).toContain('"controller", "action"');
+  });
+
+  it("names the application in the tag", () => {
+    expect(at("config/environments/development.ts")).toContain('application: "blog-app"');
+  });
+
+  it("leaves them off in production", () => {
+    expect(at("config/environments/production.ts")).not.toContain("configureQueryLogs");
   });
 });

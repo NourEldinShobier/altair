@@ -146,7 +146,7 @@ describe("generate controller", () => {
     const file = generateController("Posts");
 
     expect(file.path).toBe("app/controllers/posts_controller.ts");
-    expect(file.contents).toContain("export class PostsController extends Controller");
+    expect(file.contents).toContain("export class PostsController extends ApplicationController");
   });
 
   it("pluralizes a singular name", () => {
@@ -314,5 +314,29 @@ describe("mailer, job and channel generators", () => {
 
   it("still refuses a generator it does not have", () => {
     expect(() => generate("nonsense", "Thing")).toThrow(/Available:/);
+  });
+});
+
+/**
+ * A controller extending `Controller` directly gets none of the application's
+ * own filters, rescues or flash types. That is how a rule meant to hold
+ * everywhere quietly holds nowhere, and it is invisible in review because the
+ * generated file looks perfectly ordinary.
+ */
+describe("what generated controllers inherit", () => {
+  it("has a plain controller inherit from the application's own", () => {
+    const file = generate("controller", "Posts")[0]?.contents ?? "";
+
+    expect(file).toContain("extends ApplicationController");
+    expect(file).toContain('from "#controllers/application_controller"');
+  });
+
+  it("has a scaffolded controller inherit from it too", () => {
+    const file =
+      generate("scaffold", "Post", ["title:string"]).find((one) =>
+        one.path.endsWith("posts_controller.ts"),
+      )?.contents ?? "";
+
+    expect(file).toContain("extends ApplicationController");
   });
 });
