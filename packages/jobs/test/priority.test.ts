@@ -129,10 +129,18 @@ describe("a table created before priority existed", () => {
   it("gains the column", async () => {
     await connection.execute("DROP TABLE IF EXISTS altair_jobs");
 
-    // The table as it was, without the column.
+    // The table as it was, without the column. The primary key is spelled per
+    // adapter: `AUTOINCREMENT` is SQLite's and a syntax error on the other two,
+    // which is what this test did until it ran anywhere else.
+    const key = {
+      sqlite: "id INTEGER PRIMARY KEY AUTOINCREMENT",
+      postgres: "id BIGSERIAL PRIMARY KEY",
+      mysql: "id BIGINT AUTO_INCREMENT PRIMARY KEY",
+    }[connection.adapter];
+
     await connection.execute(
       `CREATE TABLE altair_jobs (
-         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         ${key},
          job_id VARCHAR(255) NOT NULL,
          job_class VARCHAR(255) NOT NULL,
          arguments TEXT NOT NULL,
