@@ -511,8 +511,76 @@ export class Controller extends Callbacks {
       this.#setResponse(await renderInertia(this.request, component, props, options)),
   };
 
-  /** Rails' `redirect_to`. Defaults to 302, as Rails does. */
-  redirectTo(location: string, init: { status?: number; allowOtherHost?: boolean } = {}): Response {
+  /**
+   * The flash types `redirectTo` accepts as options, beyond `notice` and
+   * `alert`. Rails' `add_flash_types`.
+   *
+   *     class ApplicationController extends Controller {
+   *       static { this.addFlashTypes("warning", "success") }
+   *     }
+   *
+   *     return this.redirectTo("/posts", { warning: "Saved, but check the date" })
+   *
+   * Declared rather than open-ended, so a typo in an option name is refused
+   * rather than silently doing nothing — `{ notic: "Saved" }` should not be a
+   * redirect that quietly shows no message.
+   */
+  static flashTypes: string[] = ["notice", "alert"];
+
+  static addFlashTypes(...types: string[]): void {
+    // Copy on write, so declaring on a subclass leaves the parent alone — the
+    // same rule the callbacks and associations follow.
+    if (!Object.hasOwn(this, "flashTypes")) this.flashTypes = [...this.flashTypes];
+
+    for (const type of types) {
+      if (!this.flashTypes.includes(type)) this.flashTypes.push(type);
+    }
+  }
+
+  /**
+   * Rails' `redirect_to`. Defaults to 302, as Rails does.
+   *
+   *     return this.redirectTo("/posts", { notice: "Saved" })
+   *
+   * The flash option is the reason this is one call rather than two. Setting
+   * the message and then redirecting reads fine and is a rake to step on: the
+   * message has to be set *before* the response is built, and a `redirectTo`
+   * placed above the `flash` line loses it with nothing to show for it.
+   */
+  redirectTo(
+    location: string,
+    init: {
+      status?: number;
+      allowOtherHost?: boolean;
+      /** A message for the page being redirected to. */
+      flash?: Record<string, unknown>;
+    } & Record<string, unknown> = {},
+  ): Response {
+    const klass = this.constructor as typeof Controller;
+
+    // Gathered before anything is written. Both checks below can throw, and a
+    // flash set by a redirect that was then refused would appear on whatever
+    // page renders instead — a message about something that did not happen.
+    const messages: [string, unknown][] = [];
+
+    for (const [key, value] of Object.entries(init)) {
+      if (key === "status" || key === "allowOtherHost" || key === "flash") continue;
+
+      // Anything else must be a declared flash type. An unknown key here is a
+      // typo, and treating it as one is the difference between noticing at
+      // once and wondering why the message never appears.
+      if (!klass.flashTypes.includes(key)) {
+        throw new Error(
+          `"${key}" is not a redirect option or a flash type. Declare it with ` +
+            `\`addFlashTypes("${key}")\`, or pass it inside \`flash\`.`,
+        );
+      }
+
+      messages.push([key, value]);
+    }
+
+    for (const entry of Object.entries(init.flash ?? {})) messages.push(entry);
+
     // Refused unless asked for, as Rails has done since 7.0. The pattern this
     // protects is `redirectTo(this.params.get("return_to"))`, which is how
     // "back to where you were" is written everywhere — and how a link from
@@ -520,6 +588,9 @@ export class Controller extends Callbacks {
     if (!init.allowOtherHost && !redirectAllowed(location, this.request)) {
       throw new UnsafeRedirect(location, new URL(this.request.url).host);
     }
+
+    // Written only once the redirect is certain to happen.
+    for (const [key, value] of messages) this.flash.set(key, value);
 
     return this.#setResponse(
       new Response(null, {
