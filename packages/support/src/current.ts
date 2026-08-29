@@ -124,6 +124,12 @@ export interface CurrentState {
   flash?: Readonly<Record<string, unknown>>;
   /** The Content Security Policy nonce this response was built with. */
   cspNonce?: string;
+  /** The controller handling this request, for logs and query comments. */
+  controller?: string;
+  /** The action handling this request. */
+  action?: string;
+  /** The job running, when there is no request. */
+  job?: string;
   user?: unknown;
   [key: string]: unknown;
 }

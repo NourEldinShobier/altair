@@ -13,6 +13,7 @@ import { SQL } from "bun";
 import { notifications } from "@altair/support";
 import { collectingCommitCallbacks } from "./after_commit.js";
 import { cachingQuery, clearQueryCache } from "./query_cache.js";
+import { withQueryLog } from "./query_logs.js";
 
 export type Adapter = "sqlite" | "postgres" | "mysql";
 
@@ -102,12 +103,22 @@ export class Connection {
     // a statement answered from memory reports nothing on the bus. A hit is
     // not a query, and counting it as one would make the request log say four
     // queries where the database saw one.
-    return await cachingQuery(sql, bindings, async () =>
-      notifications.instrument("sql.altair", { sql, bindings }, async () => {
-        const result = await this.#run(sql, bindings);
+    // Tagged inside the cache rather than outside it: the cache is keyed on the
+    // statement, and a comment naming the current action would make the same
+    // query a different key on every request — a cache that never hits.
+    //
+    // One variable, used for both the driver and the notification, so what is
+    // reported is what ran. Reporting the untagged statement would be a log
+    // that disagrees with the database's own, and would leave nothing able to
+    // observe whether the tag was applied at all.
+    return await cachingQuery(sql, bindings, async () => {
+      const tagged = withQueryLog(sql);
+
+      return await notifications.instrument("sql.altair", { sql: tagged, bindings }, async () => {
+        const result = await this.#run(tagged, bindings);
         return (Array.isArray(result) ? result : []) as T[];
-      }),
-    );
+      });
+    });
   }
 
   /** Runs a statement for its effect. */
@@ -117,8 +128,10 @@ export class Connection {
     // from before it — worse than having no cache at all.
     clearQueryCache();
 
-    await notifications.instrument("sql.altair", { sql, bindings }, async () => {
-      await this.#run(sql, bindings);
+    const tagged = withQueryLog(sql);
+
+    await notifications.instrument("sql.altair", { sql: tagged, bindings }, async () => {
+      await this.#run(tagged, bindings);
     });
   }
 

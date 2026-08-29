@@ -20,3 +20,4 @@ export * from "./normalizes.js";
 export * from "./attributes.js";
 export * from "./token_for.js";
 export * from "./attachables.js";
+export * from "./query_logs.js";
