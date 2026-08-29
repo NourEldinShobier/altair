@@ -185,10 +185,99 @@ export class Channel {
     this.socket.subscribe(topic);
   }
 
+  /**
+   * Stops streaming from one name. Rails' `stop_stream_from`.
+   *
+   * For a channel that follows something moving — the room a person is looking
+   * at, the order being watched. Without it the only way off a stream is off
+   * all of them, so switching rooms means unsubscribing from the presence
+   * stream too and quietly going offline.
+   */
+  stopStreamFrom(stream: string): void {
+    const at = this.#streams.indexOf(stream);
+    if (at === -1) return;
+
+    this.#streams.splice(at, 1);
+    this.socket.unsubscribe(topicFor(stream));
+  }
+
+  /** Stops streaming from a record's stream. Rails' `stop_stream_for`. */
+  stopStreamFor(model: unknown): void {
+    this.stopStreamFrom((this.constructor as typeof Channel).broadcastingFor(model));
+  }
+
   /** Stops streaming from everything this channel subscribed to. */
   stopAllStreams(): void {
     for (const stream of this.#streams) this.socket.unsubscribe(topicFor(stream));
     this.#streams = [];
+  }
+
+  #timers: ReturnType<typeof setInterval>[] = [];
+
+  /**
+   * Runs something on this channel every so often. Rails' `periodically`.
+   *
+   *     override async subscribed() {
+   *       this.streamFrom("dashboard")
+   *       this.periodically(() => this.transmit({ online: count() }), 5)
+   *     }
+   *
+   * For state that changes without anything to broadcast from — a count of who
+   * is online, a queue depth, a clock. The alternative is the client polling
+   * over HTTP, which is a request, a session lookup and a connection for every
+   * tick on every open tab.
+   *
+   * The interval is seconds, as Rails writes it. Timers are cleared when the
+   * subscription ends: a timer that outlives its socket transmits into a
+   * closed connection forever, and there is one per subscriber.
+   */
+  periodically(body: () => void | Promise<void>, everySeconds: number): void {
+    if (!(everySeconds > 0)) {
+      throw new Error(
+        `A periodic timer needs an interval greater than zero, not ${everySeconds}. A zero interval is a busy loop on the server for every subscriber.`,
+      );
+    }
+
+    const timer = setInterval(() => {
+      // Swallowed rather than left to reject: an unhandled rejection in a
+      // timer takes the process down, and one subscriber's failing tick is not
+      // a reason to drop every other connection on the server.
+      void (async () => {
+        try {
+          await body();
+        } catch (error) {
+          this.onPeriodicError(error);
+        }
+      })();
+    }, everySeconds * 1000);
+
+    // Or a channel with a timer keeps the process alive after everything else
+    // has finished — which is a test suite that hangs and a worker that will
+    // not shut down.
+    timer.unref?.();
+
+    this.#timers.push(timer);
+  }
+
+  /**
+   * What to do when a periodic tick throws. Overridable; logs by default.
+   *
+   * Somewhere rather than nowhere: a timer that fails silently every five
+   * seconds is a dashboard that stopped updating for a reason nobody can find.
+   */
+  protected onPeriodicError(error: unknown): void {
+    console.error("A periodic timer on %s failed:", this.identifier, error);
+  }
+
+  /**
+   * Clears this channel's periodic timers.
+   *
+   * Called for you when the subscription ends. Public because a channel that
+   * stops needing its timer before then should be able to say so.
+   */
+  clearTimers(): void {
+    for (const timer of this.#timers) clearInterval(timer);
+    this.#timers = [];
   }
 
   get streams(): readonly string[] {
