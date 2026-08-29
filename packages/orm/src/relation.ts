@@ -100,6 +100,15 @@ export interface RelationSource<T> {
    */
   resolveColumn?: (name: string) => string;
   /**
+   * Casts a raw row the way `instantiate` would.
+   *
+   * For the reads that hand back values rather than records — `pluck` — so
+   * they agree with the records. PostgreSQL returns a BIGINT as a string,
+   * because one can be larger than a JavaScript number holds, so `post.id` was
+   * a number and `pluck("id")` was a string for the same column.
+   */
+  castRow?: (row: Row) => Row;
+  /**
    * How to reach an association's table from this one.
    *
    * Supplied by the model, because only it knows the associations. A relation
@@ -1477,7 +1486,10 @@ export class Relation<T> implements PromiseLike<T[]> {
     const resolved = columns.map((column) => this.#resolve(column));
 
     const { sql, bindings } = this.select(...resolved).toSql();
-    const rows = await this.connection.query<Row>(sql, bindings);
+    const raw = await this.connection.query<Row>(sql, bindings);
+
+    // Cast, so plucked values agree with the same values read off a record.
+    const rows = this.#source.castRow ? raw.map((row) => this.#source.castRow!(row)) : raw;
 
     if (resolved.length === 1) return rows.map((row) => row[resolved[0] as string]);
     return rows.map((row) => resolved.map((column) => row[column]));

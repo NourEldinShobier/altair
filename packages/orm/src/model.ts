@@ -1132,6 +1132,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
             ),
           ),
         resolveColumn: (name) => this.resolveAttributeName(name),
+        castRow: (row) => this.castRow(row),
         joinFor: (name) => this.joinFor(name),
         preload: async (records, names) => {
           for (const name of names) {
@@ -1375,6 +1376,12 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         const model = Model<Record<string, unknown>>(table, { primaryKey: ownerKey });
         model.belongsTo(singular, target, { foreignKey: targetKey });
 
+        // The join model's own column types, so the ids these statements read
+        // back are cast the way a record's are. PostgreSQL returns a BIGINT as
+        // a string, so without this `post.tagIds()` answered `["1"]` where
+        // `tag.id` was `1` — and a form comparing the two matched nothing.
+        model.columnTypeCache = { [ownerKey]: "bigint", [targetKey]: "bigint" };
+
         return (resolved = { model, table, ownerKey, targetKey });
       };
 
@@ -1395,7 +1402,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
             [this[owner.primaryKey]],
           );
 
-          return rows.map((row) => row[targetKey]);
+          return rows.map((row) => join().model.castRow(row)[targetKey]);
         },
       });
 
@@ -1431,7 +1438,10 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
                   `SELECT ${connection.quote(targetKey)} FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(0)}`,
                   [id],
                 )
-              ).map((row) => row[targetKey]),
+              )
+                // Cast, or the diff below compares a string against a number
+                // and decides every link is both new and gone.
+                .map((row) => join().model.castRow(row)[targetKey]),
             );
 
             const wanted = new Set(ids);
