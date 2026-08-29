@@ -12,9 +12,10 @@
  * things, and the first version of this had one without the other.
  */
 
-import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, connect } from "@altair/orm";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { Connection } from "@altair/orm";
 import { DatabaseQueue, Job, createJobsTable } from "../src/index.js";
+import { queueConnection, releaseConnection } from "./support/database.js";
 
 class Batch extends Job {
   static override priority = 10;
@@ -46,7 +47,7 @@ const drain = async (name = "default"): Promise<string[]> => {
 };
 
 beforeEach(async () => {
-  connection = await connect(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await queueConnection();
   await connection.execute("DROP TABLE IF EXISTS altair_jobs");
   await createJobsTable(connection as never);
 
@@ -54,6 +55,10 @@ beforeEach(async () => {
   Job.adapter = queue;
   Job.resetRegistry();
   Job.register(Batch as typeof Job, Reset as typeof Job, Ordinary as typeof Job);
+});
+
+afterEach(async () => {
+  await releaseConnection(connection);
 });
 
 describe("a class with a priority", () => {
@@ -124,10 +129,18 @@ describe("a table created before priority existed", () => {
   it("gains the column", async () => {
     await connection.execute("DROP TABLE IF EXISTS altair_jobs");
 
-    // The table as it was, without the column.
+    // The table as it was, without the column. The primary key is spelled per
+    // adapter: `AUTOINCREMENT` is SQLite's and a syntax error on the other two,
+    // which is what this test did until it ran anywhere else.
+    const key = {
+      sqlite: "id INTEGER PRIMARY KEY AUTOINCREMENT",
+      postgres: "id BIGSERIAL PRIMARY KEY",
+      mysql: "id BIGINT AUTO_INCREMENT PRIMARY KEY",
+    }[connection.adapter];
+
     await connection.execute(
       `CREATE TABLE altair_jobs (
-         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         ${key},
          job_id VARCHAR(255) NOT NULL,
          job_class VARCHAR(255) NOT NULL,
          arguments TEXT NOT NULL,
