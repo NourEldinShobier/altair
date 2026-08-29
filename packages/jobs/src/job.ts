@@ -16,6 +16,7 @@
  * enqueued it, and may not exist yet.
  */
 
+import { Continuation, type ContinuationState, type StepContext } from "./continuable.js";
 import { serializeArguments } from "./serializers.js";
 import {
   runCallbacks,
@@ -73,6 +74,14 @@ export interface JobPayload {
    * in.
    */
   priority: number;
+  /**
+   * What a continuable job finished before it was interrupted.
+   *
+   * Absent on a job that has never been interrupted, which is nearly all of
+   * them — a payload that carried an empty one would put the machinery in
+   * every queue row for the benefit of the few jobs that use it.
+   */
+  continuation?: ContinuationState;
 }
 
 export interface EnqueueOptions {
@@ -213,8 +222,52 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
    */
   declare payload?: JobPayload;
 
+  /**
+   * Set by the runner for a job that is being performed. Rails' continuation.
+   *
+   * Absent when a job is performed directly, so `step` outside a worker simply
+   * runs every step in order — which is what a test wants, and what makes a
+   * continuable job no harder to call than any other.
+   */
+  declare continuation?: Continuation;
+
   static {
     this.defineCallbacks(["perform", "enqueue"]);
+  }
+
+  /**
+   * Runs a named piece of work once across every attempt. Rails' `step`.
+   *
+   *     await this.step("process", async (step) => {
+   *       for (const id of await pending(step.cursor)) {
+   *         await handle(id)
+   *         await step.advance(id)
+   *       }
+   *     })
+   *
+   * A step that finished on an earlier attempt is skipped; the one that was
+   * interrupted resumes from the cursor it last recorded. Outside a worker
+   * there is nothing to resume from and every step simply runs.
+   */
+  async step(name: string, body: (step: StepContext) => unknown | Promise<unknown>): Promise<void> {
+    if (this.continuation) return await this.continuation.step(name, body);
+
+    await body({ name, cursor: undefined, advance: async () => {}, set: () => {} });
+  }
+
+  /**
+   * Stops here if the worker is shutting down. Rails' `checkpoint!`.
+   *
+   * For the work between steps, and for a step whose progress is not a cursor.
+   * Does nothing outside a worker.
+   */
+  checkpoint(): void {
+    this.continuation?.checkpoint();
+  }
+
+  /** Whether the worker has asked this job to stop. Rails' `stopping?`. */
+  get stopping(): boolean {
+    return this.continuation?.stopping ?? false;
   }
 
   /**
@@ -309,6 +362,24 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
     ...args: A
   ): Promise<unknown> {
     const job = new this();
+    return await runCallbacks(job, "perform", async () => await job.perform(...args));
+  }
+
+  /**
+   * The same, with the state a continuable job resumes from.
+   *
+   * Separate from `performNow` so calling a job directly stays a one-liner:
+   * the continuation is the runner's business, and a test that just wants the
+   * job to run should not have to construct one.
+   */
+  static async performNowWith<A extends unknown[]>(
+    this: { new (): { perform(...args: A): unknown; continuation?: Continuation } },
+    continuation: Continuation,
+    ...args: A
+  ): Promise<unknown> {
+    const job = new this();
+    job.continuation = continuation;
+
     return await runCallbacks(job, "perform", async () => await job.perform(...args));
   }
 
