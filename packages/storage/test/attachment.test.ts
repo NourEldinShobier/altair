@@ -26,6 +26,7 @@ import {
   StorageBlob,
   storageService,
 } from "../src/index.js";
+import { releaseConnection, storageConnection } from "./support/database.js";
 
 interface UserRow {
   id: number;
@@ -81,7 +82,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "altair-attach-"));
   configureStorage({ services: { disk: new DiskService({ root }) }, default: "disk" });
 
-  connection = new Connection("sqlite://:memory:");
+  connection = await storageConnection();
   setConnection(connection);
 
   for (const model of [StorageBlob, Attachment, User, Team, Archive, Gallery]) {
@@ -98,6 +99,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await releaseConnection(connection);
   resetStorage();
   await rm(root, { recursive: true, force: true });
 });

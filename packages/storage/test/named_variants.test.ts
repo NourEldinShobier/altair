@@ -15,6 +15,7 @@ import {
   resetNamedVariants,
   transformationsFor,
 } from "../src/named_variants.js";
+import { releaseConnection, storageConnection } from "./support/database.js";
 
 beforeEach(() => {
   resetNamedVariants();
@@ -85,10 +86,10 @@ describe("asking for one", () => {
  */
 describe("declared on a model", () => {
   it("is remembered by the attachment declaration", async () => {
-    const { Model, Connection, SchemaStatements, setConnection } = await import("@altair/orm");
+    const { Model, SchemaStatements, setConnection } = await import("@altair/orm");
     const { hasOneAttached } = await import("../src/attachment.js");
 
-    const connection = new Connection("sqlite://:memory:");
+    const connection = await storageConnection();
     setConnection(connection);
     await new SchemaStatements(connection).createTable("people", (t) => t.string("name"));
 
@@ -106,6 +107,6 @@ describe("declared on a model", () => {
 
     expect(namedVariant("Person", "avatar", "square")).toEqual({ resize: [64, 64] });
 
-    await connection.close();
+    await releaseConnection(connection);
   });
 });
