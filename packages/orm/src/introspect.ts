@@ -49,8 +49,8 @@ export async function introspect(connection: Connection): Promise<SchemaDefiniti
   for (const name of names) {
     tables.push({
       name,
-      columns: await columnsOf(connection, name),
-      indexes: await indexesOf(connection, name),
+      columns: await columnSchemas(connection, name),
+      indexes: await indexSchemas(connection, name),
     });
   }
 
@@ -94,7 +94,10 @@ export async function tableNames(connection: Connection): Promise<string[]> {
   }
 }
 
-async function columnsOf(connection: Connection, table: string): Promise<ColumnSchema[]> {
+export async function columnSchemas(
+  connection: Connection,
+  table: string,
+): Promise<ColumnSchema[]> {
   if (connection.adapter === "sqlite") {
     const rows = await connection.query<Row>(`PRAGMA table_info(${connection.quote(table)})`);
 
@@ -142,7 +145,7 @@ async function primaryKeysOf(connection: Connection, table: string): Promise<str
   return rows.map((row) => String(row.name));
 }
 
-async function indexesOf(connection: Connection, table: string): Promise<IndexSchema[]> {
+export async function indexSchemas(connection: Connection, table: string): Promise<IndexSchema[]> {
   if (connection.adapter === "postgres") return await postgresIndexes(connection, table);
   if (connection.adapter === "mysql") return await mysqlIndexes(connection, table);
 
