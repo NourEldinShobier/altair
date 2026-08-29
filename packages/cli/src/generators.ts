@@ -254,9 +254,9 @@ export function generateController(name: string, actions: string[] = []): Genera
 
   return {
     path: `app/controllers/${resource}_controller.ts`,
-    contents: `import { Controller } from "@altair/controller";
+    contents: `import { ApplicationController } from "#controllers/application_controller";
 
-export class ${className} extends Controller {
+export class ${className} extends ApplicationController {
 ${methods}
 }
 `,
@@ -281,10 +281,11 @@ export function generateResourceController(name: string, fields: FieldSpec[]): G
 
   return {
     path: `app/controllers/${resource}_controller.ts`,
-    contents: `import { Controller, beforeAction } from "@altair/controller";
+    contents: `import { beforeAction } from "@altair/controller";
+import { ApplicationController } from "#controllers/application_controller";
 import { ${model} } from "#models/${underscore(singularize(name))}";
 
-export class ${controllerName} extends Controller {
+export class ${controllerName} extends ApplicationController {
   @beforeAction({ only: ["show", "update", "destroy"] })
   async load${model}(): Promise<void> {
     this.${variable} = await ${model}.find(this.params.get("id"));

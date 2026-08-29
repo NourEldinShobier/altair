@@ -233,10 +233,34 @@ export default function routes(r: Mapper): void {
 `,
     },
     {
-      path: "app/controllers/home_controller.ts",
+      path: "app/controllers/application_controller.ts",
       contents: `import { Controller } from "@altair/controller";
 
-export class HomeController extends Controller {
+/**
+ * What every controller in this application inherits.
+ *
+ * Filters, rescues and flash types declared here apply everywhere, which is
+ * the point: a rule that has to hold for every request should be written once.
+ */
+export class ApplicationController extends Controller {
+  static {
+    // Turns away browsers too old to run what this application ships. Such a
+    // browser does not fail visibly — it renders the page, silently drops
+    // whatever needed the features it lacks, and the person using it sees a
+    // site that is subtly broken with nothing to explain why.
+    //
+    // Remove this if you support older browsers, or narrow it with
+    // \`{ only: [...] }\` to leave public pages reachable.
+    this.allowBrowser({ versions: "modern" });
+  }
+}
+`,
+    },
+    {
+      path: "app/controllers/home_controller.ts",
+      contents: `import { ApplicationController } from "#controllers/application_controller";
+
+export class HomeController extends ApplicationController {
   index(): void {
     this.render.json({ message: "Welcome aboard" });
   }
@@ -300,7 +324,14 @@ SECRET_KEY_BASE=
     },
     {
       path: "config/environments/development.ts",
-      contents: `import type { ApplicationConfig } from "@altair/core";
+      contents: `import { configureQueryLogs } from "@altair/orm";
+import type { ApplicationConfig } from "@altair/core";
+
+// Every SQL statement carries a comment naming the controller and action that
+// issued it, so a slow query in the log says which code produced it. Off in
+// production by default: the comment defeats a prepared-statement cache keyed
+// on the statement text.
+configureQueryLogs({ tags: ["application", "controller", "action"], application: "${appName}" });
 
 // What changes in development. Everything else comes from the defaults.
 export default {
