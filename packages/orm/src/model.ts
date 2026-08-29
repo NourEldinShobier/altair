@@ -359,6 +359,10 @@ export interface BaseModelInstance<A> {
   decrement(column: keyof A & string, by?: number): Promise<unknown>;
   toggle(column: keyof A & string): Promise<unknown>;
   hasSavedChange(attribute?: keyof A & string): boolean;
+  isAssociationLoaded(name: string): boolean;
+  reloadAssociation(name: string): this;
+  loadedAssociations(): string[];
+  readonly isPreviouslyNewRecord: boolean;
   strictLoading(on?: boolean): this;
   readonly isStrictLoading: boolean;
   previousChanges(): Record<string, [unknown, unknown]>;
@@ -2396,6 +2400,54 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     /** Whether this record refuses lazy association loads. */
     get isStrictLoading(): boolean {
       return this[STRICT_LOADING] === true;
+    }
+
+    /**
+     * Whether an association is already in memory. Rails'
+     * `association(:comments).loaded?`.
+     *
+     * The question `strictLoading` makes worth asking: a helper that reads
+     * `post.author` is safe on a preloaded record and a violation on any other,
+     * and this is how it can tell without provoking one.
+     */
+    isAssociationLoaded(name: string): boolean {
+      (this.constructor as typeof BaseModel).associationFor(name);
+
+      return (this as unknown as Record<string, unknown>)[cacheKey(name)] !== undefined;
+    }
+
+    /**
+     * Forgets a loaded association so the next read fetches it again. Rails'
+     * `association(:comments).reload`.
+     *
+     * For after a write that the association cannot have seen — a job inserted
+     * a comment, a counter moved — where the record is otherwise still good and
+     * reloading the whole thing would throw away everything else it holds.
+     */
+    reloadAssociation(name: string): this {
+      (this.constructor as typeof BaseModel).associationFor(name);
+      delete (this as unknown as Record<string, unknown>)[cacheKey(name)];
+
+      return this;
+    }
+
+    /** Every association currently in memory, by name. */
+    loadedAssociations(): string[] {
+      const klass = this.constructor as typeof BaseModel;
+
+      return Object.keys(klass.associations).filter((name) => this.isAssociationLoaded(name));
+    }
+
+    /**
+     * Whether the save that just ran was the one that created this record.
+     * Rails' `previously_new_record?`.
+     *
+     * What an `afterSave` callback asks to tell a create from an update. By the
+     * time it runs the record is persisted either way, so `isNewRecord` is
+     * false for both and the callback has no way to know which happened.
+     */
+    get isPreviouslyNewRecord(): boolean {
+      return this[WAS_NEW] === true;
     }
 
     get isNewRecord(): boolean {
