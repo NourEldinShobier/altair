@@ -155,6 +155,18 @@ export class Flash {
   }
 
   /**
+   * What is queued for the next request. Rails has no name for this.
+   *
+   * `toObject` answers what this request should show; this answers what the
+   * next one will. The two are different collections and reading the first
+   * when you meant the second is a test that passes for the wrong reason —
+   * which is exactly what happened writing the redirect tests.
+   */
+  pending(): Data {
+    return { ...this.#next };
+  }
+
+  /**
    * Stores what was set for the next request and drops what was read.
    *
    * The sweep is why a flash does not survive two redirects.
