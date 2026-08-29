@@ -9,9 +9,15 @@
  * reserve space before they load, and the alternative to storing them is
  * downloading a hundred images to measure them.
  *
- * Rails runs this in a background job after an upload. So can this, since
- * `analyzeLater` is `analyze` on a queue — the work is the same and only the
- * waiting differs.
+ * Rails runs this in a background job after an upload, because by then it has
+ * only the blob and has to download the bytes again to measure them. An upload
+ * through `createBlob` still has those bytes in hand, so it measures them there
+ * and the job is not needed at all — which is why analysis is not deferred by
+ * default here.
+ *
+ * `analyzeLater` is for the one case that does need it: a direct upload, where
+ * the bytes went from the browser to the service and this process never saw
+ * them.
  */
 
 import type { StorageBlob } from "./blob.js";
@@ -88,4 +94,41 @@ export async function analyze(blob: StorageBlob): Promise<Analysis | null> {
   await blob.save();
 
   return analysis;
+}
+
+/** Where deferred analysis goes. Supplied by the application, as the mailer's queue is. */
+export type AnalysisQueue = (blob: StorageBlob) => unknown | Promise<unknown>;
+
+let queue: AnalysisQueue | undefined;
+
+/**
+ * Sets what `analyzeLater` hands a blob to.
+ *
+ * Registered rather than imported: storage has no business depending on the
+ * job queue, and an application that analyses some other way should be able to
+ * say so.
+ */
+export function configureAnalysis(options: { queue: AnalysisQueue | undefined }): void {
+  queue = options.queue;
+}
+
+/**
+ * Analyses a blob out of band. Rails' `analyze_later`.
+ *
+ * For a direct upload, where the bytes went from the browser to the service
+ * and this process never saw them — measuring one means downloading it, which
+ * is not something to do while a request is waiting.
+ *
+ * With no queue configured it analyses inline. That is slower than deferring
+ * and much better than not analysing at all: a blob whose dimensions are never
+ * read is one every image tag has to guess at, and silently doing nothing is
+ * how a feature ends up shipped and unused.
+ */
+export async function analyzeLater(blob: StorageBlob): Promise<void> {
+  if (queue) {
+    await queue(blob);
+    return;
+  }
+
+  await analyze(blob);
 }

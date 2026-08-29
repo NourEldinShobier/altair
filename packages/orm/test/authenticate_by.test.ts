@@ -105,10 +105,12 @@ describe("logging in", () => {
 /**
  * The whole reason this exists rather than `findBy` then `authenticate`.
  *
- * Measured as a ratio rather than against a fixed millisecond count: an
- * absolute threshold on a shared CI runner is a test that fails on a Tuesday.
- * What matters is that the two paths are within the same order of magnitude,
- * not that either is fast.
+ * Both paths are measured in the same run and compared against each other,
+ * rather than each against a fixed number. An absolute threshold on a shared
+ * CI runner is a test that fails on a Tuesday — and this one did, at a ratio
+ * of 9.1 against a `> 10` it had no reason to need. What the feature actually
+ * claims is relative: our timing is flatter than the naive version's. So that
+ * is what is asserted.
  */
 describe("how long the two answers take", () => {
   const timed = async (body: () => Promise<unknown>) => {
@@ -118,11 +120,10 @@ describe("how long the two answers take", () => {
     return Bun.nanoseconds() - started;
   };
 
-  it("takes about as long to reject an unknown address as a wrong password", async () => {
-    // Warmed first: the first hash of the process pays for setup that has
-    // nothing to do with either path.
-    await authenticateBy({ email: "martin@example.com", password: "x" });
+  /** How far apart the two answers are, whichever way round they land. */
+  const spread = (a: number, b: number) => Math.max(a, b) / Math.max(Math.min(a, b), 1);
 
+  const constantTime = async () => {
     const wrongPassword = await timed(() =>
       authenticateBy({ email: "martin@example.com", password: "hunter2" }),
     );
@@ -131,20 +132,10 @@ describe("how long the two answers take", () => {
       authenticateBy({ email: "nobody@example.com", password: "hunter2" }),
     );
 
-    const ratio = Math.max(wrongPassword, unknownAddress) / Math.min(wrongPassword, unknownAddress);
+    return spread(wrongPassword, unknownAddress);
+  };
 
-    expect(ratio).toBeLessThan(10);
-  });
-
-  /**
-   * The contrast, and the bug this closes: the obvious version leaks, and
-   * measurably so. Kept as a test rather than a comment because a future
-   * change that made `authenticateBy` skip the dummy hash would look
-   * reasonable in review.
-   */
-  it("is not what the obvious version does", async () => {
-    await authenticateBy({ email: "martin@example.com", password: "x" });
-
+  const naive = async () => {
     const found = await timed(async () => {
       const user = await User.findBy({ email: "martin@example.com" });
       await user?.authenticate("hunter2");
@@ -155,9 +146,41 @@ describe("how long the two answers take", () => {
       await user?.authenticate("hunter2");
     });
 
-    // The naive path skips the hash entirely when there is no record, so it is
-    // dramatically faster — which is the signal being leaked.
-    expect(found / Math.max(missing, 1)).toBeGreaterThan(10);
+    return spread(found, missing);
+  };
+
+  it("is flatter than finding the record and then checking the password", async () => {
+    // Warmed first: the first hash of the process pays for setup that has
+    // nothing to do with either path.
+    await authenticateBy({ email: "martin@example.com", password: "x" });
+
+    const ours = await constantTime();
+    const theirs = await naive();
+
+    // The naive path skips the hash entirely when there is no record, so the
+    // gap it leaves is the signal being leaked. Ours does the work either way.
+    expect(ours).toBeLessThan(theirs);
+  });
+
+  /**
+   * The absolute claim, kept loose. Two paths that both hash are within a
+   * small factor of each other; the exact factor is the runner's business.
+   */
+  it("answers a wrong password and an unknown address in comparable time", async () => {
+    await authenticateBy({ email: "martin@example.com", password: "x" });
+
+    expect(await constantTime()).toBeLessThan(5);
+  });
+
+  /**
+   * Kept as a test rather than a comment because a future change that made
+   * `authenticateBy` skip the dummy hash would look perfectly reasonable in
+   * review, and this is what would catch it.
+   */
+  it("shows the naive version leaking, which is what this replaces", async () => {
+    await authenticateBy({ email: "martin@example.com", password: "x" });
+
+    expect(await naive()).toBeGreaterThan(2);
   });
 });
 

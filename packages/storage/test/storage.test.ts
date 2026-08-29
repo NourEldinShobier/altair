@@ -255,7 +255,10 @@ describe("blobs", () => {
       metadata: { width: 100, height: 50 },
     });
 
-    expect(blob.metadataObject()).toEqual({ width: 100, height: 50 });
+    // `analyzed` joins it now: a blob is measured at upload, where the bytes
+    // are already in hand. These bytes are not a real PNG, so the measurement
+    // finds nothing and the caller's own values stand.
+    expect(blob.metadataObject()).toEqual({ width: 100, height: 50, analyzed: true });
   });
 
   it("treat unreadable metadata as none", async () => {
