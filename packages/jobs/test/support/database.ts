@@ -15,21 +15,31 @@ import { connect, type Connection } from "@altair/orm";
 export const TEST_DATABASE_URL = process.env.ALTAIR_TEST_DATABASE_URL ?? "sqlite://:memory:";
 export const isSqlite = TEST_DATABASE_URL.startsWith("sqlite");
 
-let shared: Connection | undefined;
+let previous: Connection | undefined;
 
 /**
  * A connection with an empty jobs table.
  *
- * On SQLite that is a new in-memory database each time. On a server it is one
- * pool, reused — these tests had no teardown at all, and a pool per test would
- * exhaust the server's connections long before the file finished.
+ * On SQLite that is a new in-memory database each time. On a server it is a
+ * fresh pool with the previous one closed — which is what the ORM's harness
+ * does, and for a reason these tests hit immediately: PostgreSQL caches a
+ * prepared statement's plan per connection and refuses to run it once the
+ * table it was planned against has been dropped and rebuilt. These tests drop
+ * and rebuild `altair_jobs` between cases, so a reused pool answers
+ * `cached plan must not change result type`.
+ *
+ * Closing the previous one is what keeps a pool per test from exhausting the
+ * server's connections — these files had no teardown at all before.
  */
 export async function queueConnection(): Promise<Connection> {
   if (isSqlite) return (await connect(TEST_DATABASE_URL)) as Connection;
 
-  shared ??= (await connect(TEST_DATABASE_URL)) as Connection;
+  const opened = (await connect(TEST_DATABASE_URL)) as Connection;
 
-  return shared;
+  await previous?.close();
+  previous = opened;
+
+  return opened;
 }
 
 /** Closes what a test opened, where there is anything to close. */
