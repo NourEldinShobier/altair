@@ -14,12 +14,20 @@ import {
   SchemaStatements,
   UnsupportedSchemaChange,
 } from "../src/index.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 let connection: Connection;
 let schema: SchemaStatements;
 
+/**
+ * Run against whichever database the suite is pointed at, because the three
+ * adapters differ in kind here rather than only in syntax — Postgres alters a
+ * column in place, MySQL restates its whole definition, SQLite rebuilds the
+ * table. A branch that never executes is a branch nobody has checked, which is
+ * the whole reason Rails runs its own suite against all three.
+ */
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   schema = new SchemaStatements(connection);
 
   await schema.createTable("users", (t) => t.string("name"));
@@ -31,7 +39,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await connection.close();
+  // A server connection is one shared pool that `testConnection` empties and
+  // replaces; closing it here would pull it out from under the next file.
+  if (isSqlite) await connection.close();
 });
 
 const columnNamed = async (table: string, name: string) =>
@@ -67,6 +77,8 @@ describe("changing a column's type", () => {
   it("changes it", async () => {
     await schema.changeColumn("posts", "views", "integer");
 
+    // Every one of the three spells an integer with "int" somewhere — INTEGER,
+    // int(11), integer — which is as much as a portable assertion can say.
     expect((await columnNamed("posts", "views"))?.type.toUpperCase()).toContain("INT");
   });
 
@@ -123,7 +135,9 @@ describe("changing a column's type", () => {
     ).rejects.toThrow();
   });
 
-  it("keeps a foreign key across the rebuild", async () => {
+  it.skipIf(!isSqlite)("keeps a foreign key across the rebuild", async () => {
+    // SQLite only: the other two never rebuild, so there is nothing to lose,
+    // and reading their foreign keys is a different query in each.
     await schema.createTable("comments", (t) => {
       t.integer("post_id");
       t.string("body");
@@ -245,10 +259,16 @@ describe("several changes at once", () => {
    * so rather than failing with a driver syntax error — the answer is a
    * different migration, not a different database.
    */
-  it("says why a foreign key cannot be added on SQLite", async () => {
+  it.skipIf(!isSqlite)("says why a foreign key cannot be added on SQLite", async () => {
     await expect(
       schema.changeTable("posts", (t) => t.reference("user", { foreignKey: true })),
     ).rejects.toThrow(/cannot add a foreign key/);
+  });
+
+  it.skipIf(isSqlite)("adds a foreign key where the database allows it", async () => {
+    await schema.changeTable("posts", (t) => t.reference("user", { foreignKey: true }));
+
+    expect(await schema.columnExists("posts", "user_id")).toBe(true);
   });
 
   it("adds an index and takes it away again", async () => {
