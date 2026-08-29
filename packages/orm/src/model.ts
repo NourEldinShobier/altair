@@ -425,6 +425,34 @@ export class StrictLoadingViolation extends Error {
   }
 }
 
+/**
+ * Whether an error is a unique-constraint violation.
+ *
+ * Matched on the codes the three databases use rather than on the message: a
+ * message is localised, changes between versions, and differs per driver.
+ * SQLite says SQLITE_CONSTRAINT_UNIQUE, PostgreSQL says 23505, MySQL says 1062.
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  const code = String((error as { code?: unknown }).code ?? "");
+  const errno = Number((error as { errno?: unknown }).errno ?? NaN);
+
+  if (code.includes("SQLITE_CONSTRAINT_UNIQUE") || code.includes("SQLITE_CONSTRAINT_PRIMARYKEY")) {
+    return true;
+  }
+
+  if (code === "23505") return true;
+  if (errno === 1062) return true;
+
+  // Bun's SQLite driver reports the generic constraint code and puts the kind
+  // in the message, so this is the one place the message is consulted — and
+  // only after the codes have had their chance.
+  const message = String((error as { message?: unknown }).message ?? "");
+
+  return code === "SQLITE_CONSTRAINT" && /UNIQUE constraint failed/i.test(message);
+}
+
 export function Model<A extends object>(tableName?: string, options: ModelOptions = {}) {
   class BaseModel extends Callbacks {
     static tableName = tableName ?? "";
@@ -2135,6 +2163,83 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       if (existing) return existing as InstanceType<M>;
 
       return await this.create({ ...(conditions as Partial<A>), ...extra });
+    }
+
+    /**
+     * Rails' `create_or_find_by`: insert first, and fall back to the row that
+     * was already there.
+     *
+     * `findOrCreateBy` has a race and cannot not have one: two requests both
+     * find nothing, both insert, and one gets a duplicate-key error — or worse,
+     * two rows exist where the schema meant one. The window is small and the
+     * traffic is not.
+     *
+     * This turns the race around. The insert is attempted first, and a unique
+     * violation means somebody else won, so the row is read instead. The
+     * database arbitrates rather than the application, which is the only place
+     * the question can be settled.
+     *
+     * It needs a unique index on the columns being matched. Without one there
+     * is no violation to catch and this is `create` with extra steps — so a
+     * failure that is not a duplicate is re-raised rather than swallowed.
+     */
+    static async createOrFindBy<M extends typeof BaseModel>(
+      this: M,
+      conditions: Conditions,
+      extra: Partial<A> = {},
+    ): Promise<InstanceType<M>> {
+      try {
+        return await this.create({ ...(conditions as Partial<A>), ...extra });
+      } catch (error) {
+        // Two checks, and the second is the one that guarantees correctness.
+        // This first one avoids a pointless SELECT after an error that was
+        // never a duplicate, and says in one line what this catch is for.
+        if (!isUniqueViolation(error)) throw error;
+
+        const existing = await this.findBy(conditions);
+
+        // Nothing there after a unique violation means the constraint that
+        // fired was a different one — a NOT NULL, another index — and
+        // returning null would turn that into a mystery somewhere else. This
+        // is what makes a misjudged error safe rather than silent.
+        if (!existing) throw error;
+
+        return existing as InstanceType<M>;
+      }
+    }
+
+    /**
+     * Destroys everything matching, one at a time. Rails' `destroy_by`.
+     *
+     * One at a time because each record's callbacks are the difference between
+     * this and `deleteBy` — a destroyed post should still take its comments
+     * and its attachments with it.
+     */
+    static async destroyBy<M extends typeof BaseModel>(
+      this: M,
+      conditions: Conditions,
+    ): Promise<number> {
+      const records = await this.where(conditions);
+
+      for (const record of records) {
+        await (record as unknown as { destroy(): Promise<unknown> }).destroy();
+      }
+
+      return records.length;
+    }
+
+    /**
+     * Deletes everything matching in one statement. Rails' `delete_by`.
+     *
+     * No callbacks, no validations, no associations followed. For rows nothing
+     * else points at — a session table, an expired token — where running a
+     * callback chain per row is the difference between a second and an hour.
+     */
+    static async deleteBy<M extends typeof BaseModel>(
+      this: M,
+      conditions: Conditions,
+    ): Promise<number> {
+      return await this.where(conditions).deleteAll();
     }
 
     /** Rails' `find_or_initialize_by`: the same lookup, without saving. */
@@ -3942,6 +4047,11 @@ export interface ModelClass<A extends object> {
     conditions: Conditions,
     extra?: Partial<A>,
   ): Promise<T>;
+  createOrFindBy<T>(
+    this: ModelConstructor<A, T>,
+    conditions: Conditions,
+    extra?: Partial<A>,
+  ): Promise<T>;
   transaction<R>(body: () => Promise<R>): Promise<R>;
   destroyAll(conditions?: Conditions): Promise<number>;
   scope(name: string, body: (relation: Relation<unknown>) => Relation<unknown>): void;
@@ -3984,6 +4094,8 @@ export interface ModelClass<A extends object> {
     through: string,
     options?: AssociationOptions & { source?: string },
   ): void;
+  destroyBy(conditions: Conditions): Promise<number>;
+  deleteBy(conditions: Conditions): Promise<number>;
   strictLoadingByDefault: boolean;
   attributeAliases: Record<string, string>;
   aliasAttribute(alias: string, column: string): void;

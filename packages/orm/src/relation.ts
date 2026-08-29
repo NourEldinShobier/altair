@@ -1649,12 +1649,21 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   /** Deletes every matching row without instantiating or running callbacks. */
-  async deleteAll(): Promise<void> {
-    if (this.#none) return;
+  /**
+   * Deletes every matching row in one statement, and answers how many.
+   *
+   * The count is Rails' — `delete_all` returns it — and it is the only way a
+   * caller can tell "deleted nothing because nothing matched" from "deleted
+   * nothing because the conditions were wrong". This returned void, so it
+   * could not.
+   */
+  async deleteAll(): Promise<number> {
+    if (this.#none) return 0;
 
     checkWritable("delete");
     const where = this.#whereClause();
     const statement = `DELETE FROM ${this.connection.quote(this.#source.tableName)}${where.sql}`;
-    await this.connection.execute(this.#renumber(statement), where.bindings);
+
+    return await this.connection.executeCount(this.#renumber(statement), where.bindings);
   }
 }
