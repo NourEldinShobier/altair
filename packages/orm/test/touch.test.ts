@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
 import { travelTo } from "@altair/support";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -43,7 +44,7 @@ class Bare extends Model<{ id: number; name: string }>("bares") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   for (const model of [Post, Comment, Bare]) {

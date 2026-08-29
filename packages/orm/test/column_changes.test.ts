@@ -17,6 +17,7 @@ import {
   UnsupportedSchemaChange,
   setConnection,
 } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 let connection: Connection;
 let schema: SchemaStatements;
@@ -24,7 +25,7 @@ let schema: SchemaStatements;
 const sqlite = () => connection.adapter === "sqlite";
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   schema = new SchemaStatements(connection);
 

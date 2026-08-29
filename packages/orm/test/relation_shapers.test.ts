@@ -11,6 +11,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -25,7 +26,7 @@ let connection: Connection;
 const sqlOf = (relation: { toSql(): { sql: string } }) => relation.toSql().sql;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;

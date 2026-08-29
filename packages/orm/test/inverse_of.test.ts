@@ -12,6 +12,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { notifications } from "@altair/support";
 import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -70,7 +71,7 @@ const queriesFor = async (body: () => Promise<unknown>): Promise<number> => {
 };
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   for (const model of [Post, Comment]) {

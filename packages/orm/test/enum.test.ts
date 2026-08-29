@@ -16,6 +16,7 @@ import {
   setConnection,
   UnknownEnumValue,
 } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 // The attributes interface describes what the application works with, which
 // for an enum is the word. Turning it into the integer the column holds is
@@ -49,7 +50,7 @@ class Post extends Model<PostRow>("posts") {
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;

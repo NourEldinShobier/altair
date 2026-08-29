@@ -21,6 +21,7 @@ import {
   isCacheable,
 } from "../src/index.js";
 import { notifications } from "@altair/support";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -34,7 +35,7 @@ let queries: string[];
 let subscription: { unsubscribe(): void };
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;

@@ -20,7 +20,7 @@ import {
   setConnection,
   UnsupportedBulkWrite,
 } from "../src/index.js";
-import { isSqlite, testConnection } from "./support/database.js";
+import { testConnection } from "./support/database.js";
 
 interface WidgetRow {
   id: number;
@@ -36,7 +36,7 @@ class Widget extends Model<WidgetRow>("widgets") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Widget.columnCache = undefined;
   Widget.columnTypeCache = undefined;

@@ -19,6 +19,7 @@ import {
   SchemaStatements,
   setConnection,
 } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface AccountRow {
   id: number;
@@ -31,7 +32,7 @@ class Account extends Model<AccountRow>("accounts") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Account.columnCache = undefined;
   Account.columnTypeCache = undefined;

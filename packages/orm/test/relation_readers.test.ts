@@ -12,6 +12,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { notifications } from "@altair/support";
 import { Connection, Model, SchemaStatements, beforeDestroy, setConnection } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -45,7 +46,7 @@ const countingQueries = async <T>(body: () => Promise<T>): Promise<[T, number]> 
 };
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;

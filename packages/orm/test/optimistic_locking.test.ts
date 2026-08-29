@@ -24,6 +24,7 @@ import {
   StaleObjectError,
   setConnection,
 } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -46,7 +47,7 @@ let connection: Connection;
 const readAgain = async (post: Post): Promise<Post> => (await Post.findBy({ id: post.id })) as Post;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   for (const model of [Post, Note]) {

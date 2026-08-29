@@ -11,6 +11,7 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface UserRow {
   id: number;
@@ -40,7 +41,7 @@ class User extends Model<UserRow>("users") {
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   User.columnCache = undefined;
   User.columnTypeCache = undefined;

@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { errors } from "@altair/support";
 import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface OrderRow {
   id: number;
@@ -62,7 +63,7 @@ let connection: Connection;
 
 beforeEach(async () => {
   events = [];
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Order.columnCache = undefined;
   Order.columnTypeCache = undefined;
