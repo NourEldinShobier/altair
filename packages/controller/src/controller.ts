@@ -103,6 +103,12 @@ import {
 import { clientIp, type ClientIpOptions } from "./client_ip.js";
 import { sendData, sendFile, type SendOptions } from "./send.js";
 import { decodeBasic, requestAuthentication, type Credentials } from "./basic_auth.js";
+import {
+  browserAllowed,
+  browserBlockedResponse,
+  versionsFor,
+  type AllowBrowserOptions,
+} from "./allow_browser.js";
 
 /** A copy of a response with extra headers. Response headers are immutable. */
 function withHeaders(response: Response, extra: Record<string, string>): Response {
@@ -702,6 +708,42 @@ export class Controller extends Callbacks {
   /** Rails' `head`: a response with a status and no body. */
   head(status: number, headers: Record<string, string> = {}): Response {
     return this.#setResponse(new Response(null, { status, headers }));
+  }
+
+  /**
+   * Turns away browsers too old to run the application. Rails' `allow_browser`.
+   *
+   *     class ApplicationController extends Controller {
+   *       static { this.allowBrowser({ versions: "modern" }) }
+   *     }
+   *
+   * A browser that cannot run the JavaScript an application ships does not
+   * fail visibly: it renders the page, silently drops whatever needed the
+   * features it lacks, and the person using it sees a site that is subtly
+   * broken with nothing to explain why. A plain 406 saying so is kinder, and
+   * far easier to support than a bug report nobody can reproduce.
+   *
+   * Registered as a `beforeAction`, so `skipBeforeAction` and the usual
+   * `only`/`except` options work on it — a public marketing page usually
+   * should not be refused, and only the controller knows which those are.
+   */
+  static allowBrowser<T extends Controller>(
+    this: abstract new (context: ControllerContext) => T,
+    options: AllowBrowserOptions & FilterOptions<T> = {},
+  ): void {
+    const { versions, block, ...conditions } = options;
+    const allowed = versionsFor(versions);
+
+    (this as unknown as typeof Controller).beforeAction(async function (this: Controller) {
+      if (browserAllowed(this.request, allowed)) return;
+
+      // Through the same setter every render uses, so a second render in the
+      // same action is still refused and the response carries whatever headers
+      // the controller adds to every other one.
+      const response = block ? await block(this.request) : browserBlockedResponse();
+
+      return this.#setResponse(response);
+    }, conditions as FilterOptions<Controller>);
   }
 
   /** Rails' `before_action`, in its explicit form. */
