@@ -10,7 +10,7 @@
  * CI sets `ALTAIR_TEST_DATABASE_URL`.
  */
 
-import { Connection } from "@altair/orm";
+import { Connection, tableNames } from "@altair/orm";
 
 export const TEST_DATABASE_URL = process.env.ALTAIR_TEST_DATABASE_URL ?? "sqlite://:memory:";
 export const isSqlite = TEST_DATABASE_URL.startsWith("sqlite");
@@ -45,22 +45,25 @@ export async function releaseConnection(connection: Connection): Promise<void> {
 }
 
 /**
- * Empties the tables these suites build.
+ * Empties the database.
  *
- * Dropped rather than truncated, because each file declares its own shape and
- * the next file's is not this one's.
+ * Every table rather than a list of the ones I could think of: these suites
+ * build `teams`, `posts`, `users` and more between them, and a hardcoded list
+ * leaves whatever it forgot behind for the next file to collide with —
+ * `Table 'teams' already exists`, which is exactly what it did.
  */
 async function dropStorageTables(connection: Connection): Promise<void> {
-  const tables = [
-    "active_storage_variant_records",
-    "active_storage_attachments",
-    "active_storage_blobs",
-    "users",
-    "posts",
-  ];
+  const names = await tableNames(connection);
+  if (names.length === 0) return;
 
-  for (const table of tables) {
+  // MySQL refuses to drop a table another references, and the order that would
+  // satisfy every foreign key is not worth computing for a test database.
+  if (connection.adapter === "mysql") await connection.execute("SET FOREIGN_KEY_CHECKS = 0");
+
+  for (const name of names) {
     const cascade = connection.adapter === "postgres" ? " CASCADE" : "";
-    await connection.execute(`DROP TABLE IF EXISTS ${connection.quote(table)}${cascade}`);
+    await connection.execute(`DROP TABLE IF EXISTS ${connection.quote(name)}${cascade}`);
   }
+
+  if (connection.adapter === "mysql") await connection.execute("SET FOREIGN_KEY_CHECKS = 1");
 }
