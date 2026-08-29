@@ -1391,7 +1391,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           const connection = owner.connection;
 
           const rows = await connection.query<Record<string, unknown>>(
-            `SELECT ${connection.quote(targetKey)} FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(1)}`,
+            `SELECT ${connection.quote(targetKey)} FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(0)}`,
             [this[owner.primaryKey]],
           );
 
@@ -1428,7 +1428,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
             const current = new Set(
               (
                 await connection.query<Record<string, unknown>>(
-                  `SELECT ${connection.quote(targetKey)} FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(1)}`,
+                  `SELECT ${connection.quote(targetKey)} FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(0)}`,
                   [id],
                 )
               ).map((row) => row[targetKey]),
@@ -1440,7 +1440,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
               if (wanted.has(gone)) continue;
 
               await connection.execute(
-                `DELETE FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(1)} AND ${connection.quote(targetKey)} = ${connection.placeholder(2)}`,
+                `DELETE FROM ${connection.quote(table)} WHERE ${connection.quote(ownerKey)} = ${connection.placeholder(0)} AND ${connection.quote(targetKey)} = ${connection.placeholder(1)}`,
                 [id, gone],
               );
             }
@@ -1449,7 +1449,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
               if (current.has(added)) continue;
 
               await connection.execute(
-                `INSERT INTO ${connection.quote(table)} (${connection.quote(ownerKey)}, ${connection.quote(targetKey)}) VALUES (${connection.placeholder(1)}, ${connection.placeholder(2)})`,
+                `INSERT INTO ${connection.quote(table)} (${connection.quote(ownerKey)}, ${connection.quote(targetKey)}) VALUES (${connection.placeholder(0)}, ${connection.placeholder(1)})`,
                 [id, added],
               );
             }

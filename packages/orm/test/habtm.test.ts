@@ -33,7 +33,19 @@ beforeEach(async () => {
   await schema.createTable("tags", (t) => t.string("name"));
 
   // No id of its own, which is what a HABTM join table looks like in Rails.
-  await connection.execute("CREATE TABLE posts_tags (post_id INTEGER, tag_id INTEGER)");
+  // Built through the schema statements rather than as raw SQL, so the column
+  // type matches whatever the adapter gave the primary keys — Postgres makes
+  // them BIGSERIAL, and an INTEGER foreign key will not compare against one.
+  // A HABTM join table has no id of its own, which is why the columns are
+  // added rather than declared with `createTable`'s implicit key.
+  await new SchemaStatements(connection).createTable(
+    "posts_tags",
+    (t) => {
+      t.bigint("post_id");
+      t.bigint("tag_id");
+    },
+    { id: false },
+  );
 
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;
@@ -202,7 +214,14 @@ describe("the join table's name", () => {
   });
 
   it("can be named explicitly", async () => {
-    await connection.execute("CREATE TABLE taggings (article_id INTEGER, tag_id INTEGER)");
+    await new SchemaStatements(connection).createTable(
+      "taggings",
+      (t) => {
+        t.bigint("article_id");
+        t.bigint("tag_id");
+      },
+      { id: false },
+    );
 
     class Article extends Model<{ id: number; title: string }>("posts") {
       declare setTagIds: (ids: readonly unknown[]) => Promise<void>;
