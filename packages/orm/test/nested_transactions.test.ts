@@ -16,7 +16,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 
 interface NoteRow {
   id: number;
@@ -31,7 +33,7 @@ const bodies = async (): Promise<string[]> =>
   (await Note.all().order("id")).map((note) => String(note.body));
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Note.columnCache = undefined;
   Note.columnTypeCache = undefined;

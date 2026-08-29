@@ -9,7 +9,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 interface AccountRow {
   id: number;
@@ -22,7 +24,7 @@ class Account extends Model<AccountRow>("accounts") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   Account.columnCache = undefined;
@@ -48,7 +50,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await connection.close();
+  if (isSqlite) await connection.close();
 });
 
 describe("a value over everything", () => {

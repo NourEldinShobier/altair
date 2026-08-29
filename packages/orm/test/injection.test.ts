@@ -13,7 +13,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -40,7 +42,7 @@ const PAYLOADS = [
 ];
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;

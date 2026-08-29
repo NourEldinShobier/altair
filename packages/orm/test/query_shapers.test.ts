@@ -8,7 +8,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -22,7 +24,7 @@ class Post extends Model<PostRow>("posts") {}
 let connection: Connection;
 
 beforeEach(async () => {
-  connection = new Connection("sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   Post.columnCache = undefined;
@@ -45,7 +47,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await connection.close();
+  if (isSqlite) await connection.close();
 });
 
 const titles = async (relation: { toArray(): Promise<PostRow[]> }) =>
@@ -107,18 +109,20 @@ describe("adding methods to a relation", () => {
 });
 
 describe("replacing rather than adding", () => {
+  // Quoted through the connection: MySQL uses backticks where the other two
+  // use double quotes, so spelling the quotes here asserted the database.
   it("replaces the select list", () => {
     const { sql } = Post.all().select("title").reselect("state").toSql();
 
-    expect(sql).toContain('"state"');
-    expect(sql).not.toContain('"title"');
+    expect(sql).toContain(connection.quote("state"));
+    expect(sql).not.toContain(connection.quote("title"));
   });
 
   it("replaces the grouping", () => {
     const { sql } = Post.all().group("title").regroup("state").toSql();
 
-    expect(sql).toContain('GROUP BY "posts"."state"');
-    expect(sql).not.toContain('"posts"."title"');
+    expect(sql).toContain(`GROUP BY ${connection.quote("posts")}.${connection.quote("state")}`);
+    expect(sql).not.toContain(`${connection.quote("posts")}.${connection.quote("title")}`);
   });
 });
 

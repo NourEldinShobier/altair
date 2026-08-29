@@ -8,7 +8,8 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -21,7 +22,7 @@ interface PostRow {
 class Post extends Model<PostRow>("posts") {}
 
 beforeEach(async () => {
-  const connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  const connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;

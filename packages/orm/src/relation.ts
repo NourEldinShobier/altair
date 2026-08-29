@@ -100,6 +100,15 @@ export interface RelationSource<T> {
    */
   resolveColumn?: (name: string) => string;
   /**
+   * Casts a raw row the way `instantiate` would.
+   *
+   * For the reads that hand back values rather than records — `pluck` — so
+   * they agree with the records. PostgreSQL returns a BIGINT as a string,
+   * because one can be larger than a JavaScript number holds, so `post.id` was
+   * a number and `pluck("id")` was a string for the same column.
+   */
+  castRow?: (row: Row) => Row;
+  /**
    * How to reach an association's table from this one.
    *
    * Supplied by the model, because only it knows the associations. A relation
@@ -772,9 +781,16 @@ export class Relation<T> implements PromiseLike<T[]> {
     if (this.#offset !== undefined) {
       // SQLite and MySQL will not take an OFFSET without a LIMIT in front of
       // it — `OFFSET 4` on its own is a syntax error — so an offset with no
-      // limit needs one that means "all the rest". Rails' adapters do the
-      // same. Postgres accepts a bare OFFSET and does not mind this either.
-      if (this.#limit === undefined) sql += ` LIMIT ${ALL_ROWS[this.connection.adapter] ?? "-1"}`;
+      // limit needs one meaning "all the rest". Rails' adapters do the same.
+      //
+      // Postgres takes a bare OFFSET and refuses `LIMIT -1` outright:
+      // `LIMIT must not be negative`. The comment here used to claim it "does
+      // not mind", and the fallback handed it exactly that — so `offset` with
+      // no `limit` failed on Postgres, which is `page 2` on any list that
+      // skips rather than paginates. Nothing caught it because these tests
+      // only ever ran on SQLite.
+      const all = ALL_ROWS[this.connection.adapter];
+      if (this.#limit === undefined && all !== undefined) sql += ` LIMIT ${all}`;
 
       sql += ` OFFSET ${Number(this.#offset)}`;
     }
@@ -1470,7 +1486,10 @@ export class Relation<T> implements PromiseLike<T[]> {
     const resolved = columns.map((column) => this.#resolve(column));
 
     const { sql, bindings } = this.select(...resolved).toSql();
-    const rows = await this.connection.query<Row>(sql, bindings);
+    const raw = await this.connection.query<Row>(sql, bindings);
+
+    // Cast, so plucked values agree with the same values read off a record.
+    const rows = this.#source.castRow ? raw.map((row) => this.#source.castRow!(row)) : raw;
 
     if (resolved.length === 1) return rows.map((row) => row[resolved[0] as string]);
     return rows.map((row) => resolved.map((column) => row[column]));
@@ -1649,12 +1668,21 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   /** Deletes every matching row without instantiating or running callbacks. */
-  async deleteAll(): Promise<void> {
-    if (this.#none) return;
+  /**
+   * Deletes every matching row in one statement, and answers how many.
+   *
+   * The count is Rails' — `delete_all` returns it — and it is the only way a
+   * caller can tell "deleted nothing because nothing matched" from "deleted
+   * nothing because the conditions were wrong". This returned void, so it
+   * could not.
+   */
+  async deleteAll(): Promise<number> {
+    if (this.#none) return 0;
 
     checkWritable("delete");
     const where = this.#whereClause();
     const statement = `DELETE FROM ${this.connection.quote(this.#source.tableName)}${where.sql}`;
-    await this.connection.execute(this.#renumber(statement), where.bindings);
+
+    return await this.connection.executeCount(this.#renumber(statement), where.bindings);
   }
 }

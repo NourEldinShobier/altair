@@ -10,7 +10,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -25,7 +27,7 @@ let connection: Connection;
 const sqlOf = (relation: { toSql(): { sql: string } }) => relation.toSql().sql;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;
@@ -51,7 +53,10 @@ describe("reorder", () => {
   it("replaces the ordering rather than adding to it", () => {
     const sql = sqlOf(Post.all().order("status").reorder("title", "desc"));
 
-    expect(sql).toContain('"title" DESC');
+    // Quoted through the connection: MySQL uses backticks where the other two
+    // use double quotes, so spelling the quotes here was an assertion that the
+    // database was not MySQL.
+    expect(sql).toContain(`${connection.quote("title")} DESC`);
     expect(sql).not.toContain("status");
   });
 
@@ -99,7 +104,10 @@ describe("rewhere", () => {
       .toSql();
 
     expect(bindings).toEqual(["published"]);
-    expect(sql.match(/\?/g) ?? []).toHaveLength(bindings.length);
+
+    // Counted adapter-neutrally: SQLite and MySQL write `?`, Postgres writes
+    // `$1`. Matching only `?` was an assertion that the database was SQLite.
+    expect(sql.match(/\?|\$\d+/g) ?? []).toHaveLength(bindings.length);
   });
 
   it("finds what the new condition says", async () => {

@@ -8,7 +8,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Connection, SchemaStatements, setConnection } from "../src/index.js";
+import { SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 let connection: Connection;
 let schema: SchemaStatements;
@@ -16,7 +18,7 @@ let schema: SchemaStatements;
 const sqlite = () => connection.adapter === "sqlite";
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   schema = new SchemaStatements(connection);
@@ -29,7 +31,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await schema.dropTable("widgets").catch(() => undefined);
-  await connection.close();
+  if (isSqlite) await connection.close();
 });
 
 describe("timestamps", () => {

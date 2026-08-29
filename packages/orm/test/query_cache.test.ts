@@ -12,7 +12,6 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
-  Connection,
   Model,
   SchemaStatements,
   setConnection,
@@ -20,7 +19,9 @@ import {
   withoutQueryCache,
   isCacheable,
 } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
 import { notifications } from "@altair/support";
+import { testConnection } from "./support/database.js";
 
 interface PostRow {
   id: number;
@@ -34,7 +35,7 @@ let queries: string[];
 let subscription: { unsubscribe(): void };
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   Post.columnCache = undefined;
   Post.columnTypeCache = undefined;
@@ -191,7 +192,11 @@ describe("writes empty it", () => {
       await Post.where({ title: "A" }).toArray();
       await Post.where({ title: "B" }).toArray();
 
-      expect(selects()).toHaveLength(2);
+      // Narrowed to the two reads under test. `create` issues its own read on
+      // some adapters — MySQL asks for the inserted id — and counting every
+      // SELECT made this an assertion about how the driver inserts rather
+      // than about the cache.
+      expect(selects().filter((sql) => sql.includes("title"))).toHaveLength(2);
     });
   });
 });

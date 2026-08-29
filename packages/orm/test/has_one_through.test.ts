@@ -11,7 +11,9 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { notifications } from "@altair/support";
-import { Connection, Model, SchemaStatements, setConnection } from "../src/index.js";
+import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 
 interface UserRow {
   id: number;
@@ -51,7 +53,7 @@ let grace: User;
 let alan: User;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
 
   for (const model of [User, Profile, Address]) {

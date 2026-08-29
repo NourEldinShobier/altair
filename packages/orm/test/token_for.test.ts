@@ -11,13 +11,14 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { travelTo } from "@altair/support";
 import {
-  Connection,
   Model,
   SchemaStatements,
   configureTokens,
   resetTokens,
   setConnection,
 } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 
 interface UserRow {
   id: number;
@@ -38,7 +39,7 @@ let connection: Connection;
 let ada: User;
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   configureTokens("s".repeat(64));
 

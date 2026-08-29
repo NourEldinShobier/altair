@@ -11,12 +11,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import {
-  Connection,
-  SchemaStatements,
-  UnsupportedSchemaChange,
-  setConnection,
-} from "../src/index.js";
+import { SchemaStatements, UnsupportedSchemaChange, setConnection } from "../src/index.js";
+import type { Connection } from "../src/connection.js";
+import { testConnection } from "./support/database.js";
 
 let connection: Connection;
 let schema: SchemaStatements;
@@ -24,7 +21,7 @@ let schema: SchemaStatements;
 const sqlite = () => connection.adapter === "sqlite";
 
 beforeEach(async () => {
-  connection = new Connection(process.env.DATABASE_URL ?? "sqlite://:memory:");
+  connection = await testConnection();
   setConnection(connection);
   schema = new SchemaStatements(connection);
 
@@ -72,7 +69,7 @@ describe("renameColumn", () => {
   });
 
   it("works on every adapter", async () => {
-    expect(schema.renameColumn("widgets", "count", "total")).resolves.toBeUndefined();
+    await expect(schema.renameColumn("widgets", "count", "total")).resolves.toBeUndefined();
   });
 });
 
@@ -82,7 +79,9 @@ describe("changeColumnNull", () => {
 
     await schema.changeColumnNull("widgets", "title", false, "string");
 
-    expect(
+    // Awaited. Without it the assertion is never enforced and the rejection
+    // surfaces as an unhandled one instead of a failing test.
+    await expect(
       connection.execute(
         `INSERT INTO ${connection.quote("widgets")} (${connection.quote("count")}) VALUES (1)`,
       ),
@@ -95,11 +94,21 @@ describe("changeColumnNull", () => {
     await schema.changeColumnNull("widgets", "title", false, "string");
     await schema.changeColumnNull("widgets", "title", true, "string");
 
-    expect(
-      connection.execute(
-        `INSERT INTO ${connection.quote("widgets")} (${connection.quote("count")}) VALUES (1)`,
-      ),
-    ).resolves.toBeDefined();
+    // Awaited, and asserted on the row rather than on the promise. This read
+    // `expect(promise).resolves.toBeDefined()` on a call that resolves to
+    // `undefined` — so it could only fail, and never ran: the case is skipped
+    // on SQLite and nothing else ever reached it.
+    await connection.execute(
+      `INSERT INTO ${connection.quote("widgets")} (${connection.quote("count")}) VALUES (1)`,
+    );
+
+    // The row this inserted, not every row: `beforeEach` seeds one. Asserted
+    // on the null title, which is the thing the constraint was blocking.
+    const rows = await connection.query(
+      `SELECT * FROM ${connection.quote("widgets")} WHERE ${connection.quote("title")} IS NULL`,
+    );
+
+    expect(rows).toHaveLength(1);
   });
 
   // MySQL restates the whole column definition, so dropping the type would
