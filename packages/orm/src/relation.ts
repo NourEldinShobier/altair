@@ -1699,7 +1699,40 @@ export class Relation<T> implements PromiseLike<T[]> {
     ]);
   }
 
-  /** Deletes every matching row without instantiating or running callbacks. */
+  /**
+   * Moves every matching row's timestamps. Rails' `touch_all`.
+   *
+   *     await Post.where({ author_id: id }).touchAll()
+   *     await Post.all().touchAll("reviewed_at")
+   *
+   * One statement, no callbacks, no records loaded. What a bulk import reaches
+   * for: touching each record individually is a query per row, and the point
+   * of a timestamp column is usually to invalidate a cache, which does not
+   * care how it moved.
+   *
+   * `updated_at` always, plus whatever else is named — because a caller asking
+   * for `reviewed_at` almost never means "and leave `updated_at` where it is",
+   * and Rails reads the same way.
+   */
+  async touchAll(...columns: string[]): Promise<number> {
+    checkWritable("update");
+
+    const now = new Date();
+    const names = ["updated_at", ...columns.filter((column) => column !== "updated_at")];
+
+    const where = this.#whereClause();
+    const assignments = names
+      .map((column) => `${this.connection.quote(this.#assertColumn(column))} = ?`)
+      .join(", ");
+
+    const statement = `UPDATE ${this.connection.quote(this.#source.tableName)} SET ${assignments}${where.sql}`;
+
+    return await this.connection.executeCount(this.#renumber(statement), [
+      ...names.map(() => serialize(now, this.connection)),
+      ...where.bindings,
+    ]);
+  }
+
   /**
    * Deletes every matching row in one statement, and answers how many.
    *
