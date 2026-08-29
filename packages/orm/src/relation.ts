@@ -772,9 +772,16 @@ export class Relation<T> implements PromiseLike<T[]> {
     if (this.#offset !== undefined) {
       // SQLite and MySQL will not take an OFFSET without a LIMIT in front of
       // it — `OFFSET 4` on its own is a syntax error — so an offset with no
-      // limit needs one that means "all the rest". Rails' adapters do the
-      // same. Postgres accepts a bare OFFSET and does not mind this either.
-      if (this.#limit === undefined) sql += ` LIMIT ${ALL_ROWS[this.connection.adapter] ?? "-1"}`;
+      // limit needs one meaning "all the rest". Rails' adapters do the same.
+      //
+      // Postgres takes a bare OFFSET and refuses `LIMIT -1` outright:
+      // `LIMIT must not be negative`. The comment here used to claim it "does
+      // not mind", and the fallback handed it exactly that — so `offset` with
+      // no `limit` failed on Postgres, which is `page 2` on any list that
+      // skips rather than paginates. Nothing caught it because these tests
+      // only ever ran on SQLite.
+      const all = ALL_ROWS[this.connection.adapter];
+      if (this.#limit === undefined && all !== undefined) sql += ` LIMIT ${all}`;
 
       sql += ` OFFSET ${Number(this.#offset)}`;
     }

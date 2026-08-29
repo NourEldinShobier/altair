@@ -192,7 +192,11 @@ describe("writes empty it", () => {
       await Post.where({ title: "A" }).toArray();
       await Post.where({ title: "B" }).toArray();
 
-      expect(selects()).toHaveLength(2);
+      // Narrowed to the two reads under test. `create` issues its own read on
+      // some adapters — MySQL asks for the inserted id — and counting every
+      // SELECT made this an assertion about how the driver inserts rather
+      // than about the cache.
+      expect(selects().filter((sql) => sql.includes("title"))).toHaveLength(2);
     });
   });
 });

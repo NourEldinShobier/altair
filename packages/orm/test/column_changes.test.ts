@@ -96,11 +96,17 @@ describe("changeColumnNull", () => {
     await schema.changeColumnNull("widgets", "title", false, "string");
     await schema.changeColumnNull("widgets", "title", true, "string");
 
-    expect(
-      connection.execute(
-        `INSERT INTO ${connection.quote("widgets")} (${connection.quote("count")}) VALUES (1)`,
-      ),
-    ).resolves.toBeDefined();
+    // Awaited, and asserted on the row rather than on the promise. This read
+    // `expect(promise).resolves.toBeDefined()` on a call that resolves to
+    // `undefined` — so it could only fail, and never ran: the case is skipped
+    // on SQLite and nothing else ever reached it.
+    await connection.execute(
+      `INSERT INTO ${connection.quote("widgets")} (${connection.quote("count")}) VALUES (1)`,
+    );
+
+    const rows = await connection.query(`SELECT * FROM ${connection.quote("widgets")}`);
+
+    expect(rows).toHaveLength(1);
   });
 
   // MySQL restates the whole column definition, so dropping the type would

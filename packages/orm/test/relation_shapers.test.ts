@@ -52,7 +52,10 @@ describe("reorder", () => {
   it("replaces the ordering rather than adding to it", () => {
     const sql = sqlOf(Post.all().order("status").reorder("title", "desc"));
 
-    expect(sql).toContain('"title" DESC');
+    // Quoted through the connection: MySQL uses backticks where the other two
+    // use double quotes, so spelling the quotes here was an assertion that the
+    // database was not MySQL.
+    expect(sql).toContain(`${connection.quote("title")} DESC`);
     expect(sql).not.toContain("status");
   });
 
@@ -100,7 +103,10 @@ describe("rewhere", () => {
       .toSql();
 
     expect(bindings).toEqual(["published"]);
-    expect(sql.match(/\?/g) ?? []).toHaveLength(bindings.length);
+
+    // Counted adapter-neutrally: SQLite and MySQL write `?`, Postgres writes
+    // `$1`. Matching only `?` was an assertion that the database was SQLite.
+    expect(sql.match(/\?|\$\d+/g) ?? []).toHaveLength(bindings.length);
   });
 
   it("finds what the new condition says", async () => {
