@@ -524,6 +524,34 @@ export class Controller extends Callbacks {
   }
 
   /**
+   * Back where they came from. Rails' `redirect_back`.
+   *
+   *     return this.redirectBack("/posts")
+   *
+   * The fallback is required, and that is the whole design. `Referer` is a
+   * header the client chooses: it is absent on a bookmark, absent behind most
+   * privacy settings, and whatever the caller likes when the caller is not a
+   * browser. A `redirect_back` with no fallback is a 302 to nowhere on the
+   * requests that have no referrer, which is why Rails made
+   * `fallback_location` mandatory in 5.0.
+   *
+   * The referrer goes through the same host check as any other redirect, so a
+   * forged `Referer` cannot send someone off the site.
+   */
+  redirectBack(
+    fallback: string,
+    init: { status?: number; allowOtherHost?: boolean } = {},
+  ): Response {
+    const referrer = this.request.headers.get("referer");
+
+    if (referrer && (init.allowOtherHost || redirectAllowed(referrer, this.request))) {
+      return this.redirectTo(referrer, init);
+    }
+
+    return this.redirectTo(fallback, init);
+  }
+
+  /**
    * The format this request is being answered in, once one has been chosen.
    *
    * Rails' `request.format`. Undefined until `respondTo` has run, since before

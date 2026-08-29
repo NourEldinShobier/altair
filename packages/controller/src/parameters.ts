@@ -71,6 +71,23 @@ export class UnpermittedParameters extends Error {
  */
 export type PermitFilter = string | Record<string, readonly string[]>;
 
+/**
+ * What one `expect` filter can ask for.
+ *
+ * A list of keys is an object with those keys; an empty list is an array of
+ * scalars; a doubled list is an array of objects; an empty object is the whole
+ * nested object.
+ */
+export type ExpectShape =
+  /** `["title", "body"]` — an object with those keys. `[]` — an array of scalars. */
+  | readonly PermitFilter[]
+  /** `[["name"]]` — an array of objects with those keys, Rails' own spelling. */
+  | readonly [readonly PermitFilter[]]
+  /** `{}` — the whole nested object, permitted wholesale. */
+  | Record<string, never>;
+
+export type ExpectFilter = string | Record<string, ExpectShape>;
+
 type Raw = Record<string, unknown>;
 
 function isObject(value: unknown): value is Raw {
@@ -132,6 +149,93 @@ export class Parameters {
     const value = this.#raw[key];
     if (!isPresent(value)) throw new ParameterMissing(key, this.keys);
     return isObject(value) ? new Parameters(value, this.#permitted) : value;
+  }
+
+  /**
+   * Rails 8's `expect`: require and permit in one call, and refuse the wrong
+   * shape.
+   *
+   *     const attributes = params.expect({ post: ["title", "body"] })
+   *     const id = params.expect("id")
+   *     const [name, emails] = params.expect("name", { emails: [] })
+   *
+   * The shape check is the reason this exists rather than being sugar for
+   * `require(...).permit(...)`. A form posts `post[title]=x` and the parameter
+   * is an object; a request built by hand posts `post[]=x` and it is an array.
+   * `require("post").permit("title")` was happy to be handed either, so a
+   * controller that expected one object could be handed a list of them and
+   * pass it straight to `update` — which is a way of writing attributes the
+   * form never offered.
+   *
+   * `expect` refuses anything that is not the shape asked for, and a refusal
+   * is a 400 rather than a 500 because the request was malformed.
+   *
+   * Filters read as they do in `permit`, with two additions:
+   *
+   * - `{ emails: [] }` — an array of scalars.
+   * - `{ friends: [["name"]] }` — an array of objects with those keys, the
+   *   doubled brackets being Rails' own spelling.
+   * - `{ settings: {} }` — the whole nested object, permitted wholesale. Use
+   *   it only where every key really is safe to mass-assign.
+   */
+  expect(...filters: ExpectFilter[]): unknown {
+    const values = filters.map((filter) => this.#expectOne(filter));
+
+    return values.length === 1 ? values[0] : values;
+  }
+
+  #expectOne(filter: ExpectFilter): unknown {
+    if (typeof filter === "string") {
+      const value = this.#raw[filter];
+
+      // A scalar means a scalar. Handing back an object or an array here is
+      // how "the id" becomes a structure the caller never checked.
+      if (!isPresent(value) || isObject(value) || Array.isArray(value)) {
+        throw new ParameterMissing(filter, this.keys);
+      }
+
+      return value;
+    }
+
+    const entries = Object.entries(filter);
+    const [key, shape] = entries[0] as [string, ExpectShape];
+
+    if (entries.length !== 1) {
+      throw new Error(
+        "Each expect filter names one key. Pass several filters rather than several keys in one object, so the values come back in the order you asked for them.",
+      );
+    }
+
+    const value = this.#raw[key];
+    if (!isPresent(value)) throw new ParameterMissing(key, this.keys);
+
+    // `{ key: [] }` — an array of scalars.
+    if (Array.isArray(shape) && shape.length === 0) {
+      if (!Array.isArray(value)) throw new ParameterMissing(key, this.keys);
+
+      return value.filter((item) => !isObject(item));
+    }
+
+    // `{ key: [[...]] }` — an array of objects.
+    if (Array.isArray(shape) && Array.isArray(shape[0])) {
+      if (!Array.isArray(value)) throw new ParameterMissing(key, this.keys);
+
+      return value
+        .filter(isObject)
+        .map((item) => new Parameters(item).permit(...(shape[0] as PermitFilter[])));
+    }
+
+    // `{ key: {} }` — the whole object, permitted wholesale.
+    if (!Array.isArray(shape)) {
+      if (!isObject(value)) throw new ParameterMissing(key, this.keys);
+
+      return new Parameters(value, true);
+    }
+
+    // `{ key: [...] }` — an object with those keys.
+    if (!isObject(value)) throw new ParameterMissing(key, this.keys);
+
+    return new Parameters(value).permit(...(shape as PermitFilter[]));
   }
 
   /**

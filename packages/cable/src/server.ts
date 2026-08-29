@@ -262,6 +262,7 @@ export class Cable {
         this.streams.removeEverywhere(ws);
 
         for (const channel of ws.data.subscriptions.values()) {
+          channel.clearTimers();
           channel.stopAllStreams();
           await channel.unsubscribed();
         }
@@ -298,6 +299,7 @@ export class Cable {
     await channel.subscribed();
 
     if (channel.isRejected) {
+      channel.clearTimers();
       channel.stopAllStreams();
       ws.send(rejectionFrame(identifier));
       return;
@@ -315,6 +317,7 @@ export class Cable {
 
     for (const stream of channel.streams) this.streams.remove(stream, ws);
 
+    channel.clearTimers();
     channel.stopAllStreams();
     await channel.unsubscribed();
     ws.data.subscriptions.delete(identifier);
