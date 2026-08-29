@@ -12,6 +12,7 @@ import { secureToken } from "@altair/support";
 // other. The use here is inside a method, which runs long after both modules
 // have finished loading.
 import { Variant, type Transformations } from "./variant.js";
+import { analyzeBytes } from "./analyze.js";
 import {
   defaultServiceName,
   storageService,
@@ -194,11 +195,19 @@ export async function createBlob(file: UploadedFile): Promise<StorageBlob> {
 
   await storageService(serviceName).upload(key, bytes, { contentType });
 
+  // Measured here, where the bytes are already in memory. Rails defers this to
+  // a job because by then it holds only the blob and would have to download it
+  // again; this path has no such problem, and a blob that reaches the database
+  // already analysed is one no view has to wait on. Nothing called `analyze`
+  // at all before, so an uploaded image never knew its own dimensions.
+  const analysis = await analyzeBytes(bytes, contentType);
+  const metadata = { ...file.metadata, ...analysis };
+
   return await StorageBlob.create({
     key,
     filename: file.filename,
     content_type: contentType,
-    metadata: file.metadata ? JSON.stringify(file.metadata) : null,
+    metadata: Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : null,
     service_name: serviceName,
     byte_size: bytes.byteLength,
     checksum: checksumFor(bytes),
