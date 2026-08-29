@@ -43,6 +43,7 @@ import { configFor } from "./config_for.js";
 import { buildConfig, type ApplicationConfig } from "./config.js";
 import { healthCheck } from "./health.js";
 import { statusForError, statusText, wantsJson } from "./rescue_responses.js";
+import { renderErrorPage } from "./error_page.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
 import { logQueries, requestLogging } from "./logging.js";
 
@@ -459,14 +460,30 @@ export class Application {
     // Detailed errors are a development convenience and a production leak, so
     // the environment decides, not the caller.
     if (this.config.showDetailedErrors) {
-      const detail =
-        error instanceof Error
-          ? `${error.name}: ${error.message}\n\n${error.stack ?? ""}`
-          : String(error);
-      return new Response(`${request.method} ${new URL(request.url).pathname}\n\n${detail}`, {
-        status,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
+      // An HTML page with the failing line of source in it, rather than the
+      // stack alone. A trace says where; this says where and what the line
+      // said, which is the difference between reading a path and reading the
+      // code — several minutes, several times a day.
+      //
+      // If rendering it fails, fall back to the text that was here before.
+      // This runs when something has already gone wrong, and an error page
+      // that raises replaces a useful answer with none.
+      try {
+        return new Response(
+          await renderErrorPage(error, request, { root: this.config.root, status }),
+          { status, headers: { "content-type": "text/html; charset=utf-8" } },
+        );
+      } catch {
+        const detail =
+          error instanceof Error
+            ? `${error.name}: ${error.message}\n\n${error.stack ?? ""}`
+            : String(error);
+
+        return new Response(`${request.method} ${new URL(request.url).pathname}\n\n${detail}`, {
+          status,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
     }
 
     // Rails serves `public/404.html` and `public/500.html` when they are

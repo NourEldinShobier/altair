@@ -6,3 +6,4 @@ export * from "./environments.js";
 export * from "./health.js";
 export * from "./config_for.js";
 export * from "./rescue_responses.js";
+export * from "./error_page.js";
