@@ -79,7 +79,19 @@ export class MailMessage {
     // hold for every message can be applied once.
     if (!(await runInterceptors(message))) return message;
 
+    // This mailer's own callbacks, inside the global ones. An interceptor is
+    // for a rule that holds across the application — rewriting every recipient
+    // in staging — and these are for one mailer's business, which is why both
+    // exist and why the narrower one runs closer to the send.
+    for (const hook of deliveryHooks(this.mailer, "before")) await hook(message);
+
     await this.mailer.delivery.sendMail(message);
+
+    // After the send, so a callback that records what went out records only
+    // what actually went. A send that throws runs neither these nor the
+    // observers, which is the same shape `afterCreate` has for a save.
+    for (const hook of deliveryHooks(this.mailer, "after")) await hook(message);
+
     await runObservers(message);
 
     return message;
@@ -148,9 +160,78 @@ export class MailMessage {
   }
 }
 
+/** Something to run around one mailer's own deliveries. */
+export type DeliveryHook = (message: MessageFields) => void | Promise<void>;
+
+interface DeliveryHooks {
+  before: DeliveryHook[];
+  after: DeliveryHook[];
+}
+
+/**
+ * Keyed by the class rather than stored on it, so a subclass declaring a hook
+ * does not push it onto the base class's array and run it for every sibling.
+ */
+const DELIVERY_HOOKS = new WeakMap<object, DeliveryHooks>();
+
+function ownDeliveryHooks(klass: object): DeliveryHooks {
+  let own = DELIVERY_HOOKS.get(klass);
+
+  if (!own) {
+    own = { before: [], after: [] };
+    DELIVERY_HOOKS.set(klass, own);
+  }
+
+  return own;
+}
+
+/**
+ * A class's hooks and everything it inherits, outermost first.
+ *
+ * Walked upwards and unshifted, so a base class's hook runs before a
+ * subclass's — an application-wide `beforeDeliver` that stamps a header has to
+ * be in place before the mailer that reads it.
+ */
+export function deliveryHooks(klass: object, kind: keyof DeliveryHooks): DeliveryHook[] {
+  const chain: DeliveryHook[] = [];
+
+  for (let at: object | null = klass; at; at = Object.getPrototypeOf(at)) {
+    const own = DELIVERY_HOOKS.get(at);
+    if (own) chain.unshift(...own[kind]);
+  }
+
+  return chain;
+}
+
 export class Mailer {
   /** Applied to every message this mailer builds. Rails' `default from:`. */
   static defaults: MailerDefaults = {};
+
+  /**
+   * Runs before this mailer's messages are sent. Rails' `before_deliver`.
+   *
+   *     class OrderMailer extends Mailer {
+   *       static { this.beforeDeliver((message) => tagForBilling(message)) }
+   *     }
+   *
+   * For one mailer's business. A rule that holds across the application —
+   * rewriting every recipient in staging — belongs in an interceptor, which
+   * runs outside these and applies to every mailer there is.
+   */
+  static beforeDeliver(hook: DeliveryHook): void {
+    ownDeliveryHooks(this).before.push(hook);
+  }
+
+  /**
+   * Runs after this mailer's messages are sent. Rails' `after_deliver`.
+   *
+   * After the send rather than around it, so a callback that records what went
+   * out records only what actually went: a send that throws runs neither these
+   * nor the observers.
+   */
+  static afterDeliver(hook: DeliveryHook): void {
+    ownDeliveryHooks(this).after.push(hook);
+  }
 
   /**
    * Where messages go.
