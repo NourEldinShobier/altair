@@ -28,6 +28,7 @@ import {
   variantContentType,
   variantKey,
 } from "../src/index.js";
+import { releaseConnection, storageConnection } from "./support/database.js";
 
 function chunk(type: string, data: Buffer): Buffer {
   const length = Buffer.alloc(4);
@@ -84,7 +85,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "altair-variant-"));
   configureStorage({ services: { disk: new DiskService({ root }) }, default: "disk" });
 
-  connection = new Connection("sqlite://:memory:");
+  connection = await storageConnection();
   setConnection(connection);
   StorageBlob.columnCache = undefined;
   StorageBlob.columnTypeCache = undefined;
@@ -93,6 +94,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await releaseConnection(connection);
   resetStorage();
   await rm(root, { recursive: true, force: true });
 });

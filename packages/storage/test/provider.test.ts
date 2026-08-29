@@ -23,6 +23,7 @@ import {
   StorageBlob,
   storageProvider,
 } from "../src/index.js";
+import { releaseConnection, storageConnection } from "./support/database.js";
 
 let root: string;
 let connection: Connection;
@@ -55,7 +56,7 @@ beforeEach(async () => {
     secret: "b".repeat(32),
   });
 
-  connection = new Connection("sqlite://:memory:");
+  connection = await storageConnection();
   setConnection(connection);
   StorageBlob.columnCache = undefined;
   StorageBlob.columnTypeCache = undefined;
@@ -64,6 +65,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await releaseConnection(connection);
   resetStorage();
   await rm(root, { recursive: true, force: true });
 });

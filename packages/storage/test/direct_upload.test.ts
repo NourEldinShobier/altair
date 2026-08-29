@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Connection, Model, SchemaStatements, setConnection } from "@altair/orm";
+import { Model, SchemaStatements, setConnection } from "@altair/orm";
 import {
   AttachedOne,
   checksumFor,
@@ -30,6 +30,7 @@ import {
   StorageBlob,
   storageService,
 } from "../src/index.js";
+import { releaseConnection, storageConnection } from "./support/database.js";
 
 interface UserRow {
   id: number;
@@ -68,12 +69,14 @@ const declared = {
   content_type: "text/plain",
 };
 
+let connection: Awaited<ReturnType<typeof storageConnection>>;
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "altair-direct-"));
   disk = new DiskService({ root, secret: SECRET });
   configureStorage({ services: { disk }, default: "disk", secret: SECRET });
 
-  const connection = new Connection("sqlite://:memory:");
+  connection = await storageConnection();
   setConnection(connection);
   StorageBlob.columnCache = undefined;
   StorageBlob.columnTypeCache = undefined;
@@ -86,6 +89,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await releaseConnection(connection);
   resetStorage();
   await rm(root, { recursive: true, force: true });
 });

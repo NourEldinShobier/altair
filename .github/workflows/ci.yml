@@ -95,7 +95,7 @@ jobs:
       # Not --parallel: these legs share one database, and a test file that
       # drops another file's tables mid-run is a failure nobody can reproduce.
       - name: Run the ORM suite
-        run: bun test packages/orm packages/testing packages/jobs
+        run: bun test packages/orm packages/testing packages/jobs packages/storage
         env:
           ALTAIR_TEST_DATABASE_URL: ${{ matrix.url }}
 

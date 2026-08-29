@@ -25,6 +25,7 @@ import {
   isAnalyzable,
   resetStorage,
 } from "../src/index.js";
+import { releaseConnection, storageConnection } from "./support/database.js";
 
 /** A ten-by-five PNG, small enough to keep here. */
 const PNG = Buffer.from(
@@ -42,7 +43,7 @@ beforeEach(async () => {
     default: "disk",
   });
 
-  connection = new Connection("sqlite://:memory:");
+  connection = await storageConnection();
   setConnection(connection);
   StorageBlob.columnCache = undefined;
   StorageBlob.columnTypeCache = undefined;
@@ -51,6 +52,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await releaseConnection(connection);
   resetStorage();
   await rm(root, { recursive: true, force: true });
 });
