@@ -9,6 +9,7 @@
  * there is no adapter between the framework and the runtime.
  */
 
+import { Current } from "@altair/support";
 import type { Router } from "@altair/router";
 import { Controller, type ControllerContext } from "./controller.js";
 import { parseNestedParams } from "./nested_params.js";
@@ -109,6 +110,14 @@ export function createDispatcher(
         params: await parseBody(request),
         routeParams: recognized.params,
       });
+      // Recorded on Current before the action runs, so everything downstream
+      // can say which action it belongs to — the request log, the error
+      // reporter, and the comment on every SQL statement. Cheap here and
+      // impossible to reconstruct later.
+      if (Current.isActive) {
+        Current.set({ controller: recognized.controller, action: recognized.action });
+      }
+
       return await controller.processAction(recognized.action);
     } catch (error) {
       if (onError) return await onError(error, request);

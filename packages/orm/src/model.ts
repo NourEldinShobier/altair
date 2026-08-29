@@ -3743,7 +3743,15 @@ export function serialize(value: unknown, connection?: Connection): unknown {
   if (value instanceof Date) {
     return connection ? formatTimestamp(connection, value) : value.toISOString();
   }
-  if (typeof value === "boolean") return value ? 1 : 0;
+  // Only SQLite, which has no boolean type and stores one as 0 or 1.
+  // PostgreSQL has a real BOOLEAN and refuses an integer for it outright —
+  // `column "active" is of type boolean but expression is of type integer` —
+  // so converting unconditionally made every boolean write fail there. MySQL
+  // accepts either, which is why this went unnoticed on two adapters out of
+  // three until a test wrote a boolean on the third.
+  if (typeof value === "boolean") {
+    return connection && connection.adapter !== "sqlite" ? value : value ? 1 : 0;
+  }
   if (value !== null && typeof value === "object") return JSON.stringify(value);
   return value;
 }

@@ -86,6 +86,15 @@ type ModelClass = abstract new (...args: never[]) => object;
  * validations Rails adds: present, long enough, and confirmed if a
  * confirmation was given.
  */
+/**
+ * Something to verify against when no record was found.
+ *
+ * A real digest of a value nobody knows, hashed once at load rather than per
+ * failed login — the point is to spend the same time as a real check, not to
+ * spend it twice.
+ */
+const DUMMY_DIGEST = Bun.password.hashSync(crypto.randomUUID(), "argon2id");
+
 export function hasSecurePassword<M extends ModelClass>(
   model: M,
   options: SecurePasswordOptions = {},
@@ -127,6 +136,63 @@ export function hasSecurePassword<M extends ModelClass>(
       if (typeof digest !== "string") return null;
 
       return (await verifyPassword(password, digest)) ? this : null;
+    },
+  });
+
+  /**
+   * Rails 7.1's `authenticate_by`: find by the other attributes, then check the
+   * password — in constant time either way.
+   *
+   *     const user = await User.authenticateBy({ email, password })
+   *
+   * Written this way rather than as `findBy(...)` then `authenticate(...)`
+   * because of what the two cost. Finding nothing is fast; finding a record and
+   * verifying an argon2 hash is deliberately slow. So the obvious version
+   * answers a wrong email in a millisecond and a wrong password in a hundred,
+   * and anyone who can time the login form can read off which addresses have
+   * accounts — one request each, no lockout, nothing in the logs to see.
+   *
+   * When no record matches, this verifies the given password against a digest
+   * of its own so the work is done anyway and the two answers take the same
+   * time.
+   */
+  Object.defineProperty(model, "authenticateBy", {
+    configurable: true,
+    value: async function (this: M, attributes: Record<string, unknown>) {
+      const given = attributes[attribute];
+
+      if (typeof given !== "string" || given.length === 0) {
+        throw new Error(
+          `authenticateBy needs a "${attribute}". Without one there is nothing to check, and returning a record would be a login with no password.`,
+        );
+      }
+
+      const conditions: Record<string, unknown> = { ...attributes };
+      delete conditions[attribute];
+
+      if (Object.keys(conditions).length === 0) {
+        throw new Error(
+          `authenticateBy needs something to look the record up by besides "${attribute}".`,
+        );
+      }
+
+      const record = (await (
+        this as unknown as {
+          findBy(where: Record<string, unknown>): Promise<PasswordRecord | null>;
+        }
+      ).findBy(conditions)) as PasswordRecord | null;
+
+      if (!record) {
+        // The whole point. Hashing something throwaway costs what verifying a
+        // real digest costs, so "no such user" and "wrong password" take the
+        // same time and the form stops answering the question.
+        await verifyPassword(given, DUMMY_DIGEST);
+        return null;
+      }
+
+      return await (
+        record as unknown as { authenticate(password: string): Promise<unknown> }
+      ).authenticate(given);
     },
   });
 
