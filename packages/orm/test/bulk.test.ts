@@ -20,6 +20,7 @@ import {
   setConnection,
   UnsupportedBulkWrite,
 } from "../src/index.js";
+import { isSqlite, testConnection } from "./support/database.js";
 
 interface WidgetRow {
   id: number;
@@ -215,6 +216,9 @@ describe("atomicity", () => {
 describe("the statement each adapter gets", () => {
   const adapters = {
     postgres: new Connection("postgres://localhost/x"),
+    // Pinned, unlike the rest of this file: the block compares the SQL each
+    // adapter is given, so the SQLite entry has to be SQLite whatever the
+    // suite is pointed at.
     sqlite: new Connection("sqlite://:memory:"),
     mysql: new Connection("mysql://localhost/x"),
   };

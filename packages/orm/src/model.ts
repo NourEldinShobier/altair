@@ -435,19 +435,27 @@ export class StrictLoadingViolation extends Error {
 export function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
 
+  // Both fields, as strings. The drivers do not agree on which one carries the
+  // database's own code: Bun's PostgreSQL driver puts the SQLSTATE in `errno`
+  // and a generic `ERR_POSTGRES_SERVER_ERROR` in `code`, while SQLite puts its
+  // code in `code` and MySQL puts a number in `errno`. Reading only `code`
+  // meant this never recognised a PostgreSQL duplicate — which CI found the
+  // first time these tests ran against one.
   const code = String((error as { code?: unknown }).code ?? "");
-  const errno = Number((error as { errno?: unknown }).errno ?? NaN);
+  const errno = String((error as { errno?: unknown }).errno ?? "");
 
+  // SQLite.
   if (code.includes("SQLITE_CONSTRAINT_UNIQUE") || code.includes("SQLITE_CONSTRAINT_PRIMARYKEY")) {
     return true;
   }
 
-  if (code === "23505") return true;
-  if (errno === 1062) return true;
+  // PostgreSQL's unique_violation, and MySQL's ER_DUP_ENTRY.
+  if (code === "23505" || errno === "23505") return true;
+  if (code === "1062" || errno === "1062") return true;
 
   // Bun's SQLite driver reports the generic constraint code and puts the kind
-  // in the message, so this is the one place the message is consulted — and
-  // only after the codes have had their chance.
+  // in the message, so this is the one place a message is consulted — and only
+  // after the codes have had their chance.
   const message = String((error as { message?: unknown }).message ?? "");
 
   return code === "SQLITE_CONSTRAINT" && /UNIQUE constraint failed/i.test(message);
