@@ -9,6 +9,8 @@
 import { createHash } from "node:crypto";
 import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
+import { columnTypeFor } from "./dump.js";
+import { columnSchemas, indexSchemas, type ColumnSchema } from "./introspect.js";
 
 export type ColumnType =
   | "string"
@@ -76,6 +78,130 @@ function referencesClause(connection: Connection, key: ForeignKeyDefinition): st
 export interface Column extends ColumnOptions {
   name: string;
   type: ColumnType;
+}
+
+/**
+ * The block `changeTable` yields. Rails' `Table`.
+ *
+ * Each call records what to do; nothing runs until the block has returned.
+ * That is what keeps the block synchronous, and a synchronous block is what
+ * makes a forgotten `await` impossible rather than merely unlikely.
+ */
+export class TableChange {
+  readonly operations: ((schema: SchemaStatements, table: string) => Promise<void>)[] = [];
+
+  column(name: string, type: ColumnType, options: ColumnOptions = {}): this {
+    this.operations.push((schema, table) => schema.addColumn(table, name, type, options));
+    return this;
+  }
+
+  string(name: string, options?: ColumnOptions): this {
+    return this.column(name, "string", options);
+  }
+
+  text(name: string, options?: ColumnOptions): this {
+    return this.column(name, "text", options);
+  }
+
+  integer(name: string, options?: ColumnOptions): this {
+    return this.column(name, "integer", options);
+  }
+
+  bigint(name: string, options?: ColumnOptions): this {
+    return this.column(name, "bigint", options);
+  }
+
+  float(name: string, options?: ColumnOptions): this {
+    return this.column(name, "float", options);
+  }
+
+  decimal(name: string, options?: ColumnOptions): this {
+    return this.column(name, "decimal", options);
+  }
+
+  boolean(name: string, options?: ColumnOptions): this {
+    return this.column(name, "boolean", options);
+  }
+
+  date(name: string, options?: ColumnOptions): this {
+    return this.column(name, "date", options);
+  }
+
+  datetime(name: string, options?: ColumnOptions): this {
+    return this.column(name, "datetime", options);
+  }
+
+  json(name: string, options?: ColumnOptions): this {
+    return this.column(name, "json", options);
+  }
+
+  binary(name: string, options?: ColumnOptions): this {
+    return this.column(name, "binary", options);
+  }
+
+  /** Changes a column's type. Rails' `t.change`. */
+  change(name: string, type: ColumnType, options: ColumnOptions = {}): this {
+    this.operations.push((schema, table) => schema.changeColumn(table, name, type, options));
+    return this;
+  }
+
+  /** Rails' `t.change_default`. */
+  changeDefault(name: string, value: unknown): this {
+    this.operations.push((schema, table) => schema.changeColumnDefault(table, name, value));
+    return this;
+  }
+
+  /** Rails' `t.remove`, which takes several. */
+  remove(...names: string[]): this {
+    for (const name of names) {
+      this.operations.push((schema, table) => schema.removeColumn(table, name));
+    }
+
+    return this;
+  }
+
+  /** Rails' `t.rename`. */
+  rename(from: string, to: string): this {
+    this.operations.push((schema, table) => schema.renameColumn(table, from, to));
+    return this;
+  }
+
+  index(columns: string[], options: { unique?: boolean; name?: string } = {}): this {
+    this.operations.push((schema, table) => schema.addIndex(table, columns, options));
+    return this;
+  }
+
+  /** Rails' `t.remove_index`, by name — which is how the index was created. */
+  removeIndex(name: string): this {
+    this.operations.push((schema, table) => schema.removeIndex(table, { name }));
+    return this;
+  }
+
+  /** Rails' `t.references`, which adds the column, the index and the key. */
+  reference(
+    name: string,
+    options: {
+      type?: ColumnType;
+      null?: boolean;
+      index?: boolean;
+      unique?: boolean;
+      foreignKey?: boolean | { to: string };
+      polymorphic?: boolean;
+    } = {},
+  ): this {
+    this.operations.push((schema, table) => schema.addReference(table, name, options));
+    return this;
+  }
+
+  removeReference(name: string, options: { polymorphic?: boolean } = {}): this {
+    this.operations.push((schema, table) => schema.removeReference(table, name, options));
+    return this;
+  }
+
+  timestamps(): this {
+    this.operations.push((schema, table) => schema.addTimestamps(table));
+    return this;
+  }
 }
 
 /** Rails' `t.string :title` and friends. */
@@ -336,6 +462,19 @@ export class SchemaStatements {
   }
 
   async removeColumn(table: string, name: string): Promise<void> {
+    // SQLite refuses to drop a column an index depends on, where Postgres and
+    // MySQL drop the index along with it. Dropped here so the three behave the
+    // same: a caller removing a column should not have to know which indexes
+    // happened to mention it, and the index is worthless without the column.
+    if (this.connection.adapter === "sqlite") {
+      for (const index of await indexSchemas(this.connection, table)) {
+        if (!index.columns.includes(name)) continue;
+        if (index.name.startsWith("sqlite_")) continue;
+
+        await this.removeIndex(table, { name: index.name });
+      }
+    }
+
     await this.connection.execute(
       `ALTER TABLE ${this.connection.quote(table)} DROP COLUMN ${this.connection.quote(name)}`,
     );
@@ -353,6 +492,249 @@ export class SchemaStatements {
     await this.connection.execute(
       `ALTER TABLE ${this.connection.quote(table)} RENAME COLUMN ${this.connection.quote(from)} TO ${this.connection.quote(to)}`,
     );
+  }
+
+  /**
+   * Several changes to one table. Rails' `change_table`.
+   *
+   *     await schema.changeTable("posts", (t) => {
+   *       t.string("slug")
+   *       t.reference("author", { foreignKey: { to: "users" } })
+   *       t.index(["slug"], { unique: true })
+   *       t.remove("legacy_id")
+   *     })
+   *
+   * Recorded and then run in order rather than executed as the block reads
+   * them, which is what lets the block be synchronous — a migration written
+   * with `await` on every line is mostly punctuation, and forgetting one is a
+   * change that silently does not happen.
+   */
+  async changeTable(table: string, define: (t: TableChange) => void): Promise<void> {
+    const change = new TableChange();
+    define(change);
+
+    for (const operation of change.operations) await operation(this, table);
+  }
+
+  /** Every column on a table, as the database describes it. Rails' `columns`. */
+  async columns(table: string): Promise<ColumnSchema[]> {
+    return await columnSchemas(this.connection, table);
+  }
+
+  /**
+   * Whether a table has this column. Rails' `column_exists?`.
+   *
+   * The check a migration makes before adding something twice — which is what
+   * happens when one is re-run against a database that was patched by hand,
+   * and the failure without it is a driver syntax error rather than a
+   * migration saying what it found.
+   */
+  async columnExists(table: string, column: string, type?: ColumnType): Promise<boolean> {
+    const found = (await this.columns(table)).find((one) => one.name === column);
+
+    if (!found) return false;
+    if (type === undefined) return true;
+
+    // Mapped back to a logical type rather than compared as SQL. The three
+    // databases answer in their own spellings — `character varying`, `int`,
+    // `TINYINT(1)` — and a caller asking "is this a string?" should not have to
+    // know which one it is talking to. Comparing the SQL text instead is a
+    // check that passes on SQLite and fails on the other two, which is exactly
+    // what it did before CI ran this against all three.
+    return columnTypeFor(found.type) === type;
+  }
+
+  /**
+   * Changes a column's type. Rails' `change_column`.
+   *
+   * The three adapters differ in kind, not only in syntax. Postgres alters the
+   * type in place, MySQL restates the whole column definition, and SQLite
+   * cannot alter a column at all — so there the table is rebuilt, which is
+   * what Rails' SQLite adapter does and the only reason `change_column` works
+   * on a developer's own machine.
+   */
+  async changeColumn(
+    table: string,
+    column: string,
+    type: ColumnType,
+    options: ColumnOptions = {},
+  ): Promise<void> {
+    const definition: Column = { name: column, type, ...options };
+    const quoted = this.connection.quote(table);
+    const name = this.connection.quote(column);
+    const sql = sqlType(this.connection, definition);
+
+    if (this.connection.adapter === "postgres") {
+      // USING, so a change that needs a cast — text to integer — is made
+      // rather than refused. Postgres will not guess; the other two always do.
+      await this.connection.execute(
+        `ALTER TABLE ${quoted} ALTER COLUMN ${name} TYPE ${sql} USING ${name}::${sql}`,
+      );
+
+      if (options.null !== undefined) await this.changeColumnNull(table, column, options.null);
+      if (options.default !== undefined) {
+        await this.changeColumnDefault(table, column, options.default);
+      }
+
+      return;
+    }
+
+    if (this.connection.adapter === "mysql") {
+      // Restated whole, because MySQL's MODIFY replaces the definition: naming
+      // only the type here would silently drop the column's NOT NULL and its
+      // default along with it.
+      let clause = `${name} ${sql}`;
+      if (definition.null === false) clause += " NOT NULL";
+      if (definition.default !== undefined) {
+        clause += ` DEFAULT ${literal(this.connection, definition.default)}`;
+      }
+
+      await this.connection.execute(`ALTER TABLE ${quoted} MODIFY COLUMN ${clause}`);
+      return;
+    }
+
+    await this.rebuildSqliteTable(table, (existing) =>
+      existing.map((one) =>
+        one.name === column
+          ? {
+              ...one,
+              type: sql,
+              nullable: definition.null !== false,
+              default:
+                definition.default === undefined
+                  ? one.default
+                  : literal(this.connection, definition.default),
+            }
+          : one,
+      ),
+    );
+  }
+
+  /**
+   * Rebuilds a SQLite table around a changed column list.
+   *
+   * SQLite's `ALTER TABLE` can add, drop and rename a column and nothing else,
+   * so every other change is: build the new table, copy the rows across, drop
+   * the old one, rename. Rails walks the same twelve steps.
+   *
+   * Indexes and foreign keys are read first and put back afterwards. Without
+   * that the rebuild silently drops them, and a table that lost its unique
+   * index looks fine until two rows collide months later.
+   */
+  private async rebuildSqliteTable(
+    table: string,
+    change: (columns: ColumnSchema[]) => ColumnSchema[],
+  ): Promise<void> {
+    const quote = (name: string) => this.connection.quote(name);
+    const existing = await columnSchemas(this.connection, table);
+    const indexes = await indexSchemas(this.connection, table);
+    const keys = await this.connection.query<Row>(`PRAGMA foreign_key_list(${quote(table)})`);
+
+    const wanted = change(existing);
+    const carried = wanted.filter((one) => existing.some((was) => was.name === one.name));
+    const temporary = `${table}_altair_rebuild`;
+
+    const clauses = wanted.map((one) => {
+      let clause = `${quote(one.name)} ${one.type}`;
+      if (one.primaryKey) clause += " PRIMARY KEY AUTOINCREMENT";
+      else if (!one.nullable) clause += " NOT NULL";
+      if (one.default !== null) clause += ` DEFAULT ${one.default}`;
+
+      return clause;
+    });
+
+    for (const key of keys) {
+      clauses.push(
+        `FOREIGN KEY (${quote(String(key.from))}) REFERENCES ${quote(String(key.table))}(${quote(String(key.to))})`,
+      );
+    }
+
+    // Off for the rebuild, or dropping the old table trips every key pointing
+    // at it — including the ones about to be put back.
+    await this.connection.execute("PRAGMA foreign_keys = OFF");
+
+    try {
+      await this.connection.execute(`CREATE TABLE ${quote(temporary)} (${clauses.join(", ")})`);
+
+      const names = carried.map((one) => quote(one.name)).join(", ");
+      await this.connection.execute(
+        `INSERT INTO ${quote(temporary)} (${names}) SELECT ${names} FROM ${quote(table)}`,
+      );
+
+      await this.connection.execute(`DROP TABLE ${quote(table)}`);
+      await this.connection.execute(`ALTER TABLE ${quote(temporary)} RENAME TO ${quote(table)}`);
+
+      for (const index of indexes) {
+        // SQLite names the index behind a UNIQUE constraint `sqlite_autoindex_…`,
+        // and that prefix is reserved: recreating one by that name is an error,
+        // and the constraint came back with the column anyway.
+        if (index.name.startsWith("sqlite_")) continue;
+
+        await this.addIndex(table, index.columns, { unique: index.unique, name: index.name });
+      }
+    } finally {
+      await this.connection.execute("PRAGMA foreign_keys = ON");
+    }
+  }
+
+  /**
+   * Adds a foreign-key column and its index. Rails' `add_reference`.
+   *
+   *     await schema.addReference("posts", "user", { foreignKey: true })
+   *
+   * The index is the point. A `user_id` with no index is the commonest cause
+   * of a slow `user.posts` — every read of the association scans the whole
+   * table — and it stays invisible until the table is large.
+   */
+  async addReference(
+    table: string,
+    name: string,
+    options: {
+      type?: ColumnType;
+      null?: boolean;
+      index?: boolean;
+      unique?: boolean;
+      foreignKey?: boolean | { to: string };
+      polymorphic?: boolean;
+    } = {},
+  ): Promise<void> {
+    const column = `${name}_id`;
+
+    await this.addColumn(table, column, options.type ?? "bigint", { null: options.null });
+
+    if (options.polymorphic) {
+      await this.addColumn(table, `${name}_type`, "string", { null: options.null });
+    }
+
+    if (options.index !== false) {
+      // Type first for a polymorphic one, matching Rails: an index is usable
+      // left-to-right, and every query on it names the type.
+      const columns = options.polymorphic ? [`${name}_type`, column] : [column];
+      await this.addIndex(table, columns, { unique: options.unique ?? false });
+    }
+
+    if (options.foreignKey) {
+      if (options.polymorphic) {
+        throw new UnsupportedSchemaChange(
+          "addReference",
+          "a polymorphic reference points at more than one table, so no one foreign key can describe it",
+        );
+      }
+
+      const to = typeof options.foreignKey === "object" ? options.foreignKey.to : pluralize(name);
+      await this.addForeignKey(table, to, { column });
+    }
+  }
+
+  /** Removes a reference column and its type column. Rails' `remove_reference`. */
+  async removeReference(
+    table: string,
+    name: string,
+    options: { polymorphic?: boolean } = {},
+  ): Promise<void> {
+    if (options.polymorphic) await this.removeColumn(table, `${name}_type`);
+
+    await this.removeColumn(table, `${name}_id`);
   }
 
   /**
