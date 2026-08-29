@@ -1506,6 +1506,32 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   /** One column's values. Rails' `pluck`. */
+  /** One row's worth of columns, or null. Rails' `pick`. */
+  async pick(column: string): Promise<unknown>;
+  /** Several columns from one row. */
+  async pick(...columns: string[]): Promise<unknown[] | null>;
+  /**
+   * The first row's values, or null when there is no row. Rails' `pick`.
+   *
+   *     const title = await Post.where({ id }).pick("title")
+   *
+   * `pluck(...)[0]` reads the same and is not the same: it selects every
+   * matching row and throws all but one away. On a table of any size that is
+   * the difference between reading one row and reading the table.
+   *
+   * Null rather than undefined for a missing row, matching `first`, so the two
+   * can be checked the same way.
+   */
+  async pick(...columns: string[]): Promise<unknown> {
+    if (columns.length === 0) throw new Error("pick needs at least one column.");
+
+    const rows = (await this.limit(1).pluck(...(columns as [string]))) as unknown[];
+
+    if (rows.length === 0) return null;
+
+    return rows[0];
+  }
+
   async pluck(column: string): Promise<unknown[]>;
   /** Several columns, as a row of values each. */
   async pluck(...columns: string[]): Promise<unknown[][]>;
