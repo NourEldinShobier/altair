@@ -24,6 +24,7 @@
  */
 
 import type { Formatter, Level, LogEntry } from "./logger.js";
+import { defaultBacktraceCleaner, type BacktraceCleaner } from "./backtrace_cleaner.js";
 
 const CODES = {
   reset: "\u001b[0m",
@@ -129,6 +130,14 @@ export interface PrettyOptions {
   stacks?: boolean;
   /** Keys to put first, so the eye finds them in the same place every time. */
   leading?: readonly string[];
+  /**
+   * What decides which stack frames are worth printing.
+   *
+   * Replaceable, because "which frames are noise" is the application's
+   * judgement: a library author debugging the framework wants the frames an
+   * application author does not.
+   */
+  cleaner?: BacktraceCleaner;
 }
 
 /**
@@ -141,6 +150,7 @@ export interface PrettyOptions {
 export function prettyFormatter(options: PrettyOptions = {}): Formatter {
   const enabled = options.colour ?? colourEnabled();
   const stacks = options.stacks ?? true;
+  const cleaner = options.cleaner ?? defaultBacktraceCleaner();
   const leading = options.leading ?? ["method", "path", "status", "durationMs"];
 
   return (entry: LogEntry): string => {
@@ -180,13 +190,21 @@ export function prettyFormatter(options: PrettyOptions = {}): Formatter {
 
     if (!stack?.stack) return line;
 
-    const indented = stack.stack
-      .split("\n")
-      .slice(1)
-      .map((row) => paint(`    ${row.trim()}`, "grey", enabled))
-      .join("\n");
+    // Cleaned before printing: a trace from anything running on a framework is
+    // forty lines and three of them are yours, and the other thirty-seven are
+    // why nobody reads it. The cleaner hands back the whole thing when keeping
+    // only the application's frames would leave nothing — which happens
+    // exactly when the failure really is inside the framework, and is when
+    // somebody most needs to see where.
+    const rows = cleaner.clean(stack.stack);
+    const hidden = cleaner.clean(stack.stack, "all").length - rows.length;
 
-    return `${line}\n${indented}`;
+    const indented = rows.map((row) => paint(`    ${row.trim()}`, "grey", enabled)).join("\n");
+
+    const note =
+      hidden > 0 ? `\n${paint(`    ... ${hidden} framework frames hidden`, "dim", enabled)}` : "";
+
+    return `${line}\n${indented}${note}`;
   };
 }
 
