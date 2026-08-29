@@ -145,11 +145,3 @@ export function negotiateFormat(request: Request, options: NegotiationOptions): 
 
   return undefined;
 }
-
-/** Raised when nothing the action can produce is acceptable. */
-export class NotAcceptable extends Error {
-  constructor(readonly available: readonly string[]) {
-    super(`This action can produce ${available.join(", ")}, and none was acceptable.`);
-    this.name = "NotAcceptable";
-  }
-}

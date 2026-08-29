@@ -670,6 +670,16 @@ export class Controller extends Callbacks {
 
     if (!chosen) {
       this.#format = undefined;
+
+      // Answered here rather than raised. Content negotiation failing is an
+      // ordinary outcome of a request, not an exception — and there was an
+      // exported `NotAcceptable` class for it that nothing ever threw, so an
+      // application registering `rescueFrom(NotAcceptable)` would have waited
+      // for a handler that could never fire. That class is gone.
+      //
+      // If a custom 406 page is wanted, the change is to raise here and map it
+      // in the rescue table. Not done now because it changes the answer for
+      // every caller that has one today.
       this.head(406);
       return;
     }
