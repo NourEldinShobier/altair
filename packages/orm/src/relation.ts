@@ -556,6 +556,38 @@ export class Relation<T> implements PromiseLike<T[]> {
     return this.#addJoins("left", names);
   }
 
+  /**
+   * Records that have none of an association. Rails' `where.missing`.
+   *
+   *     await Post.all().whereMissing("comments")
+   *
+   * A left join and a null check on the other side, which is the one shape SQL
+   * has for "no matching row" and the one nobody remembers. Written by hand it
+   * is an inner join by mistake about half the time, and an inner join answers
+   * the opposite question.
+   *
+   * The alternative — `NOT IN (SELECT ...)` — is the version that quietly
+   * matches nothing when the subquery returns a NULL, because `x NOT IN (1,
+   * NULL)` is NULL rather than true. This shape has no such edge.
+   */
+  whereMissing(...names: string[]): Relation<T> {
+    if (!this.#source.joinFor) {
+      throw new Error("This relation cannot join: its source does not know the associations.");
+    }
+
+    let next = this.leftJoins(...names);
+
+    for (const name of names) {
+      const spec = this.#source.joinFor(name);
+
+      next = next.where(
+        `${this.connection.quote(spec.table)}.${this.connection.quote(spec.to)} IS NULL`,
+      );
+    }
+
+    return next;
+  }
+
   #addJoins(kind: "inner" | "left", names: string[]): Relation<T> {
     if (!this.#source.joinFor) {
       throw new Error("This relation cannot join: its source does not know the associations.");
