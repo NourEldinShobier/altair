@@ -218,3 +218,80 @@ export async function toPlainText(
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+/**
+ * The class Rails puts on a run of attachments so they lay out as a grid.
+ *
+ * The count is part of it — `attachment-gallery--3` — because the stylesheet
+ * needs to know how many are in the row to size them, and CSS cannot count its
+ * own children well enough to do it for four different cases.
+ */
+const GALLERY_CLASS = "attachment-gallery";
+
+/** One attachment element, whole. */
+const ATTACHMENT = /<action-text-attachment\b[^>]*><\/action-text-attachment>/g;
+
+/** A gallery wrapper and everything inside it. */
+const GALLERY = /<div class="attachment-gallery(?: attachment-gallery--\d+)?">([\s\S]*?)<\/div>/g;
+
+/**
+ * Wraps runs of neighbouring attachments in a gallery. Rails' rendering half of
+ * `ActionText::Attachment::Gallery`.
+ *
+ * Two images in a row are a gallery and should lay out side by side; one image
+ * is an image. That distinction lives here rather than in the editor because
+ * the stored body is the canonical form — plain attachments, no wrapper — and a
+ * body written by an API client, a script or an import has no editor to have
+ * added one.
+ *
+ * A run of one is left alone, which is the whole rule.
+ */
+export function withAttachmentGalleries(html: string): string {
+  // Runs of two or more, allowing whitespace between them. Anything else in
+  // the gap — a paragraph, text, a heading — ends the run, because those are
+  // attachments that happen to be near each other rather than a set.
+  const run = /(?:<action-text-attachment\b[^>]*><\/action-text-attachment>\s*){2,}/g;
+
+  return html.replace(run, (match) => {
+    const count = (match.match(ATTACHMENT) ?? []).length;
+    const trailing = match.slice(match.trimEnd().length);
+
+    return (
+      `<div class="${GALLERY_CLASS} ${GALLERY_CLASS}--${count}">${match.trimEnd()}</div>` + trailing
+    );
+  });
+}
+
+/**
+ * Takes the gallery wrappers back off. Rails'
+ * `fragment_by_canonicalizing_attachment_galleries`.
+ *
+ * What is stored is the canonical form. Storing the wrapper would freeze one
+ * version of the markup into every body ever written — so a change to how a
+ * gallery is laid out would reach new content and leave the archive alone,
+ * which is the same reason a body is sanitized on the way out rather than in.
+ */
+export function withoutAttachmentGalleries(html: string): string {
+  return html.replace(GALLERY, (_, inner: string) => inner);
+}
+
+/** Whether a body carries any gallery wrappers. */
+export function hasAttachmentGalleries(html: string): boolean {
+  return new RegExp(GALLERY.source).test(html);
+}
+
+/**
+ * The attachments in each gallery, in order.
+ *
+ * For a caller that wants to render a gallery itself — a template that lays
+ * out two images differently from four.
+ */
+export function attachmentGalleriesIn(html: string): AttachmentAttributes[][] {
+  const galleries: AttachmentAttributes[][] = [];
+
+  for (const match of html.matchAll(new RegExp(GALLERY.source, "g"))) {
+    galleries.push(attachmentsIn(match[1] ?? ""));
+  }
+
+  return galleries;
+}
