@@ -9,6 +9,7 @@
 
 import { deserializeArguments } from "./serializers.js";
 import { Continuation, JobInterrupted, checkResumeLimit, resumedState } from "./continuable.js";
+import { announceDiscard, instrumentPerform, retryScheduled, retryStopped } from "./events.js";
 import { Job, type JobPayload, type QueueAdapter } from "./job.js";
 
 /**
@@ -192,11 +193,13 @@ export async function runJob(
   const continuation = new Continuation(payload.continuation, options.shouldStop);
 
   try {
-    await (
-      klass as unknown as {
-        performNowWith: (continuation: Continuation, ...args: unknown[]) => Promise<unknown>;
-      }
-    ).performNowWith(continuation, ...deserializeArguments(payload.arguments));
+    await instrumentPerform(payload, async () => {
+      await (
+        klass as unknown as {
+          performNowWith: (continuation: Continuation, ...args: unknown[]) => Promise<unknown>;
+        }
+      ).performNowWith(continuation, ...deserializeArguments(payload.arguments));
+    });
 
     return { status: "completed", payload };
   } catch (error) {
@@ -221,11 +224,22 @@ export async function runJob(
     // from a failure on purpose: a discard is the job working as intended, and
     // counting it as a failure trains people to ignore the failure count.
     if (policy === null) {
-      return { status: "discarded", payload: { ...payload, attempts }, error };
+      const discarded: JobPayload = { ...payload, attempts };
+
+      await announceDiscard(discarded, error);
+
+      return { status: "discarded", payload: discarded, error };
     }
 
     if (attempts >= policy.attempts) {
-      return { status: "failed", payload: { ...payload, attempts }, error };
+      const exhausted: JobPayload = { ...payload, attempts };
+
+      // Announced apart from a discard: this one ran out of tries and that one
+      // was refused by a rule, and an application usually wants to do
+      // different things about them.
+      retryStopped(exhausted, error);
+
+      return { status: "failed", payload: exhausted, error };
     }
 
     // Re-enqueued rather than retried in place, so a slow retry does not hold
@@ -236,6 +250,8 @@ export async function runJob(
       runAt: Date.now() + policy.backoff(attempts) * 1000,
     };
     await adapter.enqueue(retried);
+
+    retryScheduled(retried, error, retried.runAt);
 
     return { status: "retried", payload: retried, error };
   }

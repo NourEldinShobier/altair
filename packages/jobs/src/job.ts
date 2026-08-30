@@ -18,6 +18,7 @@
 
 import { Continuation, Step, type ContinuationState, type StepContext } from "./continuable.js";
 import { serializeArguments } from "./serializers.js";
+import { bulkEnqueued, enqueueAt, successfullyEnqueued } from "./events.js";
 import {
   runCallbacks,
   Callbacks,
@@ -498,6 +499,8 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
     if (queue.enqueueAll) await queue.enqueueAll(payloads);
     else for (const payload of payloads) await queue.enqueue(payload);
 
+    bulkEnqueued(payloads);
+
     return payloads;
   }
 
@@ -567,6 +570,13 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       await runCallbacks(job, "enqueue", async () => {
         await this.queue.enqueue(payload);
       });
+
+      // After the adapter took it, so nothing announces work that was never
+      // queued. A scheduled job is announced separately: how much work is
+      // arriving and how much is waiting are different questions, and a
+      // dashboard adding them together reports a backlog that is not one.
+      if (payload.runAt > Date.now()) enqueueAt(payload, payload.runAt);
+      else successfullyEnqueued(payload);
     };
 
     if ((options.enqueueAfterCommit ?? true) && isDeferring()) {
