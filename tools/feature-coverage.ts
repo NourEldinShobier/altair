@@ -141,6 +141,28 @@ function key(name: string): string {
   return name.charAt(0).toLowerCase() + name.slice(1);
 }
 
+/**
+ * A declaration written the ordinary way: `name(`, `name<`, `name:`, `name=`.
+ *
+ * `\??` is there because an optional property — `perFormCsrfTokens?: boolean` —
+ * is a declaration exactly as much as a required one. Without it the whole
+ * configuration surface of every subsystem read as missing, which made a batch
+ * that shipped real behaviour score nothing and pointed the work away from
+ * config-shaped features for no reason but a spelling.
+ */
+const DECLARATION =
+  /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?\*?\s*([a-zA-Z][a-zA-Z0-9]*)\s*\??\s*[(<:=]/g;
+
+/**
+ * A method installed at runtime: `Object.defineProperty(model, "authenticateBy", …)`.
+ *
+ * The pattern the ORM uses to add methods to a model class, and invisible to
+ * the rule above because the name is a string rather than an identifier.
+ * `authenticateBy` has been implemented and tested here for some time and was
+ * still being counted as missing.
+ */
+const DEFINED_PROPERTY = /defineProperty\(\s*[^,]+,\s*["']([a-zA-Z][a-zA-Z0-9]*)["']/g;
+
 /** Every identifier that appears as a declaration in our source. */
 async function ourNames(packages: string[]): Promise<Set<string>> {
   const names = new Set<string>();
@@ -151,10 +173,10 @@ async function ourNames(packages: string[]): Promise<Set<string>> {
     for await (const file of new Glob("**/*.{ts,tsx}").scan({ cwd: root, onlyFiles: true })) {
       const source = readFileSync(join(root, file), "utf8");
 
-      for (const match of source.matchAll(
-        /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?\*?\s*([a-zA-Z][a-zA-Z0-9]*)\s*[(<:=]/g,
-      )) {
-        names.add(key(match[1] as string));
+      for (const pattern of [DECLARATION, DEFINED_PROPERTY]) {
+        for (const match of source.matchAll(pattern)) {
+          names.add(key(match[1] as string));
+        }
       }
     }
   }
