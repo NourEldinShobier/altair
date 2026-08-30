@@ -70,38 +70,34 @@ async function closeQuietly(connection: Connection | undefined): Promise<void> {
 export async function testConnection(): Promise<Connection> {
   if (isSqlite) return new Connection(TEST_DATABASE_URL);
 
-  // A fresh pool each time. PostgreSQL caches a prepared statement's plan per
-  // connection and refuses to run it once the table it was planned against has
-  // been dropped and rebuilt — which is what these tests do between every case.
+  // One connection for the whole process, emptied between tests rather than
+  // replaced.
   //
-  // The old pool is emptied and closed *before* the new one opens, rather than
-  // after. Two pools were otherwise alive at once for the length of every
-  // teardown, and with a few hundred tests the server runs out of connections
-  // somewhere near the end of the run — which surfaces as a `beforeEach` in
-  // whichever file happens to be last timing out, naming a test that has
-  // nothing to do with it.
+  // It used to be a fresh pool per test, on the theory that PostgreSQL caches a
+  // prepared statement's plan per connection and refuses to run it once the
+  // table it was planned against has been dropped and rebuilt. What that
+  // actually bought was two thousand connect/disconnect cycles against the
+  // server over one run, and MySQL intermittently took whole seconds to hand
+  // one back — five and a half at the worst, against a 5000ms hook budget. The
+  // runner reports that as a timeout naming whichever test came next, which is
+  // why this looked for several rounds like a bug in the validators.
   //
-  // Dropping through the outgoing connection also means the new one never sees
-  // the tables the last file built, so there is nothing for it to have cached
-  // a plan against.
-  // The old pool is closed *first*, before the new one opens and before
-  // anything is dropped.
-  //
-  // Two reasons, and the second is the one that bites. Closing first means only
-  // one pool is ever alive, so a long run cannot exhaust the server's
-  // connections. And closing rolls back whatever that connection still had
-  // open: MySQL makes DDL wait for the metadata lock a transaction holds, so a
-  // test that left one open blocks the next file's `DROP TABLE` indefinitely —
-  // which surfaces as a `beforeEach` timing out in a file that did nothing
-  // wrong, and then as "table already exists" when the hook finally gives up
-  // and the create runs anyway.
-  await step("close", () => closeQuietly(shared));
+  // If the plan-cache problem is real it will show up on PostgreSQL as a
+  // failing query rather than as a mysterious timeout, which is a much better
+  // failure to have.
+  shared ??= await step("open", async () => new Connection(TEST_DATABASE_URL));
 
-  shared = await step("open", async () => new Connection(TEST_DATABASE_URL));
-
-  await step("drop", () => dropAllTables(shared as Connection));
+  await step("empty", () => dropAllTables(shared as Connection));
 
   return shared;
+}
+
+/** Closes the process-wide connection. For a suite that wants to hand it back. */
+export async function closeTestConnection(): Promise<void> {
+  const open = shared;
+  shared = undefined;
+
+  await closeQuietly(open);
 }
 
 /**
