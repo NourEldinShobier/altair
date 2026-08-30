@@ -7,3 +7,4 @@ export * from "./mount.js";
 export * from "./smtp.js";
 export * from "./bounce.js";
 export * from "./mailbox_testing.js";
+export * from "./parts.js";
