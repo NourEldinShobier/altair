@@ -109,6 +109,82 @@ function imageConstructor(): ImageConstructor {
   return runtime;
 }
 
+/** Raised when a transformation asks for something that should not be done. */
+export class InvalidTransformation extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidTransformation";
+  }
+}
+
+/**
+ * The largest variant that will be produced, per side.
+ *
+ * A limit rather than none, because the cost of a resize is the product of the
+ * target dimensions and nothing else bounds it. A request for 50,000 x 50,000
+ * asks for a 10GB buffer, and the process does not come back — so a route that
+ * lets any part of a transformation come from a parameter is a denial of
+ * service with no exploit needed beyond a large number.
+ *
+ * 8192 is generous for anything shown to a person and still an order of
+ * magnitude below where a single image exhausts an ordinary container.
+ */
+export const MAXIMUM_VARIANT_DIMENSION = 8192;
+
+/**
+ * Checks a transformation before any work is done. Rails'
+ * `validate_transformation`.
+ *
+ * Everything here is a value the type system cannot bound: `resize` is a pair
+ * of numbers and `[0, 0]` typechecks, `rotate` is documented as a multiple of
+ * 90 and 37 typechecks, `quality` is documented as 1-100 and 5000 typechecks.
+ * Left unchecked, each fails somewhere further in — inside the decoder, with a
+ * message about the decoder — and one of them does not fail at all but eats
+ * the machine.
+ */
+export function validateTransformation(transformations: Transformations): void {
+  const { resize, rotate, quality, brightness, saturation } = transformations;
+
+  if (resize) {
+    for (const side of resize) {
+      if (side === undefined) continue;
+
+      if (!Number.isInteger(side) || side < 1) {
+        throw new InvalidTransformation(
+          `resize needs whole numbers of pixels above zero, got ${String(side)}.`,
+        );
+      }
+
+      if (side > MAXIMUM_VARIANT_DIMENSION) {
+        throw new InvalidTransformation(
+          `resize to ${String(side)}px is above the ${String(MAXIMUM_VARIANT_DIMENSION)}px limit. ` +
+            `A variant that large costs more memory than it is worth showing anybody.`,
+        );
+      }
+    }
+  }
+
+  // A multiple of 90, which the type says in prose and cannot say in types.
+  // Anything else needs interpolation and a background colour for the corners,
+  // neither of which this has an answer for.
+  if (rotate !== undefined && (!Number.isInteger(rotate) || rotate % 90 !== 0)) {
+    throw new InvalidTransformation(`rotate takes a multiple of 90, got ${String(rotate)}.`);
+  }
+
+  if (quality !== undefined && (!Number.isInteger(quality) || quality < 1 || quality > 100)) {
+    throw new InvalidTransformation(`quality is 1 to 100, got ${String(quality)}.`);
+  }
+
+  for (const [name, value] of [
+    ["brightness", brightness],
+    ["saturation", saturation],
+  ] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+      throw new InvalidTransformation(`${name} takes a non-negative number, got ${String(value)}.`);
+    }
+  }
+}
+
 /**
  * Applies the transformations to some bytes.
  *
@@ -120,6 +196,11 @@ export async function transform(
   source: Uint8Array,
   transformations: Transformations,
 ): Promise<Uint8Array> {
+  // Before the decoder is reached, so a bad number is reported as the bad
+  // number it is rather than as whatever the decoder says when it runs out of
+  // memory — and, for a large resize, before the memory is asked for at all.
+  validateTransformation(transformations);
+
   const Image = imageConstructor();
   let pipeline: ImagePipeline = new Image(source);
 
