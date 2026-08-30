@@ -286,6 +286,28 @@ const ALL_ROWS: Record<string, string> = {
   mysql: "18446744073709551615",
 };
 
+/**
+ * What `with` and `withRecursive` take: a name to a relation or to raw SQL.
+ *
+ * Anything that can produce SQL, rather than `Relation<unknown>`: a Relation is
+ * invariant in its row type, so `Relation<Post>` is not a `Relation<unknown>`
+ * and requiring one would mean every caller casting. Nothing here reads rows
+ * out of the expression — it is a subquery in this statement — so the only
+ * thing actually needed is the SQL.
+ */
+export type WithExpressions = Record<
+  string,
+  { toSql(): { sql: string; bindings: unknown[] } } | { sql: string; bindings?: unknown[] }
+>;
+
+/** One named subquery in a WITH clause. */
+interface CommonTableExpression {
+  name: string;
+  sql: string;
+  bindings: unknown[];
+  recursive: boolean;
+}
+
 /** The aggregate functions `calculate` will dispatch to. */
 export type CalculationName = "count" | "sum" | "average" | "minimum" | "maximum";
 
@@ -306,6 +328,10 @@ export class Relation<T> implements PromiseLike<T[]> {
   #annotations: string[] = [];
   #strictLoading = false;
   #joins: JoinClause[] = [];
+  /** Named subqueries put in front of the SELECT. Rails' `with`. */
+  #withs: CommonTableExpression[] = [];
+  /** What to select from instead of the model's table. Rails' `from`. */
+  #from: string | undefined;
   /**
    * Records handed over by `includes`. Chaining clears this — `#clone` does not
    * copy it — so adding a condition re-queries rather than filtering a stale
@@ -332,6 +358,8 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#lock = this.#lock;
     next.#annotations = [...this.#annotations];
     next.#joins = [...this.#joins];
+    next.#withs = [...this.#withs];
+    next.#from = this.#from;
     return next;
   }
 
@@ -738,7 +766,7 @@ export class Relation<T> implements PromiseLike<T[]> {
       const [, table, name] = dotted;
       // Only a table this relation actually joined, so a condition cannot
       // reach a table the query does not mention.
-      if (table !== this.#source.tableName && !this.#joins.some((join) => join.table === table)) {
+      if (table !== this.#tableName && !this.#joins.some((join) => join.table === table)) {
         throw new Error(
           `Cannot filter on "${column}": this relation does not join "${table}". Add .joins("...") first.`,
         );
@@ -751,20 +779,151 @@ export class Relation<T> implements PromiseLike<T[]> {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
       throw new Error(`Invalid column name: ${column}`);
     }
-    return `${this.connection.quote(this.#source.tableName)}.${this.connection.quote(column)}`;
+    return `${this.connection.quote(this.#tableName)}.${this.connection.quote(column)}`;
+  }
+
+  /**
+   * What this statement selects from, which `from` may have replaced.
+   *
+   * Every column reference has to follow it: qualified against the model's
+   * table, an ORDER BY on a relation reading from a common table expression
+   * names a table the statement no longer mentions, and the database rejects
+   * the whole query.
+   */
+  get #tableName(): string {
+    return this.#from ?? this.#source.tableName;
+  }
+
+  /**
+   * Selects from something other than the model's table. Rails' `from`.
+   *
+   *     Post.with({ recent: Post.where(...) }).from("recent")
+   *
+   * The name is used as written, so it can be a common table expression
+   * defined by `with` or a table this model does not otherwise know about. It
+   * is quoted as an identifier and never interpolated as SQL, so a value that
+   * reached here from a parameter cannot become a query.
+   */
+  from(source: string): Relation<T> {
+    // Validated rather than escaped, like every other identifier here: quoting
+    // a name with a quote in it produces something inert but nonsensical, and
+    // a caller who reached this with a value from a parameter should be told
+    // rather than handed a query against a table nobody named.
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(source)) {
+      throw new Error(`Invalid table name: ${source}`);
+    }
+
+    const next = this.#clone();
+    next.#from = source;
+
+    return next;
+  }
+
+  /**
+   * Names a subquery this query can then select from. Rails' `with`.
+   *
+   *     Post.with({ recent: Post.where("created_at > ?", cutoff) })
+   *         .from("recent")
+   *
+   * The reason to reach for one rather than a subquery written inline: a
+   * common table expression is named, so it can be joined against more than
+   * once and read once. Written inline, the same subquery appearing twice is
+   * two subqueries, and the database is under no obligation to notice they are
+   * the same.
+   */
+  with(expressions: WithExpressions): Relation<T> {
+    return this.#withExpressions(expressions, false);
+  }
+
+  /**
+   * The same, for a query that refers to itself. Rails' `with_recursive`.
+   *
+   *     Comment.withRecursive({
+   *       thread: {
+   *         sql: `SELECT * FROM comments WHERE id = ?
+   *               UNION ALL
+   *               SELECT c.* FROM comments c JOIN thread ON c.parent_id = thread.id`,
+   *         bindings: [rootId],
+   *       },
+   *     }).from("thread")
+   *
+   * This is the one that earns its keep. A tree — a comment thread, an org
+   * chart, a category hierarchy — cannot be fetched in one round trip any
+   * other way. The alternatives are a query per level, which is a round trip
+   * per level of depth and unbounded, or a materialized path column, which is
+   * a second copy of the tree that has to be kept correct on every move.
+   *
+   * RECURSIVE is a property of the whole WITH clause rather than of one
+   * expression, so mixing this with `with` makes the whole clause recursive —
+   * `#withClause` asks whether any expression wants it. That is what the SQL
+   * standard says and what every database implements; a non-recursive
+   * expression inside a recursive clause is still fine.
+   */
+  withRecursive(expressions: WithExpressions): Relation<T> {
+    return this.#withExpressions(expressions, true);
+  }
+
+  #withExpressions(expressions: WithExpressions, recursive: boolean): Relation<T> {
+    const next = this.#clone();
+
+    for (const [name, expression] of Object.entries(expressions)) {
+      const built =
+        "toSql" in expression
+          ? expression.toSql()
+          : { sql: expression.sql, bindings: expression.bindings ?? [] };
+
+      // Replacing by name rather than appending, so chaining `with` twice with
+      // the same name does not put two definitions in one clause — which is a
+      // syntax error the database reports about a name the caller only wrote
+      // once.
+      const existing = next.#withs.findIndex((one) => one.name === name);
+      const entry: CommonTableExpression = {
+        name,
+        sql: built.sql,
+        bindings: built.bindings,
+        recursive,
+      };
+
+      if (existing === -1) next.#withs.push(entry);
+      else next.#withs[existing] = entry;
+    }
+
+    return next;
+  }
+
+  /** The WITH clause and its bindings, which come before everything else. */
+  #withClause(bindings: unknown[]): string {
+    if (this.#withs.length === 0) return "";
+
+    const recursive = this.#withs.some((one) => one.recursive);
+    const parts = this.#withs.map((one) => {
+      bindings.push(...one.bindings);
+
+      return `${this.connection.quote(one.name)} AS (${one.sql})`;
+    });
+
+    return `WITH ${recursive ? "RECURSIVE " : ""}${parts.join(", ")} `;
   }
 
   /** The SQL and bindings this relation would run. Useful in tests and logs. */
   toSql(): { sql: string; bindings: unknown[] } {
     const connection = this.connection;
-    const table = connection.quote(this.#source.tableName);
+    // The name everything else in the statement qualifies against: a `from`
+    // replaces the model's table, so `table.*` and every join's ON clause have
+    // to follow it or they name a table the statement no longer selects.
+    const table = connection.quote(this.#tableName);
     const bindings: unknown[] = [];
 
     const columns = this.#selects
       ? this.#selects.map((column) => this.#quoteColumn(column)).join(", ")
       : `${table}.*`;
 
-    let sql = `SELECT ${this.#distinct ? "DISTINCT " : ""}${columns} FROM ${table}`;
+    // Built before the SELECT so its bindings are pushed first: they appear
+    // first in the statement, and a positional placeholder counts from the
+    // left regardless of which clause it sits in.
+    const withClause = this.#withClause(bindings);
+
+    let sql = `${withClause}SELECT ${this.#distinct ? "DISTINCT " : ""}${columns} FROM ${table}`;
 
     for (const join of this.#joins) {
       const joined = connection.quote(join.table);

@@ -34,7 +34,13 @@ import {
 } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
-import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
+import {
+  Relation,
+  RecordNotFound,
+  type Conditions,
+  type JoinSpec,
+  type WithExpressions,
+} from "./relation.js";
 import { columnTypeFor } from "./dump.js";
 import { columnSchemas, type ColumnSchema } from "./introspect.js";
 import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
@@ -2674,6 +2680,27 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return this.all().where(conditionsOrSql);
     }
 
+    /** Rails' `with`: a named subquery this query can select from. */
+    static with<M extends typeof BaseModel>(
+      this: M,
+      expressions: Parameters<Relation<InstanceType<M>>["with"]>[0],
+    ): Relation<InstanceType<M>> {
+      return this.all().with(expressions);
+    }
+
+    /** Rails' `with_recursive`: the same, for a query that refers to itself. */
+    static withRecursive<M extends typeof BaseModel>(
+      this: M,
+      expressions: Parameters<Relation<InstanceType<M>>["withRecursive"]>[0],
+    ): Relation<InstanceType<M>> {
+      return this.all().withRecursive(expressions);
+    }
+
+    /** Rails' `from`: select from something other than this model's table. */
+    static from<M extends typeof BaseModel>(this: M, source: string): Relation<InstanceType<M>> {
+      return this.all().from(source);
+    }
+
     static order<M extends typeof BaseModel>(
       this: M,
       column: string,
@@ -4844,6 +4871,12 @@ export interface ModelClass<A extends object> {
   where<T>(this: ModelConstructor<A, T>, conditions: Conditions): Relation<T>;
   where<T>(this: ModelConstructor<A, T>, sql: string, ...bindings: unknown[]): Relation<T>;
   order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
+  /** Rails' `with`: a named subquery this query can select from. */
+  with<T>(this: ModelConstructor<A, T>, expressions: WithExpressions): Relation<T>;
+  /** Rails' `with_recursive`: the same, for a query that refers to itself. */
+  withRecursive<T>(this: ModelConstructor<A, T>, expressions: WithExpressions): Relation<T>;
+  /** Rails' `from`: select from something other than this model's table. */
+  from<T>(this: ModelConstructor<A, T>, source: string): Relation<T>;
   limit<T>(this: ModelConstructor<A, T>, count: number): Relation<T>;
   find<T>(this: ModelConstructor<A, T>, ids: readonly unknown[]): Promise<T[]>;
   find<T>(this: ModelConstructor<A, T>, id: unknown): Promise<T>;
