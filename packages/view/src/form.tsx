@@ -24,6 +24,7 @@
 import { humanize, underscore } from "@altair/support";
 import type { Attributes, Node } from "./render.js";
 import { useCsrfToken } from "./context.js";
+import { preventContentExfiltration } from "./sanitize_vendor.js";
 
 /** What a builder needs from a record. Structural, so any model qualifies. */
 export interface FormRecord {
@@ -393,16 +394,22 @@ export function FormWith(props: FormOptions & { children: (f: FormBuilder) => No
       : (props.authenticityToken ?? useCsrfToken());
 
   return (
-    <form
-      action={props.url}
-      method={sent}
-      {...(props.id ? { id: props.id } : {})}
-      {...(props.class ? { class: props.class } : {})}
-      {...(props.attributes ?? {})}
-    >
-      {intended === sent ? null : <input type="hidden" name="_method" value={intended} />}
-      {token ? <input type="hidden" name="authenticity_token" value={token} /> : null}
-      {props.children(builder)}
-    </form>
+    <>
+      {/* Closes anything an attacker opened earlier in the page, so this
+          form's fields cannot be claimed by somebody else's. Nothing unless
+          the application turned it on. */}
+      {preventContentExfiltration()}
+      <form
+        action={props.url}
+        method={sent}
+        {...(props.id ? { id: props.id } : {})}
+        {...(props.class ? { class: props.class } : {})}
+        {...(props.attributes ?? {})}
+      >
+        {intended === sent ? null : <input type="hidden" name="_method" value={intended} />}
+        {token ? <input type="hidden" name="authenticity_token" value={token} /> : null}
+        {props.children(builder)}
+      </form>
+    </>
   );
 }

@@ -29,3 +29,4 @@ export * from "./date_select.js";
 export * from "./meta_tags.js";
 export * from "./record_fields.js";
 export * from "./collection.js";
+export * from "./sanitize_vendor.js";
