@@ -261,6 +261,6 @@ describe("from", () => {
 
     base.from("archived_posts");
 
-    expect(sqlOf(base)).toContain('FROM "posts"');
+    expect(sqlOf(base)).toContain(`FROM ${q("posts")}`);
   });
 });

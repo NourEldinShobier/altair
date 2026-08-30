@@ -42,17 +42,22 @@ export async function testConnection(): Promise<Connection> {
   // Dropping through the outgoing connection also means the new one never sees
   // the tables the last file built, so there is nothing for it to have cached
   // a plan against.
-  const previous = shared;
-
-  if (previous) {
-    await dropAllTables(previous);
-    await previous.close();
-  }
+  // The old pool is closed *first*, before the new one opens and before
+  // anything is dropped.
+  //
+  // Two reasons, and the second is the one that bites. Closing first means only
+  // one pool is ever alive, so a long run cannot exhaust the server's
+  // connections. And closing rolls back whatever that connection still had
+  // open: MySQL makes DDL wait for the metadata lock a transaction holds, so a
+  // test that left one open blocks the next file's `DROP TABLE` indefinitely —
+  // which surfaces as a `beforeEach` timing out in a file that did nothing
+  // wrong, and then as "table already exists" when the hook finally gives up
+  // and the create runs anyway.
+  await shared?.close();
 
   shared = new Connection(TEST_DATABASE_URL);
 
-  // The first call inherits whatever the last run left behind.
-  if (!previous) await dropAllTables(shared);
+  await dropAllTables(shared);
 
   return shared;
 }
@@ -76,7 +81,14 @@ export async function dropAllTables(connection: Connection): Promise<void> {
 
   // MySQL refuses to drop a table another table references, and the order that
   // would satisfy every foreign key is not worth computing for a test database.
-  if (connection.adapter === "mysql") await connection.execute("SET FOREIGN_KEY_CHECKS = 0");
+  if (connection.adapter === "mysql") {
+    await connection.execute("SET FOREIGN_KEY_CHECKS = 0");
+    // Fail fast instead of hanging. If something does hold a metadata lock,
+    // five seconds of waiting is reported by the test runner as a hook timeout
+    // naming an unrelated test; two seconds of waiting is reported by MySQL as
+    // a lock timeout naming the table.
+    await connection.execute("SET SESSION lock_wait_timeout = 2");
+  }
 
   for (const name of names) {
     const cascade = connection.adapter === "postgres" ? " CASCADE" : "";
