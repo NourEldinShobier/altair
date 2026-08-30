@@ -8,7 +8,7 @@
  */
 
 import { deserializeArguments } from "./serializers.js";
-import { Continuation, JobInterrupted } from "./continuable.js";
+import { Continuation, JobInterrupted, checkResumeLimit, resumedState } from "./continuable.js";
 import { Job, type JobPayload, type QueueAdapter } from "./job.js";
 
 /**
@@ -179,6 +179,16 @@ export async function runJob(
   options: RunOptions = {},
 ): Promise<RunResult> {
   const klass = Job.lookup(payload.jobClass);
+
+  try {
+    // Before the job runs, so a job that has exhausted its resumptions fails
+    // once and leaves the queue rather than being started again and stopped
+    // again at its first checkpoint for ever.
+    if (payload.continuation) checkResumeLimit(payload.continuation, klass.maxResumptions);
+  } catch (error) {
+    return { status: "failed", payload: { ...payload, attempts: payload.attempts + 1 }, error };
+  }
+
   const continuation = new Continuation(payload.continuation, options.shouldStop);
 
   try {
@@ -194,7 +204,11 @@ export async function runJob(
     // it stopped because it was asked to, and burning a retry for a deploy
     // would mean a long job dies after however many deploys the policy allows.
     if (error instanceof JobInterrupted) {
-      const resumed: JobPayload = { ...payload, continuation: error.continuation, runAt: 0 };
+      const resumed: JobPayload = {
+        ...payload,
+        continuation: resumedState(error.continuation),
+        runAt: 0,
+      };
       await adapter.enqueue(resumed);
 
       return { status: "interrupted", payload: resumed };
