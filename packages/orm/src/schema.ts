@@ -402,6 +402,11 @@ function defaultLiteral(value: unknown): string {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
+/** A comment as a SQL literal, or NULL to remove it. */
+function commentLiteral(comment: string | null): string {
+  return comment === null ? "NULL" : `'${comment.replaceAll("'", "''")}'`;
+}
+
 export class SchemaStatements {
   constructor(readonly connection: Connection) {}
 
@@ -810,6 +815,103 @@ export class SchemaStatements {
     await this.connection.execute(
       `ALTER TABLE ${quoted} ALTER COLUMN ${name} SET DEFAULT ${defaultLiteral(value)}`,
     );
+  }
+
+  /**
+   * Writes a note against a table. Rails' `change_table_comment`.
+   *
+   * Stored in the database rather than in a migration file, which is the point:
+   * every tool that looks at the schema — psql, a GUI client, whatever the
+   * analytics team uses — shows it, and a comment that lives only in a
+   * migration is a comment only somebody reading the repository will find.
+   *
+   * SQLite has no comment support at all. It is refused rather than silently
+   * skipped, because a schema that quietly loses its documentation on one
+   * adapter is a schema whose documentation nobody can rely on.
+   */
+  async changeTableComment(table: string, comment: string | null): Promise<void> {
+    this.#requireComments("changeTableComment");
+
+    await this.connection.execute(
+      `COMMENT ON TABLE ${this.connection.quote(table)} IS ${commentLiteral(comment)}`,
+    );
+  }
+
+  /** The same for one column. Rails' `change_column_comment`. */
+  async changeColumnComment(table: string, column: string, comment: string | null): Promise<void> {
+    this.#requireComments("changeColumnComment");
+
+    await this.connection.execute(
+      `COMMENT ON COLUMN ${this.connection.quote(table)}.${this.connection.quote(column)} IS ${commentLiteral(comment)}`,
+    );
+  }
+
+  /** What a table's comment says, or undefined. Rails' `table_comment`. */
+  async tableComment(table: string): Promise<string | undefined> {
+    if (this.connection.adapter !== "postgres") return undefined;
+
+    const rows = await this.connection.query<Row>(
+      `SELECT obj_description(${this.connection.placeholder(0)}::regclass, 'pg_class') AS comment`,
+      [table],
+    );
+    const comment = rows[0]?.comment;
+
+    return comment === null || comment === undefined ? undefined : String(comment);
+  }
+
+  #requireComments(operation: string): void {
+    if (this.connection.adapter === "postgres") return;
+
+    throw new UnsupportedSchemaChange(
+      operation,
+      `${this.connection.adapter} has no schema comments. Keep the note in the migration instead.`,
+    );
+  }
+
+  /**
+   * Runs a block with foreign keys not enforced. Rails'
+   * `disable_referential_integrity`.
+   *
+   * What loading fixtures needs. A set of fixtures references itself in every
+   * direction — a post's author, an author's favourite post — so there is no
+   * insertion order that satisfies every constraint, and sorting them is
+   * solving a graph problem to avoid a switch the database already has.
+   *
+   * Turned back on in a `finally`, and that is the whole safety of it: a
+   * connection left with checks off is a connection that will accept broken
+   * data for the rest of its life, and nothing about the eventual corruption
+   * points back here.
+   */
+  async disableReferentialIntegrity<T>(body: () => Promise<T>): Promise<T> {
+    const off = this.#referentialIntegrityStatement(false);
+    const on = this.#referentialIntegrityStatement(true);
+
+    if (off === undefined || on === undefined) return await body();
+
+    await this.connection.execute(off);
+
+    try {
+      return await body();
+    } finally {
+      await this.connection.execute(on);
+    }
+  }
+
+  #referentialIntegrityStatement(enabled: boolean): string | undefined {
+    switch (this.connection.adapter) {
+      case "sqlite":
+        return `PRAGMA foreign_keys = ${enabled ? "ON" : "OFF"}`;
+      case "mysql":
+        return `SET FOREIGN_KEY_CHECKS = ${enabled ? "1" : "0"}`;
+      default:
+        // PostgreSQL has no session-wide switch that an ordinary user may
+        // throw: `session_replication_role` needs superuser. Rails disables
+        // each table's triggers instead, which needs ownership of every table
+        // — so the honest answer here is that this connection cannot, and the
+        // caller gets its block run with the constraints still on rather than
+        // a statement that will fail.
+        return undefined;
+    }
   }
 
   async renameTable(from: string, to: string): Promise<void> {
