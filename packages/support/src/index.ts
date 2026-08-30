@@ -40,3 +40,5 @@ export * from "./time_zone.js";
 export * from "./source_extract.js";
 export * from "./suggestions.js";
 export * from "./files.js";
+export * from "./acts_like.js";
+export * from "./mutex.js";
