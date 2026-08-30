@@ -10,3 +10,4 @@ export * from "./mailbox_testing.js";
 export * from "./parts.js";
 export * from "./preview_interceptors.js";
 export * from "./text_format.js";
+export * from "./inbound_source.js";

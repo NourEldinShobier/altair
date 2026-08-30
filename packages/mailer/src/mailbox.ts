@@ -34,7 +34,25 @@ export interface InboundMessage {
   receivedAt?: Date;
 }
 
-export type InboundStatus = "pending" | "delivered" | "bounced" | "failed";
+/**
+ * What has become of an inbound message. Rails' `ActionMailbox::InboundEmail`
+ * statuses.
+ *
+ * `processing` and `success` are separate from `delivered` because they answer
+ * different questions: `processing` says a worker picked it up and did not
+ * finish — which is how a message stuck in a crashed worker is found — and
+ * `success` says the mailbox ran without deciding anything, where `delivered`
+ * says a mailbox took it. A single flag collapses "nobody has looked at this"
+ * and "something looked at it and crashed" into one state, and those need
+ * different actions.
+ */
+export type InboundStatus =
+  | "pending"
+  | "processing"
+  | "delivered"
+  | "success"
+  | "bounced"
+  | "failed";
 
 /** What a mailbox did with a message. */
 export interface InboundResult {
