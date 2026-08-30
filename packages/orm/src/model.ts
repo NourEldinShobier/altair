@@ -2416,6 +2416,64 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       }
     }
 
+    /**
+     * Whether saves of this model write timestamps. Rails' `record_timestamps`.
+     *
+     * A join table, an append-only log, a table whose times come from
+     * somewhere else: all of them have a reason not to want created_at and
+     * updated_at maintained, and turning it off per model is cheaper than
+     * excluding the columns everywhere they are written.
+     */
+    static recordTimestamps = true;
+
+    /**
+     * Runs a block with timestamps off. Rails' `without_timestamps`.
+     *
+     * For a data migration that must not disturb updated_at — the column
+     * usually means "when a person last changed this", and a backfill touching
+     * every row makes it mean "when we ran the backfill", which is a fact
+     * nobody wanted recorded and cannot be undone.
+     */
+    static async withoutTimestamps<T>(body: () => T | Promise<T>): Promise<T> {
+      const before = this.recordTimestamps;
+      this.recordTimestamps = false;
+
+      try {
+        return await body();
+      } finally {
+        this.recordTimestamps = before;
+      }
+    }
+
+    /** @internal Whether saves of this model are being suppressed right now. */
+    static suppressed = false;
+
+    /**
+     * Runs a block in which saving this model does nothing. Rails' `suppress`.
+     *
+     * The case it was written for: importing a hundred thousand rows where a
+     * callback creates a notification per record. Suppressing the notification
+     * is the difference between an import and an import plus a hundred
+     * thousand emails.
+     *
+     * `save` answers true, as Rails does, because the caller asked for the
+     * record to be persisted and the application has decided that means
+     * nothing here — reporting failure would send it down an error path for a
+     * situation that is not an error.
+     */
+    static async suppress<T>(body: () => T | Promise<T>): Promise<T> {
+      const before = this.suppressed;
+      this.suppressed = true;
+
+      try {
+        return await body();
+      } finally {
+        // In a finally, or one throwing import leaves the model unable to save
+        // for the rest of the process — a failure that looks like data loss.
+        this.suppressed = before;
+      }
+    }
+
     static touchingDisabled = false;
 
     /** The column an STI hierarchy reads its type from. */
@@ -4016,6 +4074,10 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     private async saveRecord(): Promise<boolean> {
+      // Checked before validation: a suppressed save does nothing at all, and
+      // running validations first would let a callback on them fire.
+      if ((this.constructor as typeof BaseModel).suppressed) return true;
+
       if (!(await this.validate())) return false;
 
       const klass = this.constructor as typeof BaseModel;
@@ -4056,8 +4118,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // are only ever created — and naming a column that is not there fails
       // the insert outright.
       const present = await klass.columnNames();
-      if (present.includes("created_at")) this[ATTRIBUTES].created_at ??= now;
-      if (present.includes("updated_at")) this[ATTRIBUTES].updated_at = now;
+
+      if (klass.recordTimestamps) {
+        if (present.includes("created_at")) this[ATTRIBUTES].created_at ??= now;
+        if (present.includes("updated_at")) this[ATTRIBUTES].updated_at = now;
+      }
 
       // A hierarchy's rows record which class wrote them, root included.
       if (klass.stiRoot !== undefined || Object.keys(klass.descendants).length > 0) {
@@ -4753,6 +4818,10 @@ export interface ModelClass<A extends object> {
   scope(name: string, body: (relation: Relation<unknown>) => Relation<unknown>): void;
   columnNames(): Promise<string[]>;
   hasTimestamps(): Promise<boolean>;
+  recordTimestamps: boolean;
+  withoutTimestamps<T>(body: () => T | Promise<T>): Promise<T>;
+  suppressed: boolean;
+  suppress<T>(body: () => T | Promise<T>): Promise<T>;
 
   validations: ValidationDeclaration[];
   validates(attribute: string, options: ValidationOptions): void;
