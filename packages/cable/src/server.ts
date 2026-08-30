@@ -141,6 +141,11 @@ export class StreamRegistry implements Broadcaster {
     }
   }
 
+  /** How many distinct streams have a local subscriber. */
+  get streamCount(): number {
+    return this.#streams.size;
+  }
+
   subscriberCount(stream: string): number {
     return this.#streams.get(stream)?.size ?? 0;
   }
@@ -190,6 +195,14 @@ export function frameFor(subscriptions: Map<string, Channel>, payload: string): 
 export class Cable {
   readonly path: string;
   readonly streams = new StreamRegistry();
+  /**
+   * The sockets this process is holding. Rails' `ActionCable::Server#connections`.
+   *
+   * Per process, like the identity registry, and for the same reason: a socket
+   * is held by the machine it connected to and nowhere else. A deployment
+   * behind several processes reads these from each and adds them up.
+   */
+  readonly #connections = new Set<CableSocket & { data: SocketData }>();
   #broadcaster: Broadcaster = this.streams;
   #ping: ReturnType<typeof setInterval> | undefined;
 
@@ -303,6 +316,7 @@ export class Cable {
           });
         }
 
+        this.addConnection(ws);
         ws.send(welcomeFrame());
       },
 
@@ -330,6 +344,7 @@ export class Cable {
       },
 
       close: async (ws) => {
+        this.removeConnection(ws);
         ws.data.untrack?.();
         ws.data.untrack = undefined;
 
@@ -411,6 +426,79 @@ export class Cable {
   }
 
   /** Closes a connection with a protocol disconnect frame. */
+  /** Records an open socket. Called by the open handler. */
+  addConnection(ws: CableSocket & { data: SocketData }): void {
+    this.#connections.add(ws);
+  }
+
+  /** Forgets a socket. Called by the close handler. */
+  removeConnection(ws: CableSocket & { data: SocketData }): void {
+    this.#connections.delete(ws);
+  }
+
+  /** How many sockets this process is holding. */
+  get connectionCount(): number {
+    return this.#connections.size;
+  }
+
+  /**
+   * Runs a function for each open socket. Rails' `each_connection`.
+   *
+   * Over a copy. A Set tolerates deletion during iteration, so disconnecting
+   * what the body is given — the ordinary use — would be safe either way; the
+   * copy is for a body that opens something, where iterating the live set
+   * would visit what it just added.
+   */
+  eachConnection(body: (ws: CableSocket & { data: SocketData }) => void): void {
+    const open = Array.from(this.#connections);
+
+    for (const ws of open) body(ws);
+  }
+
+  /**
+   * What an ops endpoint or a health check reads. Rails'
+   * `open_connections_statistics`.
+   *
+   * Subscriptions rather than only sockets, because the two come apart: one
+   * browser tab holding twelve channel subscriptions is one connection and
+   * twelve subscriptions, and it is the second number that says whether the
+   * process is near its limit.
+   */
+  statistics(): { connections: number; subscriptions: number; streams: number } {
+    let subscriptions = 0;
+
+    for (const ws of this.#connections) subscriptions += ws.data.subscriptions.size;
+
+    return {
+      connections: this.#connections.size,
+      subscriptions,
+      streams: this.streams.streamCount,
+    };
+  }
+
+  /**
+   * Closes every socket, asking each client to reconnect. Rails' `shutdown`.
+   *
+   * For a deploy. Dropped without this frame, a client waits out its heartbeat
+   * timeout before deciding the connection is gone — so a rolling restart
+   * leaves every user disconnected for that long, staggered, which reads as
+   * the application being flaky rather than as a deploy. Told to reconnect,
+   * they come back to the new process at once.
+   */
+  shutdown(reason: string = DISCONNECT_REASONS.serverRestart): number {
+    const closed = this.#connections.size;
+
+    this.eachConnection((ws) => {
+      ws.send(disconnectFrame(reason, true));
+      ws.close(1000, reason);
+    });
+
+    this.#connections.clear();
+    this.detach();
+
+    return closed;
+  }
+
   disconnect(ws: CableSocket, reason: string = DISCONNECT_REASONS.unauthorized): void {
     ws.send(disconnectFrame(reason, false));
     ws.close(1000, reason);
