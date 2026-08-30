@@ -28,3 +28,4 @@ export * from "./fragment.js";
 export * from "./store.js";
 export * from "./serialization.js";
 export * from "./attribute.js";
+export * from "./protected_environments.js";
