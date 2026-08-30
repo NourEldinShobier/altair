@@ -12,6 +12,7 @@
  * sending every client another client's identifier.
  */
 
+import { connectionIdentifier, trackConnection } from "./identity.js";
 import { UnauthorizedConnection, allowRequestOrigin, type OriginPolicy } from "./origin.js";
 import type { Broadcaster, CableSocket, ChannelContext, ConnectionContext } from "./channel.js";
 import { Channel, topicFor } from "./channel.js";
@@ -34,6 +35,14 @@ export interface SocketData {
   connection: ConnectionContext;
   /** Live channels, keyed by the raw identifier string the client sent. */
   subscriptions: Map<string, Channel>;
+  /**
+   * Forgets this socket from the identity registry. Set when it opens.
+   *
+   * Held here rather than looked up on close, because by then the connection
+   * may already have been disconnected from elsewhere and searching for it
+   * would either find nothing or find somebody else's socket.
+   */
+  untrack?: () => void;
 }
 
 export interface CableOptions {
@@ -111,11 +120,24 @@ export class StreamRegistry implements Broadcaster {
     }
   }
 
-  /** Drops a socket from every stream it was on. */
+  /**
+   * Drops a socket from every stream it was on.
+   *
+   * Goes through `remove` rather than deleting directly, so a stream losing
+   * its last local subscriber reports that exactly as it would have on an
+   * explicit unsubscribe. Deleting here instead meant a cross-process adapter
+   * was never told, and every disconnect leaked the upstream subscription for
+   * each stream that socket was the last one on — a Redis connection that
+   * accumulates channels for as long as the process runs.
+   *
+   * The names are copied first because `remove` deletes from the map this
+   * would otherwise be iterating.
+   */
   removeEverywhere(socket: CableSocket): void {
-    for (const [stream, sockets] of this.#streams) {
-      sockets.delete(socket as CableSocket & { data: SocketData });
-      if (sockets.size === 0) this.#streams.delete(stream);
+    const streams = Array.from(this.#streams.keys());
+
+    for (const stream of streams) {
+      this.remove(stream, socket as CableSocket & { data: SocketData });
     }
   }
 
@@ -267,6 +289,20 @@ export class Cable {
         // Every socket joins the ping topic, so one publish reaches everyone
         // rather than one timer per connection.
         ws.subscribe(topicFor("__ping__"));
+
+        // Recorded under whatever identity it opened with, so it can be found
+        // and closed later. Without this the identity registry stays empty and
+        // `disconnectAll` reports nothing to disconnect — so revoking a
+        // session leaves the socket open, still receiving every broadcast the
+        // user was subscribed to, until they happen to close the tab.
+        const identifier = connectionIdentifier(ws.data.connection);
+
+        if (identifier !== undefined) {
+          ws.data.untrack = trackConnection(identifier, () => {
+            this.disconnect(ws, DISCONNECT_REASONS.unauthorized);
+          });
+        }
+
         ws.send(welcomeFrame());
       },
 
@@ -294,6 +330,9 @@ export class Cable {
       },
 
       close: async (ws) => {
+        ws.data.untrack?.();
+        ws.data.untrack = undefined;
+
         this.streams.removeEverywhere(ws);
 
         for (const channel of ws.data.subscriptions.values()) {
