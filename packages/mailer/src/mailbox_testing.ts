@@ -19,6 +19,11 @@ import {
   type MailboxRouter,
 } from "./mailbox.js";
 
+// Re-exported so a test keeps importing them from here, though they live with
+// the routing now: they are what decides which mailbox a message reaches, not
+// a testing convenience.
+export { recipientsAddresses, xForwardedToAddresses, xOriginalToAddresses } from "./mailbox.js";
+
 /**
  * A message from the parts a test actually cares about.
  *
@@ -112,50 +117,4 @@ export async function receiveInboundEmailFromFixture(
 /** The same, from a provider's webhook payload. */
 export function createInboundEmailFromPayload(body: unknown): InboundMessage {
   return parseInbound(body);
-}
-
-/**
- * Addresses a forwarding relay put the message through. Rails'
- * `x_forwarded_to_addresses`.
- *
- * The header a mail server adds when it forwards, and the reason a mailbox
- * cannot route on `to` alone: a message forwarded from `support@` to a
- * catch-all arrives addressed to the catch-all, and the address that decides
- * which mailbox handles it is in here instead.
- */
-export function xForwardedToAddresses(message: InboundMessage): string[] {
-  return splitAddresses(message.headers?.["x-forwarded-to"]);
-}
-
-/** The address a message was originally sent to. Rails' `x_original_to_addresses`. */
-export function xOriginalToAddresses(message: InboundMessage): string[] {
-  return splitAddresses(message.headers?.["x-original-to"]);
-}
-
-/**
- * Every address that could have brought this message here, in the order a
- * mailbox should try them. Rails' `recipients_addresses`.
- *
- * The forwarded and original addresses come first, because they are the
- * specific ones: `to` on a forwarded message is the catch-all that received
- * it, and routing on that would send everything to one mailbox.
- */
-export function recipientsAddresses(message: InboundMessage): string[] {
-  const all = [
-    ...xForwardedToAddresses(message),
-    ...xOriginalToAddresses(message),
-    ...message.to,
-    ...(message.cc ?? []),
-  ];
-
-  return [...new Set(all.map((one) => addressOf(one).toLowerCase()))];
-}
-
-function splitAddresses(header: string | undefined): string[] {
-  if (!header) return [];
-
-  return header
-    .split(",")
-    .map((one) => addressOf(one.trim()))
-    .filter((one) => one.length > 0);
 }

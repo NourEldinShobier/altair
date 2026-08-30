@@ -168,6 +168,52 @@ describe("receiving", () => {
     expect(SupportMailbox.received).toEqual(["Help"]);
   });
 
+  /**
+   * The bug this fixed: routing considered only `to` and `cc`, so a message
+   * forwarded from support@ to a catch-all arrived addressed to the catch-all
+   * and reached whichever mailbox owned that — never the one it was for.
+   */
+  it("routes on the forwarded address, not the catch-all it arrived at", async () => {
+    SupportMailbox.received = [];
+    const router = new MailboxRouter().route("support@example.com", SupportMailbox);
+
+    const result = await receiveInboundEmailFromMail(router, {
+      to: ["catchall@example.com"],
+      subject: "Forwarded",
+      headers: { "x-forwarded-to": "support@example.com" },
+    });
+
+    expect(result.status).toBe("delivered");
+    expect(SupportMailbox.received).toEqual(["Forwarded"]);
+  });
+
+  it("routes on the original address too", async () => {
+    SupportMailbox.received = [];
+    const router = new MailboxRouter().route("support@example.com", SupportMailbox);
+
+    await receiveInboundEmailFromMail(router, {
+      to: ["catchall@example.com"],
+      subject: "Original",
+      headers: { "x-original-to": "support@example.com" },
+    });
+
+    expect(SupportMailbox.received).toEqual(["Original"]);
+  });
+
+  it("declares several routes at once, in order", async () => {
+    SupportMailbox.received = [];
+    const router = new MailboxRouter().addRoutes([
+      ["support@example.com", SupportMailbox],
+      [/.*/, SupportMailbox],
+    ]);
+
+    expect(router.routingPatterns()).toHaveLength(2);
+
+    await receiveInboundEmailFromMail(router, { to: ["anything@example.com"], subject: "Caught" });
+
+    expect(SupportMailbox.received).toEqual(["Caught"]);
+  });
+
   it("routes a message built from source", async () => {
     SupportMailbox.received = [];
     const router = new MailboxRouter().route("support@example.com", SupportMailbox);
