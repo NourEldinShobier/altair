@@ -133,7 +133,48 @@ type FieldName<M extends ModelClass> = keyof InstanceType<M> & string;
  *       static { hasRichText(this, "content") }
  *     }
  */
+/**
+ * Which rich text fields each model declared, by model name.
+ *
+ * The same question association and attachment reflection answer: a serializer
+ * deciding what to include, an admin page listing what a record holds, a
+ * search indexer that needs the bodies as well as the columns. Without it each
+ * is handed a list that drifts from the model.
+ */
+const richTextFields = new Map<string, Set<string>>();
+
+/** Every rich text field a model declared. Rails' `rich_text_association_names`. */
+export function richTextAssociationNames(model: { name: string }): string[] {
+  return [...(richTextFields.get(model.name) ?? [])];
+}
+
+/** Whether a model declared this rich text field. */
+export function hasRichTextField(model: { name: string }, name: string): boolean {
+  return richTextFields.get(model.name)?.has(name) ?? false;
+}
+
+/**
+ * A relation preloading every rich text body a model has. Rails'
+ * `with_all_rich_text`.
+ *
+ * The names, for a caller to include: rendering a list of records with their
+ * bodies is one query per record without it, which is the N+1 that hurts most
+ * because each row is a separate table lookup.
+ */
+export function withAllRichText(model: { name: string }): string[] {
+  return richTextAssociationNames(model);
+}
+
+/** Forgets the declarations. For tests that redefine a class per case. */
+export function resetRichTextReflections(): void {
+  richTextFields.clear();
+}
+
 export function hasRichText<M extends ModelClass>(model: M, name: FieldName<M>): void {
+  const declared = richTextFields.get(model.name) ?? new Set<string>();
+  declared.add(name);
+  richTextFields.set(model.name, declared);
+
   // A getter on the prototype rather than a field: a field would be an own
   // property on every instance, which the Proxy a model is wrapped in would
   // find before it looked for an attribute.

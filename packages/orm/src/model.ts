@@ -2069,11 +2069,46 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * identity on every read would make `===` useless and quietly break any
      * memo keyed on it.
      */
+    /**
+     * The value objects this model composes, by name. Rails'
+     * `aggregate_reflections`.
+     *
+     * Recorded so a serializer or a form builder can ask which columns belong
+     * to one value object — otherwise `street`, `city` and `postcode` look
+     * like three independent fields, and a form renders them as such.
+     */
+    static aggregations: Record<string, AggregateReflection> = {};
+
+    /** Every aggregation declared. Rails' `reflect_on_all_aggregations`. */
+    static reflectOnAllAggregations(): AggregateReflection[] {
+      return Object.values(this.aggregations);
+    }
+
+    /** One aggregation, or undefined. Rails' `reflect_on_aggregation`. */
+    static reflectOnAggregation(name: string): AggregateReflection | undefined {
+      return this.aggregations[name];
+    }
+
+    /** Every aggregation name, in declaration order. */
+    static aggregationNames(): string[] {
+      return Object.keys(this.aggregations);
+    }
+
     static composedOf<V, P extends Record<string, unknown>>(
       name: string,
       options: ComposedOfOptions<V, P>,
     ): void {
       const columns = Object.keys(options.mapping);
+
+      // Copy on write, so a subclass composing its own leaves its parent alone.
+      if (!Object.hasOwn(this, "aggregations")) this.aggregations = { ...this.aggregations };
+      this.aggregations[name] = {
+        name,
+        columns,
+        mapping: { ...(options.mapping as Record<string, string>) },
+        allowNil: options.allowNil ?? true,
+      };
+
       const cache = `__composed_${name}`;
       const stamp = `__composed_stamp_${name}`;
 
@@ -4565,6 +4600,17 @@ const PROXY_HANDLER: ProxyHandler<{ [ATTRIBUTES]: Record<string, unknown> }> = {
  * rather than the base shape — which is what lets a subclass declare its own
  * association accessors and have them survive a query.
  */
+/** What a model recorded about one `composedOf` declaration. */
+export interface AggregateReflection {
+  name: string;
+  /** The columns the value object is built from. */
+  columns: string[];
+  /** Which column feeds which part of the value object. */
+  mapping: Record<string, string>;
+  /** Whether an all-null set of columns answers null rather than a value. */
+  allowNil: boolean;
+}
+
 /**
  * How a value object maps onto columns. Rails' `composed_of` options.
  *
@@ -4853,6 +4899,10 @@ export interface ModelClass<A extends object> {
   afterUpdateCommit(callback: unknown): void;
   afterDestroyCommit(callback: unknown): void;
   afterSaveCommit(callback: unknown): void;
+  aggregations: Record<string, AggregateReflection>;
+  reflectOnAllAggregations(): AggregateReflection[];
+  reflectOnAggregation(name: string): AggregateReflection | undefined;
+  aggregationNames(): string[];
   composedOf<V, P extends Record<string, unknown>>(
     name: string,
     options: ComposedOfOptions<V, P>,
