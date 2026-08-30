@@ -111,6 +111,55 @@ export function attributeOf(node: string, name: string): string | undefined {
   return new RegExp(`\\b${name}="([^"]*)"`).exec(node)?.[1];
 }
 
+/**
+ * The selector Action Text finds its attachments with. Rails'
+ * `attachment_selector`.
+ *
+ * A function rather than the bare constant because Rails scopes it — asking
+ * for the attachments of one content type, or inside a gallery — and a caller
+ * building that string itself is a caller that will get the hyphens wrong.
+ */
+export function attachmentSelector(contentType?: string): string {
+  return contentType
+    ? `${ATTACHMENT_SELECTOR}[content-type="${contentType}"]`
+    : ATTACHMENT_SELECTOR;
+}
+
+/** The selector for a tag, with an optional attribute filter. Rails' `selector`. */
+export function selector(tag: string, attribute?: string, value?: string): string {
+  if (!attribute) return tag;
+
+  return value === undefined ? `${tag}[${attribute}]` : `${tag}[${attribute}="${value}"]`;
+}
+
+/** A fragment around one node's markup. Rails' `Fragment.from_node`. */
+export function fromNode(node: string): Fragment {
+  return new Fragment(node);
+}
+
+/** Every gallery node in a body. Rails' `find_attachment_gallery_nodes`. */
+export function findAttachmentGalleryNodes(html: string): string[] {
+  return [...html.matchAll(/<div class="[^"]*attachment-gallery[^"]*"[^>]*>[\s\S]*?<\/div>/g)].map(
+    (match) => match[0],
+  );
+}
+
+/** The same, as fragments. Rails' `attachment_galleries`. */
+export function attachmentGalleries(html: string): Fragment[] {
+  return findAttachmentGalleryNodes(html).map((node) => fromNode(node));
+}
+
+/**
+ * The attachments that live inside a gallery. Rails' `gallery_attachments`.
+ *
+ * Distinct from every attachment in the body, which is the point: a gallery
+ * lays its members out as a grid, and a renderer deciding how to size an image
+ * needs to know whether it is one of several or standing alone.
+ */
+export function galleryAttachments(html: string): string[] {
+  return attachmentGalleries(html).flatMap((gallery) => gallery.attachmentNodes());
+}
+
 /** Rails' `HtmlConversion.fragment_for_html`. */
 export function fragmentForHtml(html: string): Fragment {
   return Fragment.fromHtml(html);

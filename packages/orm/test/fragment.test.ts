@@ -8,7 +8,12 @@ import { describe, expect, it } from "bun:test";
 import {
   ATTACHMENT_SELECTOR,
   Fragment,
+  attachmentGalleries,
+  attachmentSelector,
   attributeOf,
+  findAttachmentGalleryNodes,
+  fromNode,
+  galleryAttachments,
   fragmentByCanonicalizingAttachmentGalleries,
   fragmentByCanonicalizingAttachments,
   fragmentByCanonicalizingContent,
@@ -19,6 +24,7 @@ import {
   nodeToHtml,
   nodeToMarkdown,
   nodeToPlainText,
+  selector,
 } from "../src/fragment.js";
 
 describe("wrapping", () => {
@@ -274,5 +280,61 @@ describe("canonicalizing content", () => {
 
   it("leaves ordinary markup alone", () => {
     expect(fragmentByCanonicalizingContent("<p>Hi</p>").toHtml()).toBe("<p>Hi</p>");
+  });
+});
+
+describe("gallery helpers", () => {
+  const body = [
+    `<${ATTACHMENT_SELECTOR} sgid="alone"></${ATTACHMENT_SELECTOR}>`,
+    `<div class="attachment-gallery attachment-gallery--2">`,
+    `<${ATTACHMENT_SELECTOR} sgid="a"></${ATTACHMENT_SELECTOR}>`,
+    `<${ATTACHMENT_SELECTOR} sgid="b"></${ATTACHMENT_SELECTOR}>`,
+    `</div>`,
+  ].join("");
+
+  it("names the attachment selector", () => {
+    expect(attachmentSelector()).toBe(ATTACHMENT_SELECTOR);
+  });
+
+  it("scopes it by content type", () => {
+    expect(attachmentSelector("image/png")).toBe(
+      `${ATTACHMENT_SELECTOR}[content-type="image/png"]`,
+    );
+  });
+
+  it("builds a selector with and without a value", () => {
+    expect(selector("figure")).toBe("figure");
+    expect(selector("figure", "data-trix-attachment")).toBe("figure[data-trix-attachment]");
+    expect(selector("figure", "class", "x")).toBe('figure[class="x"]');
+  });
+
+  it("wraps a single node", () => {
+    expect(fromNode("<p>hi</p>").toHtml()).toBe("<p>hi</p>");
+  });
+
+  it("finds the gallery nodes", () => {
+    expect(findAttachmentGalleryNodes(body)).toHaveLength(1);
+    expect(attachmentGalleries(body)).toHaveLength(1);
+  });
+
+  it("finds none when there are none", () => {
+    expect(findAttachmentGalleryNodes("<p>hi</p>")).toEqual([]);
+  });
+
+  /**
+   * Distinct from every attachment in the body: a renderer sizing an image
+   * needs to know whether it is one of several or standing alone.
+   */
+  it("gives only the attachments inside a gallery", () => {
+    const inGallery = galleryAttachments(body);
+
+    expect(inGallery).toHaveLength(2);
+    expect(inGallery.join("")).not.toContain("alone");
+  });
+
+  it("gives none when nothing is in a gallery", () => {
+    expect(
+      galleryAttachments(`<${ATTACHMENT_SELECTOR} sgid="a"></${ATTACHMENT_SELECTOR}>`),
+    ).toEqual([]);
   });
 });
