@@ -272,6 +272,66 @@ export class Connection {
     await this.#finishTransaction("COMMIT");
   }
 
+  /**
+   * Opens a savepoint that outlives this call. Rails' `create_savepoint`.
+   *
+   * The same argument as `beginTransaction`: `transaction()` nests savepoints
+   * for a block, and a block has an end. A test harness that wants a savepoint
+   * per example opens it in one hook and rolls back in another, with the
+   * example in between — and there is no block that spans those.
+   *
+   * The name is returned rather than remembered by the caller, so two
+   * savepoints opened in the same scope cannot be released in the wrong order
+   * by getting the name wrong.
+   */
+  async createSavepoint(name?: string): Promise<string> {
+    this.#savepoints += 1;
+    const chosen = name ?? `altair_savepoint_${String(this.#savepoints)}`;
+
+    await this.execute(`SAVEPOINT ${this.quote(chosen)}`);
+
+    return chosen;
+  }
+
+  /**
+   * Keeps everything since a savepoint. Rails' `release_savepoint`.
+   *
+   * Releasing is not committing: the work stays inside the enclosing
+   * transaction and is still undone if that rolls back. The name is what
+   * catches people out — a release reads like a commit and is not one.
+   */
+  async releaseSavepoint(name: string): Promise<void> {
+    await this.execute(`RELEASE SAVEPOINT ${this.quote(name)}`);
+    this.#savepoints = Math.max(0, this.#savepoints - 1);
+  }
+
+  /** Discards everything since a savepoint. Rails' `rollback_to_savepoint`. */
+  async rollbackToSavepoint(name: string): Promise<void> {
+    await this.execute(`ROLLBACK TO SAVEPOINT ${this.quote(name)}`);
+    this.#savepoints = Math.max(0, this.#savepoints - 1);
+  }
+
+  /**
+   * How deep the nesting goes. Rails' `open_transactions`.
+   *
+   * One for the transaction and one per savepoint inside it, which is what a
+   * caller needs to decide whether it is already inside one — the question
+   * `isInTransaction` answers only as a boolean.
+   */
+  get openTransactions(): number {
+    return (this.#inTransaction ? 1 : 0) + this.#savepoints;
+  }
+
+  /** The name the next savepoint would take. Rails' `current_savepoint_name`. */
+  get currentSavepointName(): string {
+    return `altair_savepoint_${String(this.#savepoints)}`;
+  }
+
+  /** Whether a transaction is open at all. Rails' `transaction_open?`. */
+  get transactionOpen(): boolean {
+    return this.#inTransaction;
+  }
+
   async #finishTransaction(statement: string): Promise<void> {
     try {
       await this.execute(statement);
