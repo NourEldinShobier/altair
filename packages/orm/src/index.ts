@@ -31,3 +31,4 @@ export * from "./attribute.js";
 export * from "./protected_environments.js";
 export * from "./select_statements.js";
 export * from "./connection_pool.js";
+export * from "./command_recorder.js";
