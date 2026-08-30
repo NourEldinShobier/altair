@@ -36,6 +36,7 @@ import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
 import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
 import { columnTypeFor } from "./dump.js";
+import { columnSchemas, type ColumnSchema } from "./introspect.js";
 import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import {
@@ -2032,6 +2033,141 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     static async decrementCounter(column: string, id: unknown, by = 1): Promise<void> {
       await this.incrementCounter(column, id, -by);
+    }
+
+    /**
+     * Several counters on one row, in one statement. Rails' `update_counters`.
+     *
+     *     await Post.updateCounters(1, { comments_count: 1, views: 12 })
+     *
+     * One statement rather than a call each, which matters for more than
+     * speed: two separate updates are two chances for another writer to
+     * interleave, and the row is read and written twice instead of once.
+     *
+     * COALESCE, as in `incrementCounter`, because a counter column that is
+     * still null would otherwise stay null forever — `null + 1` is null, and
+     * nothing reports it.
+     */
+    static async updateCounters(id: unknown, counters: Record<string, number>): Promise<void> {
+      const entries = Object.entries(counters);
+      if (entries.length === 0) return;
+
+      const connection = this.connection;
+      const columns = await this.columnNames();
+
+      for (const [column] of entries) {
+        if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+      }
+
+      const assignments = entries.map(([column], index) => {
+        const quoted = connection.quote(column);
+        return `${quoted} = COALESCE(${quoted}, 0) + ${connection.placeholder(index)}`;
+      });
+
+      await connection.execute(
+        `UPDATE ${connection.quote(this.table)} SET ${assignments.join(", ")} ` +
+          `WHERE ${connection.quote(this.primaryKey)} = ${connection.placeholder(entries.length)}`,
+        [...entries.map(([, by]) => by), id],
+      );
+    }
+
+    /**
+     * Recounts a cached counter from the rows it counts. Rails' `reset_counters`.
+     *
+     * A counter cache drifts — a row deleted straight from SQL, a bulk insert
+     * that skipped callbacks, a bug since fixed — and once it has, nothing
+     * notices, because the whole point of the column is that nobody counts.
+     * This is the repair.
+     */
+    static async resetCounters(id: unknown, ...associations: string[]): Promise<void> {
+      const connection = this.connection;
+
+      for (const name of associations) {
+        const association = this.associationFor(name);
+        const column = this.counterCacheColumn(name);
+        const target = association.target() as unknown as { table: string };
+        // Undeclared foreign keys fall back to the same default the loader
+        // uses, so a plain `hasMany("comments")` recounts without being told
+        // the column name it never had to state in the first place.
+        const foreignKey = association.foreignKey ?? defaultForeignKey(this.name);
+
+        const [row] = await connection.query<{ count: number | string }>(
+          `SELECT COUNT(*) AS count FROM ${connection.quote(target.table)} ` +
+            `WHERE ${connection.quote(foreignKey)} = ${connection.placeholder(0)}`,
+          [id],
+        );
+
+        await connection.execute(
+          `UPDATE ${connection.quote(this.table)} SET ${connection.quote(column)} = ${connection.placeholder(0)} ` +
+            `WHERE ${connection.quote(this.primaryKey)} = ${connection.placeholder(1)}`,
+          [Number(row?.count ?? 0), id],
+        );
+      }
+    }
+
+    /**
+     * The column a `counterCache: true` association keeps its count in.
+     * Rails' `counter_cache_column`.
+     *
+     * `comments` counts into `comments_count`, unless the association named
+     * the column itself.
+     */
+    static counterCacheColumn(name: string): string {
+      const association = this.associationFor(name);
+      const cache = association.counterCache;
+
+      return typeof cache === "string" ? cache : `${underscore(name)}_count`;
+    }
+
+    /**
+     * Every column's schema, by name. Rails' `columns_hash`.
+     *
+     * More than `columnTypes` reports: nullability, the database's own type
+     * name, and whether it is the primary key. A form builder marking a field
+     * required, a serializer describing its constraints, and a scaffold
+     * choosing an input all want this rather than the type alone.
+     */
+    static async columnsHash(): Promise<Record<string, ColumnSchema>> {
+      const schemas = await columnSchemas(this.connection, this.table);
+
+      return Object.fromEntries(schemas.map((one: ColumnSchema) => [one.name, one]));
+    }
+
+    /** One column's schema, or undefined. Rails' `column_for_attribute`. */
+    static async columnForAttribute(name: string): Promise<ColumnSchema | undefined> {
+      return (await this.columnsHash())[name];
+    }
+
+    /** One column's logical type, or undefined. Rails' `type_for_attribute`. */
+    static async typeForAttribute(name: string): Promise<ColumnType | undefined> {
+      return (await this.columnTypes())[name];
+    }
+
+    /**
+     * What a new record starts with. Rails' `column_defaults`.
+     *
+     * Read from the schema rather than guessed, so a column with a database
+     * default is reflected before the row is written — which is what makes a
+     * form show the default the row will actually get.
+     */
+    static async columnDefaults(): Promise<Record<string, string | null>> {
+      const schemas = await columnSchemas(this.connection, this.table);
+
+      return Object.fromEntries(schemas.map((one: ColumnSchema) => [one.name, one.default]));
+    }
+
+    /**
+     * The columns that hold what the record is about. Rails' `content_columns`.
+     *
+     * Everything except the primary key, the timestamps, the inheritance
+     * column and the foreign keys — which is exactly the set a scaffold puts
+     * on a form, since none of the excluded ones is a person's to type.
+     */
+    static async contentColumns(): Promise<string[]> {
+      const names = await this.columnNames();
+      const skip = new Set([this.primaryKey, "created_at", "updated_at", this.inheritanceColumn]);
+
+      return names.filter((name) => !skip.has(name) && !name.endsWith("_id"));
     }
 
     /**
@@ -4504,6 +4640,15 @@ export interface ModelClass<A extends object> {
   readonly baseClass: unknown;
   readonly i18nScope: string;
   incrementCounter(column: string, id: unknown, by?: number): Promise<void>;
+  decrementCounter(column: string, id: unknown, by?: number): Promise<void>;
+  updateCounters(id: unknown, counters: Record<string, number>): Promise<void>;
+  resetCounters(id: unknown, ...associations: string[]): Promise<void>;
+  counterCacheColumn(name: string): string;
+  columnsHash(): Promise<Record<string, ColumnSchema>>;
+  columnForAttribute(name: string): Promise<ColumnSchema | undefined>;
+  typeForAttribute(name: string): Promise<ColumnType | undefined>;
+  columnDefaults(): Promise<Record<string, string | null>>;
+  contentColumns(): Promise<string[]>;
   decrementCounter(column: string, id: unknown, by?: number): Promise<void>;
   afterCreateCommit(callback: unknown): void;
   afterUpdateCommit(callback: unknown): void;
