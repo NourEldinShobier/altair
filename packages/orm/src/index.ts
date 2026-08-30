@@ -29,3 +29,4 @@ export * from "./store.js";
 export * from "./serialization.js";
 export * from "./attribute.js";
 export * from "./protected_environments.js";
+export * from "./select_statements.js";
