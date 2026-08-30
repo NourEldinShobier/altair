@@ -34,3 +34,4 @@ export * from "./connection_pool.js";
 export * from "./command_recorder.js";
 export * from "./content.js";
 export * from "./editor.js";
+export * from "./database_info.js";
