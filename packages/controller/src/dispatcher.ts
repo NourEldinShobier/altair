@@ -9,6 +9,7 @@
  * there is no adapter between the framework and the runtime.
  */
 
+import { parameterParserFor } from "./parameter_wrapping.js";
 import { Current } from "@altair/support";
 import type { Router } from "@altair/router";
 import { Controller, type ControllerContext } from "./controller.js";
@@ -49,13 +50,25 @@ export class MissingController extends Error {
  * Reads the request body into params.
  *
  * Rails' ParamsParser middleware does this for JSON and form encodings; the
- * same two cover almost every request, and anything else is left to the action
- * to read off the request itself.
+ * same two cover almost every request. Anything else can register a parser
+ * with `registerParameterParser`.
  */
 export async function parseBody(request: Request): Promise<Record<string, unknown>> {
   if (request.method === "GET" || request.method === "HEAD") return {};
 
   const contentType = request.headers.get("content-type") ?? "";
+
+  // A registered parser wins, so an application can teach the framework a body
+  // format rather than reading it off the request in every action.
+  const registered = parameterParserFor(contentType);
+
+  if (registered) {
+    try {
+      return await registered(request.clone() as Request);
+    } catch {
+      return {};
+    }
+  }
 
   try {
     if (contentType.includes("application/json")) {

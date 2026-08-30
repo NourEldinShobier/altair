@@ -27,3 +27,4 @@ export * from "./multiparameter.js";
 export * from "./digest_authentication.js";
 export * from "./action_methods.js";
 export * from "./forgery_protection.js";
+export * from "./parameter_wrapping.js";
