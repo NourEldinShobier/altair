@@ -23,6 +23,16 @@ const DEFAULT_SINGLETON_ACTIONS = ["show", "create", "update", "destroy", "new",
 
 export type ResourceAction = "index" | "create" | "new" | "edit" | "show" | "update" | "destroy";
 
+/** Anything that can answer a request under a mount point. */
+export type MountedApp = (request: Request) => Response | Promise<Response>;
+
+/** One mounted application and where it lives. */
+export interface Mounted {
+  at: string;
+  handler: MountedApp;
+  name?: string;
+}
+
 export interface ResourceOptions {
   only?: ResourceAction | ResourceAction[];
   except?: ResourceAction | ResourceAction[];
@@ -107,6 +117,9 @@ export function helperName(routeName: string): string {
 export class Mapper {
   readonly #routes: Route[];
   #scope: Scope;
+
+  #concerns = new Map<string, (r: Mapper) => void>();
+  #mounted: Mounted[] = [];
 
   constructor(routes: Route[], scope?: Scope) {
     this.#routes = routes;
@@ -233,6 +246,66 @@ export class Mapper {
       () => body(this),
     );
     return this;
+  }
+
+  /**
+   * Names a block of routes so it can be drawn in several places. Rails'
+   * `concern`.
+   *
+   *     router.concern("commentable", (r) => r.resources("comments"))
+   *     router.resources("posts", (r) => r.concerns("commentable"))
+   *     router.resources("photos", (r) => r.concerns("commentable"))
+   *
+   * The alternative is a helper function that takes the mapper, which works and
+   * is what people write without this — but a named concern is discoverable
+   * from the routes file, and `concerns("commentable")` reads as a declaration
+   * rather than a call.
+   */
+  concern(name: string, body: (r: Mapper) => void): this {
+    this.#concerns.set(name, body);
+    return this;
+  }
+
+  /**
+   * Draws named concerns here. Rails' `concerns`.
+   *
+   * An unknown name throws rather than being ignored, because a silently
+   * skipped concern is a set of routes that simply are not there — and the
+   * symptom is a 404 far from the typo.
+   */
+  concerns(...names: string[]): this {
+    for (const name of names) {
+      const body = this.#concerns.get(name);
+
+      if (!body) {
+        throw new Error(
+          `No routing concern named "${name}". Declared: ${[...this.#concerns.keys()].join(", ") || "none"}`,
+        );
+      }
+
+      body(this);
+    }
+
+    return this;
+  }
+
+  /**
+   * Mounts another application under a path. Rails' `mount`.
+   *
+   * The mounted handler is given the request with the mount path still on it,
+   * because a sub-application generally needs to know where it lives to build
+   * its own URLs — Rails passes SCRIPT_NAME for the same reason.
+   */
+  mount(handler: MountedApp, options: { at: string; as?: string }): this {
+    const at = `/${trimPath(options.at).join("/")}`;
+
+    this.#mounted.push({ at, handler, name: options.as });
+    return this;
+  }
+
+  /** Everything mounted, in declaration order. */
+  get mountedApps(): readonly Mounted[] {
+    return this.#mounted;
   }
 
   /** Rails' `namespace`: path, module and name prefix in one call. */
@@ -453,6 +526,7 @@ export class Router {
   /** Routes bucketed by verb, so recognition never scans another verb's routes. */
   readonly #byMethod = new Map<HttpMethod, Route[]>();
   readonly #byName = new Map<string, Route>();
+  readonly #mounted: Mounted[] = [];
 
   /**
    * Declares routes.
@@ -461,9 +535,33 @@ export class Router {
    *     router.draw((r) => r.resources("posts"))
    */
   draw(body: (r: Mapper) => void): this {
-    body(new Mapper(this.routes));
+    const mapper = new Mapper(this.routes);
+    body(mapper);
+
+    // Mounted applications are collected on the mapper and kept here, because
+    // dispatch asks the router, not the block that drew it.
+    this.#mounted.push(...mapper.mountedApps);
     this.#index();
+
     return this;
+  }
+
+  /** Everything mounted, in declaration order. Rails' `mounted_helpers`. */
+  get mountedApps(): readonly Mounted[] {
+    return this.#mounted;
+  }
+
+  /**
+   * The mounted application a path falls under, if any.
+   *
+   * Longest prefix first, so a more specific mount wins over a more general one
+   * whatever order they were declared in — otherwise mounting /api before
+   * /api/v2 would swallow every v2 request.
+   */
+  mountedFor(path: string): Mounted | undefined {
+    return [...this.#mounted]
+      .sort((a, b) => b.at.length - a.at.length)
+      .find((one) => path === one.at || path.startsWith(`${one.at}/`));
   }
 
   #index(): void {
