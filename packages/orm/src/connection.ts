@@ -11,7 +11,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
-import { collectingCommitCallbacks } from "./after_commit.js";
+import { collectingCommitCallbacks, runBeforeCommitCallbacks } from "./after_commit.js";
 import { cachingQuery, clearQueryCache } from "./query_cache.js";
 import { withQueryLog } from "./query_logs.js";
 
@@ -224,7 +224,17 @@ export class Connection {
           // quietly write outside the transaction, and its writes would survive a
           // rollback. The scope follows the async call chain, so concurrent
           // requests each see their own.
-          return await inTransaction.run(scoped, async () => await body(scoped));
+          return await inTransaction.run(scoped, async () => {
+            const value = await body(scoped);
+
+            // Inside the block, so a callback that throws leaves through
+            // `begin` and the driver rolls back. Outside it, this would run
+            // after the COMMIT and could only report a problem it was supposed
+            // to prevent.
+            await runBeforeCommitCallbacks();
+
+            return value;
+          });
         })) as T,
     );
   }

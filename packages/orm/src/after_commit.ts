@@ -28,8 +28,11 @@ export type CommitAction = "create" | "update" | "destroy";
 export type CommitCallback = () => void | Promise<void>;
 
 interface Pending {
+  onBeforeCommit: CommitCallback[];
   onCommit: CommitCallback[];
   onRollback: CommitCallback[];
+  /** Records whose callbacks this transaction is carrying. */
+  records: Set<unknown>;
 }
 
 const pending = new AsyncLocalStorage<Pending>();
@@ -50,7 +53,12 @@ export function isDeferring(): boolean {
 export async function collectingCommitCallbacks<T>(body: () => Promise<T>): Promise<T> {
   if (isDeferring()) return await body();
 
-  const collected: Pending = { onCommit: [], onRollback: [] };
+  const collected: Pending = {
+    onBeforeCommit: [],
+    onCommit: [],
+    onRollback: [],
+    records: new Set(),
+  };
 
   let result: T;
   try {
@@ -109,9 +117,82 @@ export async function afterCommit(callback: CommitCallback): Promise<void> {
   collected.onCommit.push(callback);
 }
 
+/**
+ * Runs work just before the current transaction commits. Rails'
+ * `before_commit`.
+ *
+ * Inside the transaction, unlike `afterCommit`, and that is the whole point:
+ * throwing here rolls everything back. It is where a last consistency check
+ * belongs — an order's total matching the sum of its lines, a balance not
+ * going negative — because discovering that after the commit leaves nothing to
+ * do but report it.
+ *
+ * With no transaction in progress it runs immediately, like `afterCommit`, and
+ * a throw reaches the caller directly since there is nothing to roll back.
+ */
+export async function beforeCommit(callback: CommitCallback): Promise<void> {
+  const collected = pending.getStore();
+
+  if (!collected) {
+    await callback();
+
+    return;
+  }
+
+  collected.onBeforeCommit.push(callback);
+}
+
+/**
+ * Notes that a record has work riding on this transaction. Rails'
+ * `add_transaction_record`.
+ *
+ * What lets a caller ask whether a record's callbacks are still pending — and
+ * a set rather than a list, because a record saved three times in one
+ * transaction should have its callbacks considered once.
+ */
+export function addTransactionRecord(record: unknown): void {
+  pending.getStore()?.records.add(record);
+}
+
+/** The records this transaction is carrying. Rails' `commit_records`. */
+export function commitRecords(): unknown[] {
+  return [...(pending.getStore()?.records ?? [])];
+}
+
+/** Whether a record has work riding on the transaction in progress. */
+export function hasTransactionRecord(record: unknown): boolean {
+  return pending.getStore()?.records.has(record) ?? false;
+}
+
 /** Defers work until the current transaction rolls back. Never runs otherwise. */
 export function afterRollback(callback: CommitCallback): void {
   pending.getStore()?.onRollback.push(callback);
+}
+
+/**
+ * Runs the before-commit callbacks. Called from inside the SQL transaction.
+ *
+ * Deliberately not through `runAll`: a before-commit callback that throws must
+ * take the transaction down with it, and `runAll` reports rather than raises
+ * because by the time it is used the commit has already landed. That inversion
+ * is the entire difference between the two phases.
+ *
+ * It has to be called from inside the driver's block, before that block
+ * returns and the COMMIT goes out. Running it where the after-commit callbacks
+ * run would put it after the commit, which would make the name a lie — the
+ * first version of this did exactly that, and the test that rolls a
+ * transaction back from a before-commit callback is what caught it.
+ */
+export async function runBeforeCommitCallbacks(): Promise<void> {
+  const collected = pending.getStore();
+
+  if (!collected) return;
+
+  // Taken and cleared, so a callback that starts another transaction does not
+  // see them again and run them twice.
+  const callbacks = collected.onBeforeCommit.splice(0, collected.onBeforeCommit.length);
+
+  for (const callback of callbacks) await callback();
 }
 
 /** @internal Empties the collector. For the test helper's manual transactions. */
