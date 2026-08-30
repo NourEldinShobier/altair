@@ -9,6 +9,7 @@
  * there is no adapter between the framework and the runtime.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { parameterParserFor } from "./parameter_wrapping.js";
 import { Current } from "@altair/support";
 import type { Router } from "@altair/router";
@@ -137,4 +138,20 @@ export function createDispatcher(
       throw error;
     }
   };
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten requests
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("controller");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("controller", logger);
 }

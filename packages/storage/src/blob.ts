@@ -6,6 +6,7 @@
  * this is the row that knows how to find them again.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { checksumOf } from "./integrity.js";
 import { Model, type SchemaStatements } from "@altair/orm";
 import { secureToken } from "@altair/support";
@@ -281,4 +282,20 @@ export async function createStorageTables(schema: SchemaStatements): Promise<voi
     t.index(["record_type", "record_id", "name"]);
     t.index(["blob_id"]);
   });
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten attachments
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("storage");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("storage", logger);
 }

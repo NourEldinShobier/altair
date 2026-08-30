@@ -16,6 +16,7 @@
  * for, and it needs an event to hang the alert on.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { notifications } from "@altair/support";
 import type { JobPayload } from "./job.js";
 
@@ -189,6 +190,19 @@ export function resetDiscardCallbacks(): void {
 export async function announceDiscard(payload: JobPayload, error: unknown): Promise<void> {
   discarded(payload, error);
 
+  // Written as well as published, because a queue's own log is where somebody
+  // looks first and an event only reaches whatever was subscribed. Through the
+  // package's logger rather than the shared one, so an application that expects
+  // its jobs to fail — a suite exercising a discard rule — can quieten this
+  // alone.
+  defaultLogger().error("Job discarded", {
+    jobClass: payload.jobClass,
+    jobId: payload.id,
+    queue: payload.queue,
+    attempts: payload.attempts,
+    error,
+  });
+
   // A copy, so a callback that registers another does not change what this
   // run visits.
   const running = Array.from(discardCallbacks);
@@ -201,4 +215,20 @@ export async function announceDiscard(payload: JobPayload, error: unknown): Prom
       // may itself be what failed, and the discard event has already gone out.
     }
   }
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten the queue
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("jobs");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("jobs", logger);
 }

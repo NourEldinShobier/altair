@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { notifications } from "@altair/support";
 import { Job, MemoryQueue, runJob, type JobPayload } from "../src/index.js";
 import { JOB_EVENTS, afterDiscard, resetDiscardCallbacks } from "../src/events.js";
+import { Logger, setComponentLogger } from "@altair/support";
 
 class Fine extends Job {
   override async perform(): Promise<void> {
@@ -40,6 +41,11 @@ const seen: { name: string; payload: Record<string, unknown> }[] = [];
 const stops: (() => void)[] = [];
 
 beforeEach(() => {
+  // A discard writes an error line, which is right in an application and noise
+  // in a suite that discards on purpose. Quietening the one component is
+  // exactly what a per-component logger is for.
+  setComponentLogger("jobs", new Logger({ level: "fatal", sink: () => undefined }));
+
   queue = new MemoryQueue();
   Job.adapter = queue;
   Job.register(Fine, Broken, Refused);
@@ -63,6 +69,7 @@ afterEach(() => {
   Job.adapter = undefined;
   Job.resetRegistry();
   resetDiscardCallbacks();
+  setComponentLogger("jobs", undefined);
 });
 
 const namesSeen = (): string[] => seen.map((one) => one.name);

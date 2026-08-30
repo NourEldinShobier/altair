@@ -27,6 +27,7 @@
  * payload and a body rendered at enqueue time rather than at send time.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { smtpDeliveryFromUrl } from "./smtp.js";
 import { currentEnvironment, type Environment } from "@altair/support";
 import { renderToString, type Node } from "@altair/view";
@@ -291,4 +292,20 @@ export function defaultDelivery(env: Environment = currentEnvironment()): Delive
   if (env === "development") return new LogDelivery();
 
   return new UnconfiguredDelivery();
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten mail
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("mailer");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("mailer", logger);
 }

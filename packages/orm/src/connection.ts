@@ -8,6 +8,7 @@
  * placeholders are numbered, and how an inserted row's id comes back.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
@@ -644,4 +645,20 @@ export function connection(): Connection {
     throw new Error("No database connection. Call connect(url) before using models.");
   }
   return current;
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten the database
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("orm");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("orm", logger);
 }
