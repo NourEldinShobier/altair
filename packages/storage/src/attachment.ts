@@ -235,9 +235,58 @@ export interface AttachedOptions {
 /** The name an attachment is declared under has to be a declared property. */
 type AttachmentName<M extends ModelClass> = keyof InstanceType<M> & string;
 
+/** What a model declared about one attachment. */
+export interface AttachmentReflection {
+  name: string;
+  /** Whether the record holds one file or many. */
+  kind: "hasOneAttached" | "hasManyAttached";
+  /** What happens to the bytes when the record is destroyed. */
+  dependent: "purge" | "purgeLater" | false;
+  /** The named transformations declared alongside it. */
+  variants: string[];
+}
+
+/**
+ * Attachments by model name, so a declaration can be asked about later.
+ *
+ * The same reason model associations are reflectable: a serializer deciding
+ * what to include, a form generator writing a file field, an admin page
+ * listing what a record carries — each would otherwise be handed a list that
+ * drifts from the model the day somebody adds an attachment.
+ *
+ * Keyed by model name rather than by the class, because a subclass has its
+ * parent's attachments and the name is what the attachment rows already store
+ * in `record_type`.
+ */
+const reflections = new Map<string, Map<string, AttachmentReflection>>();
+
+/** Every attachment a model declared. Rails' `reflect_on_all_attachments`. */
+export function reflectOnAllAttachments(model: { name: string }): AttachmentReflection[] {
+  return [...(reflections.get(model.name)?.values() ?? [])];
+}
+
+/** One attachment's declaration, or undefined. Rails' `reflect_on_attachment`. */
+export function reflectOnAttachment(
+  model: { name: string },
+  name: string,
+): AttachmentReflection | undefined {
+  return reflections.get(model.name)?.get(name);
+}
+
+/** Every attachment name, in declaration order. */
+export function attachmentNames(model: { name: string }): string[] {
+  return [...(reflections.get(model.name)?.keys() ?? [])];
+}
+
+/** Drops what a model declared. For tests that redefine a class per case. */
+export function resetAttachmentReflections(): void {
+  reflections.clear();
+}
+
 function defineAttached<M extends ModelClass>(
   model: M,
   name: AttachmentName<M>,
+  kind: AttachmentReflection["kind"],
   build: (record: AttachedRecord, name: string) => Attached,
   options: AttachedOptions = {},
 ): void {
@@ -245,6 +294,15 @@ function defineAttached<M extends ModelClass>(
   // A declaration nothing consults is the shape this codebase has spent a day
   // removing.
   if (options.variants) declareVariants(model.name, name, options.variants);
+
+  const forModel = reflections.get(model.name) ?? new Map<string, AttachmentReflection>();
+  forModel.set(name, {
+    name,
+    kind,
+    dependent: options.dependent ?? "purge",
+    variants: Object.keys(options.variants ?? {}),
+  });
+  reflections.set(model.name, forModel);
 
   // A getter on the prototype rather than a field: a field would be an own
   // property on every instance, and the Proxy a model is wrapped in resolves
@@ -292,6 +350,7 @@ export function hasOneAttached<M extends ModelClass>(
   defineAttached(
     model,
     name,
+    "hasOneAttached",
     (record, attachmentName) => new AttachedOne(record, attachmentName),
     options,
   );
@@ -306,6 +365,7 @@ export function hasManyAttached<M extends ModelClass>(
   defineAttached(
     model,
     name,
+    "hasManyAttached",
     (record, attachmentName) => new AttachedMany(record, attachmentName),
     options,
   );
