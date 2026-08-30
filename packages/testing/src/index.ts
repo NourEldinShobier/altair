@@ -15,3 +15,5 @@ export * from "./jobs.js";
 export * from "./request.js";
 export * from "./assertions.js";
 export * from "./routing.js";
+export * from "./notification_assertions.js";
+export * from "./plain_assertions.js";
