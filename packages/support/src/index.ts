@@ -32,3 +32,4 @@ export * from "./rescuable.js";
 export * from "./numbers.js";
 export * from "./date_extras.js";
 export * from "./cache_entry.js";
+export * from "./options.js";
