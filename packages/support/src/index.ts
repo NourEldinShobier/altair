@@ -46,3 +46,4 @@ export * from "./http_date.js";
 export * from "./component_logger.js";
 export * from "./sanitize_css.js";
 export * from "./typed_serializer.js";
+export * from "./xml_mini.js";
