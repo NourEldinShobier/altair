@@ -229,7 +229,12 @@ ${failure}`,
 
 /** Opens a cable, subscribes, and answers the first two frames it is sent. */
 async function subscribeTo(url: string, channel: string): Promise<string[]> {
-  const socket = new WebSocket(url);
+  // An Origin, as a browser sends: the cable refuses a handshake without one,
+  // which is what stops another site opening a socket carrying this user's
+  // cookies. A generated application is same-origin, so its own host is it.
+  const socket = new WebSocket(url, {
+    headers: { origin: new URL(url).origin.replace(/^ws/, "http") },
+  });
   const frames: string[] = [];
 
   await new Promise<void>((resolve, reject) => {

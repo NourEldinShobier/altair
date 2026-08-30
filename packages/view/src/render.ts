@@ -12,6 +12,7 @@
  * ship no client framework.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { isExecutableUrl } from "@altair/support";
 export type Attributes = Record<string, unknown>;
 
@@ -283,4 +284,20 @@ export async function renderToString(node: Node): Promise<string> {
 /** Renders a full document, prefixed with a doctype. */
 export async function renderDocument(node: Node): Promise<string> {
   return `<!DOCTYPE html>${await renderToString(node)}`;
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten rendering
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("view");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("view", logger);
 }

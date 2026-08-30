@@ -11,7 +11,7 @@ import { describe, expect, it } from "bun:test";
 import { Current } from "@altair/support";
 import { renderToString } from "../src/render.js";
 import {
-  assetUrl,
+  viteAssetUrl,
   configureVite,
   resolveEntry,
   viteAsset,
@@ -97,12 +97,12 @@ describe("resolving an entry", () => {
 
 describe("asset urls", () => {
   it("join the base", () => {
-    expect(assetUrl("assets/app.js", "/")).toBe("/assets/app.js");
-    expect(assetUrl("assets/app.js", "/static/")).toBe("/static/assets/app.js");
+    expect(viteAssetUrl("assets/app.js", "/")).toBe("/assets/app.js");
+    expect(viteAssetUrl("assets/app.js", "/static/")).toBe("/static/assets/app.js");
   });
 
   it("leave an absolute url alone", () => {
-    expect(assetUrl("https://cdn.example.com/app.js", "/static/")).toBe(
+    expect(viteAssetUrl("https://cdn.example.com/app.js", "/static/")).toBe(
       "https://cdn.example.com/app.js",
     );
   });

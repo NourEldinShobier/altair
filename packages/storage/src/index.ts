@@ -10,3 +10,7 @@ export * from "./purge_job.js";
 export * from "./mirror.js";
 export * from "./named_variants.js";
 export * from "./operations.js";
+export * from "./service_operations.js";
+export * from "./representable.js";
+export * from "./previewers.js";
+export * from "./integrity.js";

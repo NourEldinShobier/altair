@@ -24,6 +24,7 @@
 import { humanize, underscore } from "@altair/support";
 import type { Attributes, Node } from "./render.js";
 import { useCsrfToken } from "./context.js";
+import { preventContentExfiltration } from "./sanitize_vendor.js";
 
 /** What a builder needs from a record. Structural, so any model qualifies. */
 export interface FormRecord {
@@ -274,12 +275,69 @@ export class FormBuilder {
     if (messages.length === 0) return null;
 
     return (
-      <ul class="field-errors" {...attributes}>
+      <ul class="field-errors" id={this.errorId(attribute)} {...attributes}>
         {messages.map((message) => (
           <li>{`${humanize(attribute)} ${message}`}</li>
         ))}
       </ul>
     );
+  }
+
+  /** The id the messages for an attribute are rendered under. */
+  errorId(attribute: string): string {
+    return `${this.id(attribute)}_errors`;
+  }
+
+  /** Whether an attribute failed validation. */
+  hasErrors(attribute: string): boolean {
+    return this.errorsOn(attribute).length > 0;
+  }
+
+  /**
+   * The attributes a field that failed validation should carry. Rails'
+   * `field_error_proc`, as attributes rather than a wrapper.
+   *
+   * Two things, and the second is the one that gets left out. `class` is how a
+   * stylesheet marks the field, which is what stops a long form with one bad
+   * field becoming a hunt. `aria-invalid` and `aria-describedby` are how a
+   * screen reader says *this* field is wrong and reads out why — without them
+   * a blind user gets a list of messages at the top of the form and no way to
+   * know which control each belongs to, which is the same form with the
+   * marking removed.
+   *
+   * Attributes rather than Rails' wrapping div, because a div around an input
+   * changes the layout and the CSS of every application that adopts it, and a
+   * class on the input itself does not.
+   */
+  errorAttributes(attribute: string, className = "field-with-errors"): Attributes {
+    if (!this.hasErrors(attribute)) return {};
+
+    return {
+      class: className,
+      "aria-invalid": "true",
+      "aria-describedby": this.errorId(attribute),
+    };
+  }
+
+  /**
+   * Wraps a field in Rails' error markup. Rails' `field_error_proc`.
+   *
+   * Here for parity with applications whose stylesheets already expect the
+   * wrapping div. `errorAttributes` is the one to reach for otherwise: it
+   * marks the control itself, which is what assistive technology reads and
+   * what CSS can select without a wrapper to hang off.
+   */
+  errorWrapping(attribute: string, field: Node, className = "field_with_errors"): Node {
+    if (!this.hasErrors(attribute)) return field;
+
+    return <div class={className}>{field}</div>;
+  }
+
+  /** The first message on an attribute, for a form that shows one. */
+  errorMessage(attribute: string): string | undefined {
+    const [first] = this.errorsOn(attribute);
+
+    return first === undefined ? undefined : `${humanize(attribute)} ${first}`;
   }
 
   submit(text?: string, attributes: Attributes = {}): Node {
@@ -336,16 +394,22 @@ export function FormWith(props: FormOptions & { children: (f: FormBuilder) => No
       : (props.authenticityToken ?? useCsrfToken());
 
   return (
-    <form
-      action={props.url}
-      method={sent}
-      {...(props.id ? { id: props.id } : {})}
-      {...(props.class ? { class: props.class } : {})}
-      {...(props.attributes ?? {})}
-    >
-      {intended === sent ? null : <input type="hidden" name="_method" value={intended} />}
-      {token ? <input type="hidden" name="authenticity_token" value={token} /> : null}
-      {props.children(builder)}
-    </form>
+    <>
+      {/* Closes anything an attacker opened earlier in the page, so this
+          form's fields cannot be claimed by somebody else's. Nothing unless
+          the application turned it on. */}
+      {preventContentExfiltration()}
+      <form
+        action={props.url}
+        method={sent}
+        {...(props.id ? { id: props.id } : {})}
+        {...(props.class ? { class: props.class } : {})}
+        {...(props.attributes ?? {})}
+      >
+        {intended === sent ? null : <input type="hidden" name="_method" value={intended} />}
+        {token ? <input type="hidden" name="authenticity_token" value={token} /> : null}
+        {props.children(builder)}
+      </form>
+    </>
   );
 }

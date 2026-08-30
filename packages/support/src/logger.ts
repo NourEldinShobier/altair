@@ -69,6 +69,71 @@ function format(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * The colours a level is written in. Rails' `SEVERITY_TO_COLOR_MAP`.
+ *
+ * Written as SGR codes rather than through a colour library, because there is
+ * nothing here a dependency would do better and a log formatter is exactly the
+ * place a dependency's own output would be hardest to trace.
+ */
+export const LEVEL_COLOURS: Record<Level, string> = {
+  debug: "[36m",
+  info: "[32m",
+  warn: "[33m",
+  error: "[31m",
+  fatal: "[35m",
+};
+
+const RESET = "[0m";
+
+/**
+ * Wraps text in a colour. Rails' `colorize`.
+ *
+ * The reset is unconditional and comes last, so a line that ends mid-escape
+ * cannot leave the terminal coloured for everything after it — which is what
+ * makes a crashed process turn the rest of somebody's shell green.
+ */
+export function colorize(text: string, colour: string): string {
+  return `${colour}${text}${RESET}`;
+}
+
+/**
+ * Whether output should carry colour. Rails' `colorize_logging`.
+ *
+ * Off when the stream is not a terminal, which is the check that matters: a
+ * log piped to a file or shipped to a collector with escape codes in it is a
+ * log every grep has to strip first, and most do not. `NO_COLOR` is honoured
+ * because it is the convention, and `FORCE_COLOR` because a CI terminal often
+ * is one and does not say so.
+ */
+export function colorizeLogging(stream: { isTTY?: boolean } = process.stdout): boolean {
+  if (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== "") return false;
+  if (process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== "") return true;
+
+  return stream.isTTY === true;
+}
+
+/**
+ * The text formatter with the level coloured, when colour is wanted.
+ *
+ * Only the level, not the whole line: a coloured message is harder to read
+ * than a plain one, and the thing somebody scans a log for is the level.
+ */
+export function colourFormatter(inner: Formatter = textFormatter): Formatter {
+  return (entry) => {
+    const line = inner(entry);
+
+    if (!colorizeLogging()) return line;
+
+    const level = entry.level.toUpperCase().padEnd(5);
+
+    // Replaced rather than rebuilt, so this wraps whatever formatter it was
+    // given instead of duplicating its layout — and a formatter that changes
+    // does not leave this one behind.
+    return line.replace(level, colorize(level, LEVEL_COLOURS[entry.level]));
+  };
+}
+
 /** Where lines go. A function, so a test can collect them into an array. */
 export type Sink = (line: string, entry: LogEntry) => void;
 
@@ -126,6 +191,34 @@ export class Logger {
    * the rest of the request. This is for the case a block cannot express —
    * a tag learned halfway through, after the work has started.
    */
+  /** The tags in effect, under Rails' name for it. */
+  currentTags(): Record<string, unknown> {
+    return this.tags;
+  }
+
+  /** Whether debug lines are being written. Rails' `debug_mode?`. */
+  debugMode(): boolean {
+    return this.enabled("debug");
+  }
+
+  /**
+   * Raises the floor for everything after it. Rails' `begin_silence`.
+   *
+   * `silence(body)` is the one to reach for, since it puts the level back at
+   * the end of the block. This pair is for a caller whose quiet stretch does
+   * not fit inside one — a stream opened here and closed by a callback — and
+   * it is worth saying that an unmatched `beginSilence` is a logger that stays
+   * quiet for the rest of the process.
+   */
+  beginSilence(level: Level = "error"): void {
+    this.#silenced = level;
+  }
+
+  /** Puts the level back. Rails' `end_silence`. */
+  endSilence(): void {
+    this.#silenced = undefined;
+  }
+
   pushTags(tags: Record<string, unknown>): void {
     const store = tagStore.getStore();
 

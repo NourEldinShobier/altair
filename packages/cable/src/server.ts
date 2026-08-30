@@ -12,6 +12,8 @@
  * sending every client another client's identifier.
  */
 
+import { connectionIdentifier, trackConnection } from "./identity.js";
+import { UnauthorizedConnection, allowRequestOrigin, type OriginPolicy } from "./origin.js";
 import type { Broadcaster, CableSocket, ChannelContext, ConnectionContext } from "./channel.js";
 import { Channel, topicFor } from "./channel.js";
 import {
@@ -33,6 +35,14 @@ export interface SocketData {
   connection: ConnectionContext;
   /** Live channels, keyed by the raw identifier string the client sent. */
   subscriptions: Map<string, Channel>;
+  /**
+   * Forgets this socket from the identity registry. Set when it opens.
+   *
+   * Held here rather than looked up on close, because by then the connection
+   * may already have been disconnected from elsewhere and searching for it
+   * would either find nothing or find somebody else's socket.
+   */
+  untrack?: () => void;
 }
 
 export interface CableOptions {
@@ -47,6 +57,16 @@ export interface CableOptions {
   /** Seconds between pings. Rails uses 3; the client watches for gaps. */
   pingInterval?: number;
   onError?: (error: unknown, context: { command?: string; identifier?: string }) => void;
+  /**
+   * Who may open a socket. Rails' `allowed_request_origins` and friends.
+   *
+   * Defaults to the request's own host and nothing else, which is what makes
+   * cross-site WebSocket hijacking not work: a WebSocket handshake carries the
+   * user's cookies and is not subject to the same-origin policy, so a page on
+   * any other site could otherwise connect as the user and read everything
+   * they are subscribed to.
+   */
+  origins?: OriginPolicy;
 }
 
 /** Publishes through a Bun server. The default when everything is one process. */
@@ -100,12 +120,30 @@ export class StreamRegistry implements Broadcaster {
     }
   }
 
-  /** Drops a socket from every stream it was on. */
+  /**
+   * Drops a socket from every stream it was on.
+   *
+   * Goes through `remove` rather than deleting directly, so a stream losing
+   * its last local subscriber reports that exactly as it would have on an
+   * explicit unsubscribe. Deleting here instead meant a cross-process adapter
+   * was never told, and every disconnect leaked the upstream subscription for
+   * each stream that socket was the last one on — a Redis connection that
+   * accumulates channels for as long as the process runs.
+   *
+   * The names are copied first because `remove` deletes from the map this
+   * would otherwise be iterating.
+   */
   removeEverywhere(socket: CableSocket): void {
-    for (const [stream, sockets] of this.#streams) {
-      sockets.delete(socket as CableSocket & { data: SocketData });
-      if (sockets.size === 0) this.#streams.delete(stream);
+    const streams = Array.from(this.#streams.keys());
+
+    for (const stream of streams) {
+      this.remove(stream, socket as CableSocket & { data: SocketData });
     }
+  }
+
+  /** How many distinct streams have a local subscriber. */
+  get streamCount(): number {
+    return this.#streams.size;
   }
 
   subscriberCount(stream: string): number {
@@ -157,6 +195,14 @@ export function frameFor(subscriptions: Map<string, Channel>, payload: string): 
 export class Cable {
   readonly path: string;
   readonly streams = new StreamRegistry();
+  /**
+   * The sockets this process is holding. Rails' `ActionCable::Server#connections`.
+   *
+   * Per process, like the identity registry, and for the same reason: a socket
+   * is held by the machine it connected to and nowhere else. A deployment
+   * behind several processes reads these from each and adds them up.
+   */
+  readonly #connections = new Set<CableSocket & { data: SocketData }>();
   #broadcaster: Broadcaster = this.streams;
   #ping: ReturnType<typeof setInterval> | undefined;
 
@@ -211,11 +257,35 @@ export class Cable {
     return new URL(request.url).pathname === this.path;
   }
 
-  /** Builds the per-socket data an upgrade should carry, or null to refuse. */
+  /** Whether this handshake may proceed at all. Rails' `allow_request_origin?`. */
+  allowRequestOrigin(request: Request): boolean {
+    return allowRequestOrigin(request, this.options.origins ?? {});
+  }
+
+  /**
+   * Builds the per-socket data an upgrade should carry, or null to refuse.
+   *
+   * The origin is checked before `authorize` runs, so a page from somewhere
+   * else never reaches application code — and so an `authorize` that reads a
+   * session cookie cannot accidentally hand a connection to a site that only
+   * had the cookie because the browser attached it.
+   */
   async upgradeData(request: Request): Promise<SocketData | null> {
-    const connection = this.options.authorize
-      ? await this.options.authorize(request)
-      : ({ request } as ConnectionContext);
+    if (!this.allowRequestOrigin(request)) return null;
+
+    let connection: ConnectionContext | null;
+
+    try {
+      connection = this.options.authorize
+        ? await this.options.authorize(request)
+        : ({ request } as ConnectionContext);
+    } catch (error) {
+      // A rejection is an answer, not a failure: it means authorize identified
+      // somebody and decided against them, which is exactly the null case.
+      if (error instanceof UnauthorizedConnection) return null;
+
+      throw error;
+    }
 
     if (!connection) return null;
     return { connection, subscriptions: new Map() };
@@ -232,6 +302,21 @@ export class Cable {
         // Every socket joins the ping topic, so one publish reaches everyone
         // rather than one timer per connection.
         ws.subscribe(topicFor("__ping__"));
+
+        // Recorded under whatever identity it opened with, so it can be found
+        // and closed later. Without this the identity registry stays empty and
+        // `disconnectAll` reports nothing to disconnect — so revoking a
+        // session leaves the socket open, still receiving every broadcast the
+        // user was subscribed to, until they happen to close the tab.
+        const identifier = connectionIdentifier(ws.data.connection);
+
+        if (identifier !== undefined) {
+          ws.data.untrack = trackConnection(identifier, () => {
+            this.disconnect(ws, DISCONNECT_REASONS.unauthorized);
+          });
+        }
+
+        this.addConnection(ws);
         ws.send(welcomeFrame());
       },
 
@@ -259,6 +344,10 @@ export class Cable {
       },
 
       close: async (ws) => {
+        this.removeConnection(ws);
+        ws.data.untrack?.();
+        ws.data.untrack = undefined;
+
         this.streams.removeEverywhere(ws);
 
         for (const channel of ws.data.subscriptions.values()) {
@@ -311,6 +400,50 @@ export class Cable {
     ws.send(confirmationFrame(identifier));
   }
 
+  /**
+   * Drops one subscription on an open socket. Rails' `remove_subscription`.
+   *
+   * The public form of what an `unsubscribe` command does, for the times the
+   * server decides rather than the client: a channel the user no longer has
+   * access to after their role changed, a stream that was deleted. Without it
+   * the only way to stop delivering is to close the socket, which takes every
+   * other subscription with it and makes the client reconnect for no reason it
+   * can see.
+   */
+  async removeSubscription(
+    ws: CableSocket & { data: SocketData },
+    identifier: string,
+  ): Promise<void> {
+    await this.#unsubscribe(ws, identifier);
+  }
+
+  /**
+   * Drops every subscription on a socket, leaving it open. Rails'
+   * `unsubscribe_from_all`.
+   *
+   * What a permissions change calls for: the connection is still valid — the
+   * person is still signed in — and only what they may listen to has changed.
+   * Closing the socket instead would log them out of a chat to tell them they
+   * had left a room.
+   *
+   * Over a copy of the identifiers. A Map tolerates deletion during its own
+   * iteration, so this is not what makes it correct — it is so the count
+   * returned is what was there when the caller asked, rather than whatever
+   * survived.
+   */
+  async unsubscribeFromAll(ws: CableSocket & { data: SocketData }): Promise<number> {
+    const identifiers = Array.from(ws.data.subscriptions.keys());
+
+    for (const identifier of identifiers) await this.#unsubscribe(ws, identifier);
+
+    return identifiers.length;
+  }
+
+  /** The channels a socket is currently subscribed to, by identifier. */
+  subscriptionsOn(ws: CableSocket & { data: SocketData }): string[] {
+    return Array.from(ws.data.subscriptions.keys());
+  }
+
   async #unsubscribe(ws: CableSocket & { data: SocketData }, identifier: string): Promise<void> {
     const channel = ws.data.subscriptions.get(identifier);
     if (!channel) return;
@@ -337,6 +470,79 @@ export class Cable {
   }
 
   /** Closes a connection with a protocol disconnect frame. */
+  /** Records an open socket. Called by the open handler. */
+  addConnection(ws: CableSocket & { data: SocketData }): void {
+    this.#connections.add(ws);
+  }
+
+  /** Forgets a socket. Called by the close handler. */
+  removeConnection(ws: CableSocket & { data: SocketData }): void {
+    this.#connections.delete(ws);
+  }
+
+  /** How many sockets this process is holding. */
+  get connectionCount(): number {
+    return this.#connections.size;
+  }
+
+  /**
+   * Runs a function for each open socket. Rails' `each_connection`.
+   *
+   * Over a copy. A Set tolerates deletion during iteration, so disconnecting
+   * what the body is given — the ordinary use — would be safe either way; the
+   * copy is for a body that opens something, where iterating the live set
+   * would visit what it just added.
+   */
+  eachConnection(body: (ws: CableSocket & { data: SocketData }) => void): void {
+    const open = Array.from(this.#connections);
+
+    for (const ws of open) body(ws);
+  }
+
+  /**
+   * What an ops endpoint or a health check reads. Rails'
+   * `open_connections_statistics`.
+   *
+   * Subscriptions rather than only sockets, because the two come apart: one
+   * browser tab holding twelve channel subscriptions is one connection and
+   * twelve subscriptions, and it is the second number that says whether the
+   * process is near its limit.
+   */
+  statistics(): { connections: number; subscriptions: number; streams: number } {
+    let subscriptions = 0;
+
+    for (const ws of this.#connections) subscriptions += ws.data.subscriptions.size;
+
+    return {
+      connections: this.#connections.size,
+      subscriptions,
+      streams: this.streams.streamCount,
+    };
+  }
+
+  /**
+   * Closes every socket, asking each client to reconnect. Rails' `shutdown`.
+   *
+   * For a deploy. Dropped without this frame, a client waits out its heartbeat
+   * timeout before deciding the connection is gone — so a rolling restart
+   * leaves every user disconnected for that long, staggered, which reads as
+   * the application being flaky rather than as a deploy. Told to reconnect,
+   * they come back to the new process at once.
+   */
+  shutdown(reason: string = DISCONNECT_REASONS.serverRestart): number {
+    const closed = this.#connections.size;
+
+    this.eachConnection((ws) => {
+      ws.send(disconnectFrame(reason, true));
+      ws.close(1000, reason);
+    });
+
+    this.#connections.clear();
+    this.detach();
+
+    return closed;
+  }
+
   disconnect(ws: CableSocket, reason: string = DISCONNECT_REASONS.unauthorized): void {
     ws.send(disconnectFrame(reason, false));
     ws.close(1000, reason);

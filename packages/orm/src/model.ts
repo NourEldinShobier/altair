@@ -20,8 +20,9 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { secureToken } from "@altair/support";
+import { didYouMean, secureToken } from "@altair/support";
 import { errors } from "@altair/support";
+import { lookupType, typeNames, typeRegistered, type Type, type TypeOptions } from "./types.js";
 import {
   camelize,
   humanize,
@@ -34,8 +35,15 @@ import {
 } from "@altair/support";
 import { Callbacks, callbackDecorators, runCallbacks } from "@altair/support";
 import { connection as defaultConnection, type Connection, type Row } from "./connection.js";
-import { Relation, RecordNotFound, type Conditions, type JoinSpec } from "./relation.js";
+import {
+  Relation,
+  RecordNotFound,
+  type Conditions,
+  type JoinSpec,
+  type WithExpressions,
+} from "./relation.js";
 import { columnTypeFor } from "./dump.js";
+import { columnSchemas, type ColumnSchema } from "./introspect.js";
 import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import {
@@ -74,7 +82,13 @@ import {
   MESSAGES,
   declarationApplies,
   runValidation,
+  runCustomValidation,
+  type CustomValidation,
+  type Validator,
   type ValidationDeclaration,
+  type ComparisonOptions,
+  type LengthOptions,
+  type NumericalityOptions,
   type ValidationOptions,
   type ValidationTarget,
 } from "./validations.js";
@@ -85,6 +99,7 @@ import {
   defaultForeignKey,
   preloadAssociation,
   relationFor,
+  type AssociationKind,
   type AssociationDefinition,
   type AssociationOptions,
   type InstanceLike,
@@ -200,22 +215,181 @@ export class RecordInvalid extends Error {
   }
 }
 
+/**
+ * The same validation declared across several attributes at once.
+ *
+ * Backs the `validates_*_of` family, where Rails' older
+ * `validates_presence_of :title, :body` reads better than three separate
+ * `validates` calls — the rule is fixed and the attributes are the variable,
+ * which for presence is most of the time. Each becomes a `validates`
+ * underneath; nothing new happens here, and the options are merged in so
+ * `{ on: "create" }` works as it does everywhere else.
+ *
+ * A free function rather than a static private method: a static `#name` is
+ * reachable only on the exact class that declares it, and every model here is
+ * a subclass of the one the mixin builds.
+ */
+function eachOf(
+  model: { validates(attribute: string, options: ValidationOptions): void },
+  names: string | readonly string[],
+  options: ValidationOptions,
+): void {
+  for (const name of typeof names === "string" ? [names] : names) {
+    model.validates(name, options);
+  }
+}
+
+/**
+ * One thing that went wrong, as an object rather than a string.
+ *
+ * Rails made this change for a reason worth keeping: a string cannot be asked
+ * what *kind* of error it is. `"is too long (maximum is 25 characters)"` is
+ * translated, so a caller matching on it breaks in every locale but one, and a
+ * form that wants to style length errors differently from blank ones has
+ * nothing to branch on. The type survives translation; the message does not.
+ */
+export class ValidationError {
+  constructor(
+    readonly attribute: string,
+    readonly message: string,
+    /** Rails' error `type` — `blank`, `too_long`, `taken`. */
+    readonly type: string = "invalid",
+    /** What the rule was given, so a message can be regenerated or inspected. */
+    readonly options: Record<string, unknown> = {},
+  ) {}
+
+  /**
+   * Whether this error is the one being asked about.
+   *
+   * A missing type matches any type, and each named option must match, so
+   * `match("title", "too_long", { count: 25 })` is as narrow as the caller
+   * makes it and no narrower.
+   */
+  match(attribute: string, type?: string, options: Record<string, unknown> = {}): boolean {
+    if (this.attribute !== attribute) return false;
+    if (type !== undefined && this.type !== type) return false;
+
+    return Object.entries(options).every(([key, value]) => this.options[key] === value);
+  }
+
+  /** Rails' `details`: the type and whatever the rule was given. */
+  get details(): Record<string, unknown> {
+    return { error: this.type, ...this.options };
+  }
+}
+
 /** Rails' `errors` object, in the shape apps actually use. */
 export class ValidationErrors {
-  #errors = new Map<string, string[]>();
+  #list: ValidationError[] = [];
 
-  add(attribute: string, message: string): void {
-    const existing = this.#errors.get(attribute) ?? [];
-    existing.push(message);
-    this.#errors.set(attribute, existing);
+  /**
+   * Records an error.
+   *
+   * The type and options are optional so that every existing
+   * `add(attribute, message)` call keeps working and reads the same; passing a
+   * type is what makes the error inspectable later.
+   */
+  add(
+    attribute: string,
+    message: string,
+    type = "invalid",
+    options: Record<string, unknown> = {},
+  ): void {
+    this.#list.push(new ValidationError(attribute, message, type, options));
+  }
+
+  /** Every error object, in the order they were added. */
+  get objects(): ValidationError[] {
+    return [...this.#list];
+  }
+
+  /**
+   * The errors matching an attribute, and optionally a type and options.
+   * Rails' `where`.
+   */
+  where(
+    attribute: string,
+    type?: string,
+    options: Record<string, unknown> = {},
+  ): ValidationError[] {
+    return this.#list.filter((one) => one.match(attribute, type, options));
+  }
+
+  /** The error objects for one attribute. Rails' `objects_for`. */
+  objectsFor(attribute: string): ValidationError[] {
+    return this.where(attribute);
+  }
+
+  /** The messages for one attribute, optionally narrowed by type. Rails' `messages_for`. */
+  messagesFor(attribute: string, type?: string): string[] {
+    return this.where(attribute, type).map((one) => one.message);
+  }
+
+  /** Every error object, grouped by attribute. Rails' `group_by_attribute`. */
+  groupByAttribute(): Record<string, ValidationError[]> {
+    const grouped: Record<string, ValidationError[]> = {};
+
+    for (const error of this.#list) {
+      (grouped[error.attribute] ??= []).push(error);
+    }
+
+    return grouped;
+  }
+
+  /**
+   * What went wrong, by attribute, in machine-readable form. Rails' `details`.
+   *
+   * This is what an API renders instead of prose: a client deciding which field
+   * to highlight, or whether to offer a "reset password" link because the error
+   * was `taken` rather than `invalid`, cannot read a translated sentence.
+   */
+  details(): Record<string, Record<string, unknown>[]> {
+    return Object.fromEntries(
+      Object.entries(this.groupByAttribute()).map(([attribute, errors]) => [
+        attribute,
+        errors.map((one) => one.details),
+      ]),
+    );
+  }
+
+  /**
+   * Whether an error of this kind is present. Rails' `of_kind?`.
+   *
+   * Takes a type or a whole message, because both are things a caller
+   * legitimately has in hand — but the type is the one that survives a
+   * translation.
+   */
+  ofKind(attribute: string, type = "invalid"): boolean {
+    if (this.messagesFor(attribute).includes(type)) return true;
+
+    return this.where(attribute, type).length > 0;
+  }
+
+  /** Takes another object's errors as its own. Rails' `import`. */
+  importErrors(other: ValidationErrors, prefix?: string): void {
+    for (const error of other.objects) {
+      this.#list.push(
+        new ValidationError(
+          prefix ? `${prefix}.${error.attribute}` : error.attribute,
+          error.message,
+          error.type,
+          error.options,
+        ),
+      );
+    }
+  }
+
+  /** Replaces these errors with another object's. Rails' `copy!`. */
+  copy(other: ValidationErrors): void {
+    this.#list = other.objects;
   }
 
   get isEmpty(): boolean {
-    return this.#errors.size === 0;
+    return this.#list.length === 0;
   }
 
   get count(): number {
-    return [...this.#errors.values()].reduce((total, messages) => total + messages.length, 0);
+    return this.#list.length;
   }
 
   /** Rails calls it `size`. Both are here, because both get typed. */
@@ -224,21 +398,26 @@ export class ValidationErrors {
   }
 
   on(attribute: string): string[] {
-    return this.#errors.get(attribute) ?? [];
+    return this.messagesFor(attribute);
   }
 
   get attributes(): string[] {
-    return [...this.#errors.keys()];
+    return [...new Set(this.#list.map((one) => one.attribute))];
   }
 
   /** Every message, by attribute. Rails' `messages`. */
   get messages(): Record<string, string[]> {
-    return Object.fromEntries(this.#errors);
+    return Object.fromEntries(
+      Object.entries(this.groupByAttribute()).map(([attribute, errors]) => [
+        attribute,
+        errors.map((one) => one.message),
+      ]),
+    );
   }
 
   /** Whether anything went wrong with this attribute. Rails' `include?`. */
   has(attribute: string): boolean {
-    return (this.#errors.get(attribute)?.length ?? 0) > 0;
+    return this.#list.some((one) => one.attribute === attribute);
   }
 
   /** Whether this exact message was added. Rails' `added?`. */
@@ -249,7 +428,7 @@ export class ValidationErrors {
   /** Drops an attribute's errors and returns them. Rails' `delete`. */
   delete(attribute: string): string[] {
     const messages = this.on(attribute);
-    this.#errors.delete(attribute);
+    this.#list = this.#list.filter((one) => one.attribute !== attribute);
     return messages;
   }
 
@@ -273,9 +452,7 @@ export class ValidationErrors {
   }
 
   fullMessages(): string[] {
-    return [...this.#errors.entries()].flatMap(([attribute, messages]) =>
-      messages.map((message) => this.fullMessage(attribute, message)),
-    );
+    return this.#list.map((one) => this.fullMessage(one.attribute, one.message));
   }
 
   /** The full messages for one attribute. Rails' `full_messages_for`. */
@@ -285,9 +462,7 @@ export class ValidationErrors {
 
   /** So `for (const { attribute, message } of errors)` works. */
   *[Symbol.iterator](): Iterator<{ attribute: string; message: string }> {
-    for (const [attribute, messages] of this.#errors) {
-      for (const message of messages) yield { attribute, message };
-    }
+    for (const { attribute, message } of this.#list) yield { attribute, message };
   }
 
   toJSON(): Record<string, string[]> {
@@ -295,7 +470,7 @@ export class ValidationErrors {
   }
 
   clear(): void {
-    this.#errors.clear();
+    this.#list = [];
   }
 }
 
@@ -322,6 +497,8 @@ const PERSISTED = Symbol("altair.model.persisted");
  * question and nothing else could answer it.
  */
 const SAVED_CHANGES = Symbol("altair.model.savedChanges");
+/** What was assigned, before any cast, for a form that has to show it back. */
+const BEFORE_TYPE_CAST = Symbol("altair.model.beforeTypeCast");
 const STRICT_LOADING = Symbol("altair.model.strictLoading");
 /** Whether `destroy` has run, which "not persisted" alone cannot say. */
 const DESTROYED = Symbol("altair.model.destroyed");
@@ -332,6 +509,11 @@ const WAS_NEW = Symbol("altair.model.wasNew");
 
 export interface ModelOptions {
   primaryKey?: string;
+  /**
+   * The columns that identify one row, when the primary key alone does not.
+   * Rails' `query_constraints`.
+   */
+  queryConstraints?: string[];
   connection?: Connection;
 }
 
@@ -341,6 +523,30 @@ export interface BaseModelInstance<A> {
   readonly isPersisted: boolean;
   readonly errors: ValidationErrors;
   attributes(): A;
+  /** Rails' `association_cached?`: whether reading it would cost a query. */
+  associationCached(name: string): boolean;
+  /** Rails' `proxy_association`: the definition behind an accessor. */
+  proxyAssociation(name: string): AssociationDefinition | undefined;
+  /** Rails' `foreign_key_present?`: whether there is anything to load. */
+  foreignKeyPresent(name: string): boolean;
+  /** Rails' `records_for`: what an association already holds. */
+  recordsFor(name: string): unknown;
+  /** Rails' `load_target`: loads it now and remembers it. */
+  loadTarget(name: string): Promise<unknown>;
+
+  /** Rails' `read_attribute`: a column's value, past any accessor. */
+  readAttribute(name: string): unknown;
+  /** Rails' `write_attribute`: sets it, past any accessor. */
+  writeAttribute(name: string, value: unknown): void;
+  /** Rails' `read_attribute_before_type_cast`: what was assigned. */
+  readAttributeBeforeTypeCast(name: string): unknown;
+  attributesBeforeTypeCast(): Record<string, unknown>;
+  /** Rails' `read_attribute_for_database`: the value as it would be written. */
+  readAttributeForDatabase(name: string): unknown;
+  attributesForDatabase(): Record<string, unknown>;
+  /** Rails' `attributes_for_inspect`: a short view, for a log line. */
+  attributesForInspect(limit?: number): Record<string, unknown>;
+  allAttributesForInspect(): Record<string, unknown>;
   changedAttributes(): Partial<A>;
   savedChanges(): Record<string, [unknown, unknown]>;
   hasAttribute(name: string): boolean;
@@ -374,6 +580,11 @@ export interface BaseModelInstance<A> {
   clearChangesInformation(): void;
   attributeBeforeLastSave(attribute: keyof A & string): unknown;
   changes(): Record<string, [unknown, unknown]>;
+  changeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined;
+  savedChangeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined;
+  willSaveChangeTo(attribute: keyof A & string): boolean;
+  restoreAttribute(attribute: keyof A & string): void;
+  clearAttributeChanges(...attributes: (keyof A & string)[]): void;
   changed(): (keyof A & string)[];
   hasChanged(attribute?: keyof A & string): boolean;
   attributeWas(attribute: keyof A & string): unknown;
@@ -489,15 +700,82 @@ export function isUniqueViolation(error: unknown): boolean {
   return code === "SQLITE_CONSTRAINT" && /UNIQUE constraint failed/i.test(message);
 }
 
+/**
+ * What a persisted model's `attribute` takes.
+ *
+ * Distinct from `AttributeOptions` in attributes.ts, which is the same idea for
+ * a model with no table behind it: that one casts with a plain function, this
+ * one with a `Type` from the registry, because a column has a precision and a
+ * limit and a virtual attribute does not.
+ */
+export interface ModelAttributeOptions extends TypeOptions {
+  /**
+   * The value a new record starts with.
+   *
+   * A function for anything mutable — an array, an object, a timestamp —
+   * since a value shared by every record built from this class is a bug that
+   * shows up as one record's change appearing on another.
+   */
+  default?: unknown;
+}
+
+/** One attribute a model declared for itself. */
+export interface DeclaredAttribute {
+  type: Type;
+  /** The name it was declared with, for a caller reporting on the schema. */
+  typeName: string;
+  default?: unknown;
+}
+
+/**
+ * Records what a caller assigned, before the model changed it.
+ *
+ * Only where the model actually transforms on assignment — an enum turning a
+ * word into an integer, a normaliser trimming a string. A plain column keeps
+ * what was assigned as it was, so recording it would be storing the same value
+ * twice under two names.
+ */
+function rememberBeforeCast(record: object, attribute: string, value: unknown): void {
+  const holder = record as { [BEFORE_TYPE_CAST]?: Record<string, unknown> };
+  const held = holder[BEFORE_TYPE_CAST];
+
+  if (held) held[attribute] = value;
+  else holder[BEFORE_TYPE_CAST] = { [attribute]: value };
+}
+
+/** Cuts a value down to something a log line can carry. */
+function truncateForInspect(value: unknown, limit: number): unknown {
+  if (typeof value !== "string" || value.length <= limit) return value;
+
+  return `${value.slice(0, limit)}...`;
+}
+
 export function Model<A extends object>(tableName?: string, options: ModelOptions = {}) {
   class BaseModel extends Callbacks {
     static tableName = tableName ?? "";
     static primaryKey = options.primaryKey ?? "id";
+
+    /**
+     * The columns that identify one row. Rails' `query_constraints`.
+     *
+     * Undefined means the primary key alone, which is nearly always right.
+     * Naming more is for a table where it is not: a legacy schema keyed on a
+     * pair, or a sharded one where `(tenant_id, id)` identifies a row and `id`
+     * alone identifies one per tenant.
+     *
+     * The consequence of getting this wrong is not a failed save. An UPDATE
+     * whose WHERE names too few columns matches the wrong row, or several, and
+     * writes to all of them — so a save against such a table without this
+     * silently edits somebody else's record and reports success.
+     */
+    static queryConstraints: string[] | undefined = options.queryConstraints;
     static connectionOverride: Connection | undefined = options.connection;
     static columnCache: string[] | undefined;
     static columnTypeCache: Record<string, ColumnType> | undefined;
     static associations: Record<string, AssociationDefinition> = {};
     static validations: ValidationDeclaration[] = [];
+    /** Rules the application wrote itself. Rails' `validates_with`. */
+    static customValidations: CustomValidation[] = [];
 
     /** The column optimistic locking uses, when the table has one. */
     static lockingColumn = "lock_version";
@@ -600,6 +878,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           return labelFor(definition, this[ATTRIBUTES][attribute]);
         },
         set(this: BaseModel, value: unknown) {
+          rememberBeforeCast(this, attribute, value);
           this[ATTRIBUTES][attribute] = storedValueFor(definition, value);
         },
       });
@@ -661,6 +940,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           return this[ATTRIBUTES][attribute];
         },
         set(this: BaseModel, value: unknown) {
+          rememberBeforeCast(this, attribute, value);
           this[ATTRIBUTES][attribute] = normalizeValue(definition, value);
         },
       });
@@ -917,6 +1197,187 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       this.validations.push({ attribute, options });
     }
 
+    /**
+     * Adds a rule the application wrote itself. Rails' `validates_with`.
+     *
+     *     this.validatesWith(new NotOverlapping({ column: "period" }))
+     *
+     * An object rather than a class, because a validator that takes options
+     * is configured when it is declared and there is nothing for the framework
+     * to do with a constructor it would have to guess the arguments of.
+     */
+    static validatesWith(validator: Validator, options: ValidationOptions = {}): void {
+      // Refused here rather than at run time, so a rule configured wrongly
+      // says so on the first request rather than the first time a record
+      // happens to reach it — months, for a rare branch.
+      validator.checkValidity?.();
+
+      if (!Object.hasOwn(this, "customValidations")) {
+        this.customValidations = [...this.customValidations];
+      }
+
+      this.customValidations.push({ validator, options });
+    }
+
+    /**
+     * Runs a rule against each of several attributes. Rails' `validates_each`.
+     *
+     *     this.validatesEach(["title", "body"], (record, attribute, value) => {
+     *       if (typeof value === "string" && value.includes("	")) {
+     *         record.errors.add(attribute, "cannot contain tabs")
+     *       }
+     *     })
+     *
+     * The shape for a check that is the same for several columns and worth
+     * writing once, where a whole validator class would be more ceremony than
+     * the rule deserves.
+     */
+    static validatesEach(
+      attributes: string | readonly string[],
+      body: (record: ValidationTarget, attribute: string, value: unknown) => void | Promise<void>,
+      options: ValidationOptions = {},
+    ): void {
+      const names = typeof attributes === "string" ? [attributes] : [...attributes];
+
+      if (names.length === 0) {
+        throw new Error("validatesEach needs at least one attribute to check.");
+      }
+
+      if (!Object.hasOwn(this, "customValidations")) {
+        this.customValidations = [...this.customValidations];
+      }
+
+      this.customValidations.push({
+        validator: { validateEach: body } as unknown as Validator,
+        attributes: names,
+        options,
+      });
+    }
+
+    /** Rails' `validates_presence_of`. */
+    static validatesPresenceOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, presence: true });
+    }
+
+    /** Rails' `validates_absence_of`. */
+    static validatesAbsenceOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, absence: true });
+    }
+
+    /** Rails' `validates_confirmation_of`. */
+    static validatesConfirmationOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, confirmation: true });
+    }
+
+    /** Rails' `validates_acceptance_of`. */
+    static validatesAcceptanceOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, acceptance: true });
+    }
+
+    /** Rails' `validates_length_of`. */
+    static validatesLengthOf(
+      names: string | readonly string[],
+      rule: LengthOptions = {} as LengthOptions,
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, length: rule });
+    }
+
+    /** Rails' `validates_format_of`. */
+    static validatesFormatOf(
+      names: string | readonly string[],
+      rule: { with?: RegExp; without?: RegExp } = {} as { with?: RegExp; without?: RegExp },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, format: rule });
+    }
+
+    /** Rails' `validates_inclusion_of`. */
+    static validatesInclusionOf(
+      names: string | readonly string[],
+      rule: { in: readonly unknown[] } = {} as { in: readonly unknown[] },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, inclusion: rule });
+    }
+
+    /** Rails' `validates_exclusion_of`. */
+    static validatesExclusionOf(
+      names: string | readonly string[],
+      rule: { in: readonly unknown[] } = {} as { in: readonly unknown[] },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, exclusion: rule });
+    }
+
+    /** Rails' `validates_comparison_of`. */
+    static validatesComparisonOf(
+      names: string | readonly string[],
+      rule: ComparisonOptions = {} as ComparisonOptions,
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, comparison: rule });
+    }
+
+    /** Rails' `validates_numericality_of`. */
+    static validatesNumericalityOf(
+      names: string | readonly string[],
+      rule: NumericalityOptions = {} as NumericalityOptions,
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, numericality: rule });
+    }
+
+    /** Rails' `validates_uniqueness_of`. */
+    static validatesUniquenessOf(
+      names: string | readonly string[],
+      rule: { scope?: string | string[] } = {} as { scope?: string | string[] },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, uniqueness: rule });
+    }
+
+    /**
+     * The validations declared for one attribute. Rails' `validators_on`.
+     *
+     * For a form builder deciding whether to mark a field required, or a
+     * serializer describing its own constraints — anything that would
+     * otherwise be handed a list that then drifts from the model.
+     */
+    static validatorsOn(attribute: string): ValidationOptions[] {
+      return this.validations
+        .filter((one) => one.attribute === attribute)
+        .map((one) => one.options);
+    }
+
+    /** Every validation declared, whatever the attribute. Rails' `validators`. */
+    static validators(): ValidationDeclaration[] {
+      return [...this.validations];
+    }
+
+    /**
+     * Drops every validation on this class. Rails' `clear_validators!`.
+     *
+     * For tests that need a model to save something the rules forbid. Copy on
+     * write like the declarations themselves, so clearing on a subclass leaves
+     * the parent's rules intact rather than silently disarming every sibling.
+     */
+    static clearValidators(): void {
+      this.validations = [];
+    }
+
     static {
       this.defineCallbacks(["save", "create", "update", "destroy", "validation"]);
     }
@@ -924,6 +1385,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     declare [ATTRIBUTES]: Record<string, unknown>;
     declare [ORIGINAL]: Record<string, unknown>;
     declare [SAVED_CHANGES]: Record<string, [unknown, unknown]> | undefined;
+    /**
+     * What was assigned before any cast, keyed by column.
+     *
+     * Only populated for values a caller assigned: what came out of the
+     * database has no earlier form, and recording one would be recording the
+     * cast value twice under two names.
+     */
+    declare [BEFORE_TYPE_CAST]: Record<string, unknown> | undefined;
     declare [STRICT_LOADING]: boolean | undefined;
     declare [DESTROYED]: boolean | undefined;
 
@@ -949,6 +1418,22 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // written to the table as a column of its own.
       const declared: Record<string, unknown> = {};
       const columns: Record<string, unknown> = {};
+
+      // Declared defaults go in first, so anything the caller passed overrides
+      // them. A new record therefore carries its defaults before it is saved —
+      // which is the point: a database default only exists after an INSERT, so
+      // a form rendered from `Model.build()` would show an empty field for a
+      // value that is about to become 0.
+      if (!persisted) {
+        for (const [name, definition] of Object.entries(klass.declaredAttributes)) {
+          if (definition.default === undefined) continue;
+
+          columns[name] =
+            typeof definition.default === "function"
+              ? (definition.default as () => unknown)()
+              : definition.default;
+        }
+      }
 
       for (const [key, value] of Object.entries(attributes)) {
         // Through the alias here too: the constructor writes columns directly
@@ -1021,6 +1506,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     /** Second names for columns, by alias. Rails' `attribute_aliases`. */
     static attributeAliases: Record<string, string> = {};
 
+    /** Attributes the model declared for itself. Rails' `attribute`. */
+    static declaredAttributes: Record<string, DeclaredAttribute> = {};
+
     /**
      * A second name for a column. Rails' `alias_attribute`.
      *
@@ -1038,6 +1526,65 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * database, and rewriting strings that might be expressions is how a query
      * builder starts guessing.
      */
+    /**
+     * Declares an attribute's type, and optionally a default. Rails'
+     * `attribute`.
+     *
+     *     static { this.attribute("price", "integer", { default: 0 }) }
+     *     static { this.attribute("published", "boolean") }
+     *
+     * Three things it does, and each is a real need:
+     *
+     *   - **Overrides a column's type.** A legacy table storing a number in a
+     *     varchar, a boolean kept as `"Y"`/`"N"`. Without this the application
+     *     compares strings everywhere and one comparison eventually forgets.
+     *   - **Declares an attribute with no column.** A value assembled from
+     *     others that still has to be assigned, validated and read back the
+     *     same way a column is.
+     *   - **Gives a default that exists before the insert.** A database
+     *     default only applies once the row is written, so a form rendered
+     *     from an unsaved record shows an empty field for a value that is
+     *     about to become 0.
+     *
+     * The default may be a function, which is how a mutable one — an array, an
+     * object, a timestamp — avoids being shared by every record built from
+     * this class.
+     */
+    static attribute(name: string, type: string, options: ModelAttributeOptions = {}): void {
+      // Copy on write, like the aliases and the validations, so declaring on a
+      // subclass leaves the parent alone.
+      if (!Object.hasOwn(this, "declaredAttributes")) {
+        this.declaredAttributes = { ...this.declaredAttributes };
+      }
+
+      // Refused rather than left to fall back. `lookupType` deliberately gives
+      // the base type for a name it does not know, which is right for a column
+      // whose database type nobody taught the ORM — but this name was typed by
+      // hand on purpose, so an unrecognised one is a typo, and silently
+      // reading the column uncast is exactly the bug declaring a type was
+      // meant to prevent.
+      if (!typeRegistered(type)) {
+        throw new Error(
+          `Unknown attribute type "${type}" for ${this.name}.${name}. ` +
+            `Known types: ${typeNames().join(", ")}.`,
+        );
+      }
+
+      const built = lookupType(type, options);
+
+      this.declaredAttributes[name] = { type: built, typeName: type, default: options.default };
+    }
+
+    /** The `Type` a declared attribute casts with, or undefined. */
+    static declaredTypeFor(name: string): Type | undefined {
+      return this.declaredAttributes[name]?.type;
+    }
+
+    /** The names this model declared, in the order they were declared. */
+    static declaredAttributeNames(): string[] {
+      return Object.keys(this.declaredAttributes);
+    }
+
     static aliasAttribute(alias: string, column: string): void {
       // Copy on write, so declaring on a subclass leaves the parent alone —
       // the same rule the callbacks and associations follow.
@@ -1055,6 +1602,17 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     /** The column a name means here, following an alias if there is one. */
+    /**
+     * The columns a statement must name to reach exactly this row. Rails'
+     * `query_constraints_list`.
+     *
+     * The primary key when nothing else was declared, so every existing model
+     * behaves as it did and only a model that says otherwise pays for it.
+     */
+    static queryConstraintsList(): string[] {
+      return this.queryConstraints ?? [this.primaryKey];
+    }
+
     static resolveAttributeName(name: string): string {
       return this.attributeAliases[name] ?? name;
     }
@@ -1122,6 +1680,61 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      *
      * `unscoped` escapes both halves.
      */
+    /**
+     * The relation `all` builds, named. Rails' `default_scoped`.
+     *
+     * The same thing `all` returns, but saying so at the call site: code that
+     * means "with the default scopes applied" reads better than code that
+     * means "everything" and happens to be right for the same reason.
+     */
+    static defaultScoped<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
+      return this.all();
+    }
+
+    /**
+     * A relation matching nothing, without asking the database. Rails'
+     * `none` / `null_relation`.
+     *
+     * For a guard clause that has decided there is nothing to show. Returning
+     * an empty array instead would give the caller something that is not a
+     * relation, so every `.order(...)` after the guard would have to be
+     * conditional too.
+     */
+    static nullRelation<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
+      return this.all().none();
+    }
+
+    /** Rails calls it `empty_scope`. Same relation. */
+    static emptyScope<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
+      return this.nullRelation();
+    }
+
+    /**
+     * The attributes a record built from the current scope starts with. Rails'
+     * `scope_for_create`.
+     *
+     * What makes `author.books.create(title)` set the author without being
+     * told: every equality condition on the relation becomes a default.
+     */
+    static scopeForCreate<M extends typeof BaseModel>(this: M): Record<string, unknown> {
+      return this.all().whereValues();
+    }
+
+    /**
+     * Runs a block with the default scopes off. Rails' `unscoped { }`.
+     *
+     * The block form matters for the same reason `silence` takes one: a flag
+     * set and unset by hand stays set when something in between throws, and a
+     * process that has quietly lost its default scope starts returning soft-
+     * deleted rows to everybody.
+     */
+    static async withUnscoped<M extends typeof BaseModel, T>(
+      this: M,
+      body: (relation: Relation<InstanceType<M>>) => T | Promise<T>,
+    ): Promise<T> {
+      return await body(this.unscoped());
+    }
+
     static defaultScope(body: (relation: Relation<unknown>) => Relation<unknown>): void {
       // Copy on write, so a subclass adding one leaves its parent alone.
       if (!Object.hasOwn(this, "defaultScopes")) this.defaultScopes = [...this.defaultScopes];
@@ -1725,11 +2338,46 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * identity on every read would make `===` useless and quietly break any
      * memo keyed on it.
      */
+    /**
+     * The value objects this model composes, by name. Rails'
+     * `aggregate_reflections`.
+     *
+     * Recorded so a serializer or a form builder can ask which columns belong
+     * to one value object — otherwise `street`, `city` and `postcode` look
+     * like three independent fields, and a form renders them as such.
+     */
+    static aggregations: Record<string, AggregateReflection> = {};
+
+    /** Every aggregation declared. Rails' `reflect_on_all_aggregations`. */
+    static reflectOnAllAggregations(): AggregateReflection[] {
+      return Object.values(this.aggregations);
+    }
+
+    /** One aggregation, or undefined. Rails' `reflect_on_aggregation`. */
+    static reflectOnAggregation(name: string): AggregateReflection | undefined {
+      return this.aggregations[name];
+    }
+
+    /** Every aggregation name, in declaration order. */
+    static aggregationNames(): string[] {
+      return Object.keys(this.aggregations);
+    }
+
     static composedOf<V, P extends Record<string, unknown>>(
       name: string,
       options: ComposedOfOptions<V, P>,
     ): void {
       const columns = Object.keys(options.mapping);
+
+      // Copy on write, so a subclass composing its own leaves its parent alone.
+      if (!Object.hasOwn(this, "aggregations")) this.aggregations = { ...this.aggregations };
+      this.aggregations[name] = {
+        name,
+        columns,
+        mapping: { ...(options.mapping as Record<string, string>) },
+        allowNil: options.allowNil ?? true,
+      };
+
       const cache = `__composed_${name}`;
       const stamp = `__composed_stamp_${name}`;
 
@@ -1868,7 +2516,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = this.connection;
       const columns = await this.columnNames();
 
-      if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+      if (!columns.includes(column)) {
+        throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+      }
 
       const quoted = connection.quote(column);
 
@@ -1880,6 +2530,154 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     static async decrementCounter(column: string, id: unknown, by = 1): Promise<void> {
       await this.incrementCounter(column, id, -by);
+    }
+
+    /**
+     * Several counters on one row, in one statement. Rails' `update_counters`.
+     *
+     *     await Post.updateCounters(1, { comments_count: 1, views: 12 })
+     *
+     * One statement rather than a call each, which matters for more than
+     * speed: two separate updates are two chances for another writer to
+     * interleave, and the row is read and written twice instead of once.
+     *
+     * COALESCE, as in `incrementCounter`, because a counter column that is
+     * still null would otherwise stay null forever — `null + 1` is null, and
+     * nothing reports it.
+     */
+    static async updateCounters(id: unknown, counters: Record<string, number>): Promise<void> {
+      const entries = Object.entries(counters);
+      if (entries.length === 0) return;
+
+      const connection = this.connection;
+      const columns = await this.columnNames();
+
+      for (const [column] of entries) {
+        if (!columns.includes(column)) {
+          throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+        }
+      }
+
+      const assignments = entries.map(([column], index) => {
+        const quoted = connection.quote(column);
+        return `${quoted} = COALESCE(${quoted}, 0) + ${connection.placeholder(index)}`;
+      });
+
+      await connection.execute(
+        `UPDATE ${connection.quote(this.table)} SET ${assignments.join(", ")} ` +
+          `WHERE ${connection.quote(this.primaryKey)} = ${connection.placeholder(entries.length)}`,
+        [...entries.map(([, by]) => by), id],
+      );
+    }
+
+    /**
+     * Recounts a cached counter from the rows it counts. Rails' `reset_counters`.
+     *
+     * A counter cache drifts — a row deleted straight from SQL, a bulk insert
+     * that skipped callbacks, a bug since fixed — and once it has, nothing
+     * notices, because the whole point of the column is that nobody counts.
+     * This is the repair.
+     */
+    static async resetCounters(id: unknown, ...associations: string[]): Promise<void> {
+      const connection = this.connection;
+
+      for (const name of associations) {
+        const association = this.associationFor(name);
+        const column = this.counterCacheColumn(name);
+        const target = association.target() as unknown as { table: string };
+        // Undeclared foreign keys fall back to the same default the loader
+        // uses, so a plain `hasMany("comments")` recounts without being told
+        // the column name it never had to state in the first place.
+        const foreignKey = association.foreignKey ?? defaultForeignKey(this.name);
+
+        const [row] = await connection.query<{ count: number | string }>(
+          `SELECT COUNT(*) AS count FROM ${connection.quote(target.table)} ` +
+            `WHERE ${connection.quote(foreignKey)} = ${connection.placeholder(0)}`,
+          [id],
+        );
+
+        await connection.execute(
+          `UPDATE ${connection.quote(this.table)} SET ${connection.quote(column)} = ${connection.placeholder(0)} ` +
+            `WHERE ${connection.quote(this.primaryKey)} = ${connection.placeholder(1)}`,
+          [Number(row?.count ?? 0), id],
+        );
+      }
+    }
+
+    /**
+     * The column a `counterCache: true` association keeps its count in.
+     * Rails' `counter_cache_column`.
+     *
+     * `comments` counts into `comments_count`, unless the association named
+     * the column itself.
+     */
+    static counterCacheColumn(name: string): string {
+      const association = this.associationFor(name);
+      const cache = association.counterCache;
+
+      return typeof cache === "string" ? cache : `${underscore(name)}_count`;
+    }
+
+    /**
+     * Every column's schema, by name. Rails' `columns_hash`.
+     *
+     * More than `columnTypes` reports: nullability, the database's own type
+     * name, and whether it is the primary key. A form builder marking a field
+     * required, a serializer describing its constraints, and a scaffold
+     * choosing an input all want this rather than the type alone.
+     */
+    static async columnsHash(): Promise<Record<string, ColumnSchema>> {
+      const schemas = await columnSchemas(this.connection, this.table);
+
+      return Object.fromEntries(schemas.map((one: ColumnSchema) => [one.name, one]));
+    }
+
+    /** One column's schema, or undefined. Rails' `column_for_attribute`. */
+    static async columnForAttribute(name: string): Promise<ColumnSchema | undefined> {
+      return (await this.columnsHash())[name];
+    }
+
+    /**
+     * One attribute's logical type, or undefined. Rails' `type_for_attribute`.
+     *
+     * A declaration wins over the column, since that is what the application
+     * actually reads and writes — answering with the column's type after
+     * `attribute("price", "integer")` overrode it would be reporting the
+     * storage rather than the model.
+     */
+    static async typeForAttribute(name: string): Promise<ColumnType | undefined> {
+      const declared = this.declaredAttributes[name];
+
+      if (declared) return declared.typeName as ColumnType;
+
+      return (await this.columnTypes())[name];
+    }
+
+    /**
+     * What a new record starts with. Rails' `column_defaults`.
+     *
+     * Read from the schema rather than guessed, so a column with a database
+     * default is reflected before the row is written — which is what makes a
+     * form show the default the row will actually get.
+     */
+    static async columnDefaults(): Promise<Record<string, string | null>> {
+      const schemas = await columnSchemas(this.connection, this.table);
+
+      return Object.fromEntries(schemas.map((one: ColumnSchema) => [one.name, one.default]));
+    }
+
+    /**
+     * The columns that hold what the record is about. Rails' `content_columns`.
+     *
+     * Everything except the primary key, the timestamps, the inheritance
+     * column and the foreign keys — which is exactly the set a scaffold puts
+     * on a form, since none of the excluded ones is a person's to type.
+     */
+    static async contentColumns(): Promise<string[]> {
+      const names = await this.columnNames();
+      const skip = new Set([this.primaryKey, "created_at", "updated_at", this.inheritanceColumn]);
+
+      return names.filter((name) => !skip.has(name) && !name.endsWith("_id"));
     }
 
     /**
@@ -1899,6 +2697,64 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         // In a finally, or an import that throws leaves touching off for the
         // rest of the process and every cache key stops moving.
         this.touchingDisabled = before;
+      }
+    }
+
+    /**
+     * Whether saves of this model write timestamps. Rails' `record_timestamps`.
+     *
+     * A join table, an append-only log, a table whose times come from
+     * somewhere else: all of them have a reason not to want created_at and
+     * updated_at maintained, and turning it off per model is cheaper than
+     * excluding the columns everywhere they are written.
+     */
+    static recordTimestamps = true;
+
+    /**
+     * Runs a block with timestamps off. Rails' `without_timestamps`.
+     *
+     * For a data migration that must not disturb updated_at — the column
+     * usually means "when a person last changed this", and a backfill touching
+     * every row makes it mean "when we ran the backfill", which is a fact
+     * nobody wanted recorded and cannot be undone.
+     */
+    static async withoutTimestamps<T>(body: () => T | Promise<T>): Promise<T> {
+      const before = this.recordTimestamps;
+      this.recordTimestamps = false;
+
+      try {
+        return await body();
+      } finally {
+        this.recordTimestamps = before;
+      }
+    }
+
+    /** @internal Whether saves of this model are being suppressed right now. */
+    static suppressed = false;
+
+    /**
+     * Runs a block in which saving this model does nothing. Rails' `suppress`.
+     *
+     * The case it was written for: importing a hundred thousand rows where a
+     * callback creates a notification per record. Suppressing the notification
+     * is the difference between an import and an import plus a hundred
+     * thousand emails.
+     *
+     * `save` answers true, as Rails does, because the caller asked for the
+     * record to be persisted and the application has decided that means
+     * nothing here — reporting failure would send it down an error path for a
+     * situation that is not an error.
+     */
+    static async suppress<T>(body: () => T | Promise<T>): Promise<T> {
+      const before = this.suppressed;
+      this.suppressed = true;
+
+      try {
+        return await body();
+      } finally {
+        // In a finally, or one throwing import leaves the model unable to save
+        // for the rest of the process — a failure that looks like data loss.
+        this.suppressed = before;
       }
     }
 
@@ -2021,6 +2877,44 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       });
     }
 
+    /**
+     * What this model's associations are, without knowing their names first.
+     * Rails' `reflect_on_all_associations`.
+     *
+     *     for (const one of Post.reflectOnAllAssociations("hasMany")) { ... }
+     *
+     * The question anything generic asks: a serializer deciding what to
+     * include, a fixture loader working out what to build first, a generator
+     * writing a form. Without it each of those has to be handed a list that
+     * then drifts from the model.
+     *
+     * Inherited associations are included, because a subclass has them.
+     */
+    static reflectOnAllAssociations(kind?: AssociationKind): AssociationDefinition[] {
+      const all = Object.values(this.associations);
+
+      return kind ? all.filter((one) => one.kind === kind) : all;
+    }
+
+    /**
+     * One association's definition, or undefined. Rails'
+     * `reflect_on_association`.
+     *
+     * Undefined rather than thrown, unlike `associationFor`. The two answer
+     * different questions: this one asks whether there is an association, and
+     * a caller asking that is prepared for no. `associationFor` is used where
+     * the association is required and a missing one is a mistake worth
+     * stopping on.
+     */
+    static reflectOnAssociation(name: string): AssociationDefinition | undefined {
+      return this.associations[name];
+    }
+
+    /** Every association name, in declaration order. */
+    static associationNames(): string[] {
+      return Object.keys(this.associations);
+    }
+
     static associationFor(name: string): AssociationDefinition {
       const definition = this.associations[name];
       if (!definition) {
@@ -2057,6 +2951,27 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       }
 
       return this.all().where(conditionsOrSql);
+    }
+
+    /** Rails' `with`: a named subquery this query can select from. */
+    static with<M extends typeof BaseModel>(
+      this: M,
+      expressions: Parameters<Relation<InstanceType<M>>["with"]>[0],
+    ): Relation<InstanceType<M>> {
+      return this.all().with(expressions);
+    }
+
+    /** Rails' `with_recursive`: the same, for a query that refers to itself. */
+    static withRecursive<M extends typeof BaseModel>(
+      this: M,
+      expressions: Parameters<Relation<InstanceType<M>>["withRecursive"]>[0],
+    ): Relation<InstanceType<M>> {
+      return this.all().withRecursive(expressions);
+    }
+
+    /** Rails' `from`: select from something other than this model's table. */
+    static from<M extends typeof BaseModel>(this: M, source: string): Relation<InstanceType<M>> {
+      return this.all().from(source);
     }
 
     static order<M extends typeof BaseModel>(
@@ -2513,6 +3428,202 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return this[PERSISTED];
     }
 
+    /**
+     * Reads a column's value directly. Rails' `read_attribute`.
+     *
+     * The way past an accessor the class defined. A model that overrides a
+     * column — `get name() { return super.name.trim() }` — has no `super` to
+     * reach through here, because the value lives in the attribute store
+     * rather than on a prototype. Without this, such an accessor calls itself
+     * and the process stops with a stack overflow rather than a message about
+     * the model.
+     *
+     * Follows an alias, so it reads the same column the accessor would.
+     */
+    readAttribute(name: string): unknown {
+      const klass = this.constructor as typeof BaseModel;
+
+      return this[ATTRIBUTES][klass.resolveAttributeName(name)];
+    }
+
+    /**
+     * Writes a column's value directly. Rails' `write_attribute`.
+     *
+     * The counterpart, and the one a custom setter needs for the same reason.
+     * Bypasses the accessor, so a normaliser or a cast declared on the class
+     * does not run — which is the point when the caller has already done that
+     * work and would otherwise do it twice.
+     */
+    writeAttribute(name: string, value: unknown): void {
+      const klass = this.constructor as typeof BaseModel;
+
+      this[ATTRIBUTES][klass.resolveAttributeName(name)] = value;
+    }
+
+    /**
+     * The value as it was assigned. Rails'
+     * `read_attribute_before_type_cast`.
+     *
+     * What a form re-render needs. Somebody picks a status the model stores as
+     * an integer, or types a name a normaliser trims; the validation fails,
+     * the field is rendered from the record, and it comes back holding the
+     * transformed value rather than what they entered — so they are told
+     * something is wrong about a box that now looks different from what they
+     * typed.
+     *
+     * Captures the transforms the model performs on assignment — an enum, a
+     * normaliser. A plain column keeps what was assigned as it was, so there
+     * is nothing earlier to remember, and this answers with the stored value.
+     * What came out of the database likewise has no earlier form.
+     */
+    readAttributeBeforeTypeCast(name: string): unknown {
+      const klass = this.constructor as typeof BaseModel;
+      const resolved = klass.resolveAttributeName(name);
+      const raw = this[BEFORE_TYPE_CAST];
+
+      return raw && resolved in raw ? raw[resolved] : this[ATTRIBUTES][resolved];
+    }
+
+    /** Everything as it was assigned, before casting. Rails' `attributes_before_type_cast`. */
+    attributesBeforeTypeCast(): Record<string, unknown> {
+      return { ...this[ATTRIBUTES], ...this[BEFORE_TYPE_CAST] };
+    }
+
+    /**
+     * One value as it would be written. Rails' `read_attribute_for_database`.
+     *
+     * Different from the cast value wherever the model stores something other
+     * than what it hands out — an enum kept as an integer, a serialized column
+     * kept as JSON. What a caller building its own statement needs, and what
+     * makes a hand-written query agree with what the ORM writes.
+     */
+    readAttributeForDatabase(name: string): unknown {
+      const klass = this.constructor as typeof BaseModel;
+
+      return this[ATTRIBUTES][klass.resolveAttributeName(name)];
+    }
+
+    /** Everything as it would be written. Rails' `attributes_for_database`. */
+    attributesForDatabase(): Record<string, unknown> {
+      return { ...this[ATTRIBUTES] };
+    }
+
+    /**
+     * A short view of the record, for a log line. Rails'
+     * `attributes_for_inspect`.
+     *
+     * Rails added this because logging a record with a large text column or a
+     * blob puts kilobytes into the log for every line that mentions it, and a
+     * log nobody can scroll is a log nobody reads. The default is the primary
+     * key alone; a model says what else is worth seeing.
+     */
+    static attributesForInspect: string[] | "all" = [];
+
+    /** Everything, for a console where the whole record is the point. */
+    allAttributesForInspect(): Record<string, unknown> {
+      return { ...this[ATTRIBUTES] };
+    }
+
+    /**
+     * What `inspect` shows, honouring the class's choice.
+     *
+     * A value longer than the limit is cut with an ellipsis rather than left
+     * whole: the point is a line somebody can read, and one very long value
+     * defeats that as thoroughly as ten short ones.
+     */
+    attributesForInspect(limit = 50): Record<string, unknown> {
+      const klass = this.constructor as typeof BaseModel;
+      const wanted =
+        klass.attributesForInspect === "all"
+          ? Object.keys(this[ATTRIBUTES])
+          : [klass.primaryKey, ...klass.attributesForInspect];
+
+      const shown: Record<string, unknown> = {};
+
+      for (const name of wanted) {
+        if (!(name in this[ATTRIBUTES])) continue;
+
+        shown[name] = truncateForInspect(this[ATTRIBUTES][name], limit);
+      }
+
+      return shown;
+    }
+
+    /**
+     * Whether an association is already in hand. Rails' `association_cached?`.
+     *
+     * What a view should ask before reading one. `post.author()` on a record
+     * that was preloaded costs nothing and on one that was not costs a query —
+     * and the two read identically at the call site, which is precisely why
+     * N+1s survive code review. This is the question that tells them apart.
+     */
+    associationCached(name: string): boolean {
+      return (this as unknown as Record<string, unknown>)[cacheKey(name)] !== undefined;
+    }
+
+    /**
+     * The association's definition. Rails' `proxy_association`.
+     *
+     * For code that has to work across associations it was not written for —
+     * a serializer, an audit log, a form builder — and needs to know whether
+     * this one is to-many, what it points at, and which key joins it.
+     */
+    proxyAssociation(name: string): AssociationDefinition | undefined {
+      return (this.constructor as typeof BaseModel).associations[name];
+    }
+
+    /**
+     * Whether the key this association reads through is set. Rails'
+     * `foreign_key_present?`.
+     *
+     * A `belongsTo` whose foreign key is null has nothing to load, and asking
+     * the database is a query guaranteed to return nothing. Checked before a
+     * preload rather than after, since a page of a hundred records with
+     * ninety nulls should issue one query for the ten, not for all hundred.
+     */
+    foreignKeyPresent(name: string): boolean {
+      const definition = this.proxyAssociation(name);
+
+      if (definition === undefined) return false;
+
+      // Only meaningful in the direction that holds the key. A hasMany reads
+      // through the *other* table's column, so this record holding nothing
+      // says nothing about whether there is anything to find.
+      if (definition.kind !== "belongsTo") return true;
+
+      const key = definition.foreignKey ?? `${definition.name}_id`;
+
+      return (this as unknown as Record<string, unknown>)[key] != null;
+    }
+
+    /** The records an association already holds, or undefined. Rails' `records_for`. */
+    recordsFor(name: string): unknown {
+      return (this as unknown as Record<string, unknown>)[cacheKey(name)];
+    }
+
+    /**
+     * Loads an association and remembers it. Rails' `load_target`.
+     *
+     * The explicit form of what reading one does, for a caller that wants the
+     * query to happen now — priming a record before handing it to a template
+     * that must not issue queries of its own.
+     */
+    async loadTarget(name: string): Promise<unknown> {
+      const held = this.recordsFor(name);
+
+      if (held !== undefined) return held;
+
+      const accessor = (this as unknown as Record<string, unknown>)[name];
+
+      if (typeof accessor !== "function") return undefined;
+
+      const loaded: unknown = await (accessor as () => unknown).call(this);
+
+      (this as unknown as Record<string, unknown>)[cacheKey(name)] = loaded;
+
+      return loaded;
+    }
+
     attributes(): A {
       const klass = this.constructor as typeof BaseModel;
       const enums = Object.keys(klass.enums);
@@ -2800,6 +3911,70 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return attribute ? this.changed().includes(attribute) : this.changed().length > 0;
     }
 
+    /**
+     * One attribute's change, as `[was, is]`. Rails' `attribute_change`.
+     *
+     * Undefined when it did not change, which is what separates "was set to
+     * null" from "was not touched" — `changes()[name]` cannot tell those apart
+     * without the caller checking the key is present, and that check is the one
+     * people leave out.
+     */
+    changeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined {
+      return this.changes()[attribute];
+    }
+
+    /**
+     * The same, for the save that has already happened. Rails'
+     * `saved_change_to_attribute`.
+     *
+     * The one an `afterSave` callback wants. `changeToAttribute` is empty by
+     * then — the record has been written and has no pending changes — so a
+     * callback asking that question gets nothing and quietly does not run.
+     */
+    savedChangeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined {
+      return this[SAVED_CHANGES]?.[attribute];
+    }
+
+    /**
+     * Whether saving now would write this attribute. Rails'
+     * `will_save_change_to_attribute?`.
+     *
+     * For a `beforeSave` callback deciding whether to do work — regenerating a
+     * slug, re-encrypting a field — where the answer has to be about what is
+     * about to be written rather than what already was.
+     */
+    willSaveChangeTo(attribute: keyof A & string): boolean {
+      return attribute in this.changedAttributes();
+    }
+
+    /**
+     * Puts one attribute back. Rails' `restore_attribute!`.
+     *
+     * The narrow form of `restoreAttributes`, for undoing a single assignment
+     * without discarding everything else the caller has set on the record.
+     */
+    restoreAttribute(attribute: keyof A & string): void {
+      if (!(attribute in this.changedAttributes())) return;
+
+      this[ATTRIBUTES][attribute] = this[ORIGINAL][attribute];
+    }
+
+    /**
+     * Forgets that an attribute changed, without putting the value back.
+     * Rails' `clear_attribute_change`.
+     *
+     * For code that has written a column itself and does not want the next
+     * save to write it again — a counter updated in one statement, say. The
+     * value stays; only the record's memory of having changed it goes.
+     */
+    clearAttributeChanges(...attributes: (keyof A & string)[]): void {
+      const names = attributes.length > 0 ? attributes : Object.keys(this.changedAttributes());
+
+      for (const name of names) {
+        this[ORIGINAL][name as string] = this[ATTRIBUTES][name as string];
+      }
+    }
+
     /** What it held when the record was last loaded or saved. */
     attributeWas(attribute: keyof A & string): unknown {
       return this[ORIGINAL][attribute];
@@ -2988,18 +4163,31 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         // Checked rather than escaped, as everywhere else a column name
         // reaches SQL: an unknown name is a mistake, and a crafted one is
         // worse.
-        if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+        if (!columns.includes(column)) {
+          throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+        }
       }
 
       const assignments = entries
         .map(([column], index) => `${connection.quote(column)} = ${connection.placeholder(index)}`)
         .join(", ");
 
+      // Every column that identifies the row, not just the primary key. Naming
+      // too few matches the wrong row — or several — and writes to all of
+      // them, which reports success and edits somebody else's record.
+      const identifying = klass.queryConstraintsList();
+      const where = identifying
+        .map(
+          (column, at) =>
+            `${connection.quote(column)} = ${connection.placeholder(entries.length + at)}`,
+        )
+        .join(" AND ");
+
       await connection.execute(
-        `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`,
+        `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${where}`,
         [
           ...entries.map(([column, value]) => klass.encryptFor(column, value)),
-          this[ATTRIBUTES][klass.primaryKey],
+          ...identifying.map((column) => this[ATTRIBUTES][column]),
         ],
       );
 
@@ -3038,7 +4226,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = klass.connection;
       const columns = await klass.columnNames();
 
-      if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+      if (!columns.includes(column)) {
+        throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+      }
 
       const quoted = connection.quote(column);
 
@@ -3115,6 +4305,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // the tests happened to declare something else as well. The probe that
       // caught it declared nothing.
       if (klass.validations.length === 0) {
+        // The custom ones still run. A model whose only rule is a validator
+        // object has no attribute declarations, and returning without them
+        // would skip the single thing it declared — the same shape of bug the
+        // association checks below were added for.
+        await this.runCustomValidations(klass, running);
         this.validateRequiredParents(klass);
         await this.validateAssociated(klass);
         return;
@@ -3137,9 +4332,22 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         await runValidation(this as unknown as ValidationTarget, declaration, probe);
       }
 
+      await this.runCustomValidations(klass, running);
+
       this.validateRequiredParents(klass);
 
       await this.validateAssociated(klass);
+    }
+
+    /** Runs the rules declared with `validatesWith` and `validatesEach`. */
+    private async runCustomValidations(klass: typeof BaseModel, running: string): Promise<void> {
+      for (const declaration of klass.customValidations) {
+        // The same `on:`, `if:` and `unless:` a declared rule honours, so a
+        // custom rule is not the one that runs where nothing else does.
+        if (!(await declarationApplies(declaration.options, this, running))) continue;
+
+        await runCustomValidation(this as unknown as ValidationTarget, declaration);
+      }
     }
 
     /**
@@ -3464,6 +4672,10 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     private async saveRecord(): Promise<boolean> {
+      // Checked before validation: a suppressed save does nothing at all, and
+      // running validations first would let a callback on them fire.
+      if ((this.constructor as typeof BaseModel).suppressed) return true;
+
       if (!(await this.validate())) return false;
 
       const klass = this.constructor as typeof BaseModel;
@@ -3504,8 +4716,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // are only ever created — and naming a column that is not there fails
       // the insert outright.
       const present = await klass.columnNames();
-      if (present.includes("created_at")) this[ATTRIBUTES].created_at ??= now;
-      if (present.includes("updated_at")) this[ATTRIBUTES].updated_at = now;
+
+      if (klass.recordTimestamps) {
+        if (present.includes("created_at")) this[ATTRIBUTES].created_at ??= now;
+        if (present.includes("updated_at")) this[ATTRIBUTES].updated_at = now;
+      }
 
       // A hierarchy's rows record which class wrote them, root included.
       if (klass.stiRoot !== undefined || Object.keys(klass.descendants).length > 0) {
@@ -3569,7 +4784,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // error, it simply does not write that column.
       for (const column of klass.readonlyAttributes) delete changes[column];
 
-      if ((await klass.columnNames()).includes("updated_at")) changes.updated_at = new Date();
+      if (klass.recordTimestamps && (await klass.columnNames()).includes("updated_at")) {
+        changes.updated_at = new Date();
+      }
 
       // A save that writes nothing still happened, and what it changed is
       // nothing. Left alone, the record would keep answering with whatever the
@@ -3594,11 +4811,24 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         .map(([key], index) => `${connection.quote(key)} = ${connection.placeholder(index)}`)
         .join(", ");
       const bindings = entries.map(([, value]) => serialize(value, connection));
-      bindings.push(this[ATTRIBUTES][klass.primaryKey]);
 
-      let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`;
+      // Every column that identifies the row, not just the primary key. On a
+      // table whose key is unique only within a tenant, naming one column
+      // matches every tenant's row and writes to all of them — a save that
+      // reports success having edited somebody else's record.
+      const identifying = klass.queryConstraintsList();
+
+      for (const column of identifying) bindings.push(this[ATTRIBUTES][column]);
+
+      let where = identifying
+        .map(
+          (column, at) =>
+            `${connection.quote(column)} = ${connection.placeholder(entries.length + at)}`,
+        )
+        .join(" AND ");
+
       if (locking) {
-        where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(entries.length + 1)}`;
+        where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(entries.length + identifying.length)}`;
         bindings.push(Number(readVersion ?? 0));
       }
 
@@ -3637,11 +4867,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const readVersion = Number(this[ORIGINAL][klass.lockingColumn] ?? 0);
 
       const result = await runCallbacks(this, "destroy", async () => {
-        const bindings: unknown[] = [this[ATTRIBUTES][klass.primaryKey]];
-        let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(0)}`;
+        const identifying = klass.queryConstraintsList();
+        const bindings: unknown[] = identifying.map((column) => this[ATTRIBUTES][column]);
+        let where = identifying
+          .map((column, at) => `${connection.quote(column)} = ${connection.placeholder(at)}`)
+          .join(" AND ");
 
         if (locking) {
-          where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(1)}`;
+          where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(bindings.length)}`;
           bindings.push(readVersion);
         }
 
@@ -3794,8 +5027,17 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         const options = this.encryptedAttributes[key];
         // Decrypt before casting: the column's type describes the plain value,
         // and the ciphertext is a string whatever the column says.
+        // A declared type wins over the column's, which is the whole point of
+        // declaring one: the column says varchar and the application says this
+        // is a number.
+        const declared = this.declaredAttributes[key];
+
         cast[key] =
-          options && decrypting ? decryptValue(value, key, options) : castValue(value, types[key]);
+          options && decrypting
+            ? decryptValue(value, key, options)
+            : declared
+              ? declared.type.cast(value)
+              : castValue(value, types[key]);
       }
 
       return cast;
@@ -4048,6 +5290,17 @@ const PROXY_HANDLER: ProxyHandler<{ [ATTRIBUTES]: Record<string, unknown> }> = {
  * rather than the base shape — which is what lets a subclass declare its own
  * association accessors and have them survive a query.
  */
+/** What a model recorded about one `composedOf` declaration. */
+export interface AggregateReflection {
+  name: string;
+  /** The columns the value object is built from. */
+  columns: string[];
+  /** Which column feeds which part of the value object. */
+  mapping: Record<string, string>;
+  /** Whether an all-null set of columns answers null rather than a value. */
+  allowNil: boolean;
+}
+
 /**
  * How a value object maps onto columns. Rails' `composed_of` options.
  *
@@ -4076,6 +5329,9 @@ export interface ModelClass<A extends object> {
 
   tableName: string;
   primaryKey: string;
+  /** Rails' `query_constraints`: the columns that identify one row. */
+  queryConstraints: string[] | undefined;
+  queryConstraintsList(): string[];
   connectionOverride: Connection | undefined;
   columnCache: string[] | undefined;
   databaseName: string | undefined;
@@ -4131,12 +5387,26 @@ export interface ModelClass<A extends object> {
   unscoped<T>(this: ModelConstructor<A, T>): Relation<T>;
   /** Rails' `default_scope`. Applies to writes as well as reads. */
   defaultScope(body: (relation: Relation<unknown>) => Relation<unknown>): void;
+  defaultScoped<T>(this: ModelConstructor<A, T>): Relation<T>;
+  nullRelation<T>(this: ModelConstructor<A, T>): Relation<T>;
+  emptyScope<T>(this: ModelConstructor<A, T>): Relation<T>;
+  scopeForCreate(): Record<string, unknown>;
+  withUnscoped<T, R>(
+    this: ModelConstructor<A, T>,
+    body: (relation: Relation<T>) => R | Promise<R>,
+  ): Promise<R>;
   defaultScopes: ((relation: Relation<unknown>) => Relation<unknown>)[];
   /** Rails' `has_secure_token`. */
   hasSecureToken(column: string, options?: { length?: number }): void;
   where<T>(this: ModelConstructor<A, T>, conditions: Conditions): Relation<T>;
   where<T>(this: ModelConstructor<A, T>, sql: string, ...bindings: unknown[]): Relation<T>;
   order<T>(this: ModelConstructor<A, T>, column: string, direction?: "asc" | "desc"): Relation<T>;
+  /** Rails' `with`: a named subquery this query can select from. */
+  with<T>(this: ModelConstructor<A, T>, expressions: WithExpressions): Relation<T>;
+  /** Rails' `with_recursive`: the same, for a query that refers to itself. */
+  withRecursive<T>(this: ModelConstructor<A, T>, expressions: WithExpressions): Relation<T>;
+  /** Rails' `from`: select from something other than this model's table. */
+  from<T>(this: ModelConstructor<A, T>, source: string): Relation<T>;
   limit<T>(this: ModelConstructor<A, T>, count: number): Relation<T>;
   find<T>(this: ModelConstructor<A, T>, ids: readonly unknown[]): Promise<T[]>;
   find<T>(this: ModelConstructor<A, T>, id: unknown): Promise<T>;
@@ -4182,9 +5452,64 @@ export interface ModelClass<A extends object> {
   scope(name: string, body: (relation: Relation<unknown>) => Relation<unknown>): void;
   columnNames(): Promise<string[]>;
   hasTimestamps(): Promise<boolean>;
+  recordTimestamps: boolean;
+  withoutTimestamps<T>(body: () => T | Promise<T>): Promise<T>;
+  suppressed: boolean;
+  suppress<T>(body: () => T | Promise<T>): Promise<T>;
 
   validations: ValidationDeclaration[];
+  customValidations: CustomValidation[];
+  /** Rails' `validates_with`: a rule the application wrote itself. */
+  validatesWith(validator: Validator, options?: ValidationOptions): void;
+  /** Rails' `validates_each`: one rule across several attributes. */
+  validatesEach(
+    attributes: string | readonly string[],
+    body: (record: ValidationTarget, attribute: string, value: unknown) => void | Promise<void>,
+    options?: ValidationOptions,
+  ): void;
   validates(attribute: string, options: ValidationOptions): void;
+  validatesPresenceOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesAbsenceOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesConfirmationOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesAcceptanceOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesLengthOf(
+    names: string | readonly string[],
+    rule?: LengthOptions,
+    options?: ValidationOptions,
+  ): void;
+  validatesFormatOf(
+    names: string | readonly string[],
+    rule?: { with?: RegExp; without?: RegExp },
+    options?: ValidationOptions,
+  ): void;
+  validatesInclusionOf(
+    names: string | readonly string[],
+    rule?: { in: readonly unknown[] },
+    options?: ValidationOptions,
+  ): void;
+  validatesExclusionOf(
+    names: string | readonly string[],
+    rule?: { in: readonly unknown[] },
+    options?: ValidationOptions,
+  ): void;
+  validatesComparisonOf(
+    names: string | readonly string[],
+    rule?: ComparisonOptions,
+    options?: ValidationOptions,
+  ): void;
+  validatesNumericalityOf(
+    names: string | readonly string[],
+    rule?: NumericalityOptions,
+    options?: ValidationOptions,
+  ): void;
+  validatesUniquenessOf(
+    names: string | readonly string[],
+    rule?: { scope?: string | string[] },
+    options?: ValidationOptions,
+  ): void;
+  validatorsOn(attribute: string): ValidationOptions[];
+  validators(): ValidationDeclaration[];
+  clearValidators(): void;
   /** Rails' `validates_associated`. */
   validatesAssociated(...names: string[]): void;
   associatedValidations: string[];
@@ -4222,7 +5547,17 @@ export interface ModelClass<A extends object> {
   destroyBy(conditions: Conditions): Promise<number>;
   deleteBy(conditions: Conditions): Promise<number>;
   strictLoadingByDefault: boolean;
+  reflectOnAllAssociations(kind?: AssociationKind): AssociationDefinition[];
+  reflectOnAssociation(name: string): AssociationDefinition | undefined;
+  associationNames(): string[];
   attributeAliases: Record<string, string>;
+  declaredAttributes: Record<string, DeclaredAttribute>;
+  /** What `inspect` shows beyond the primary key. Rails' `attributes_for_inspect`. */
+  attributesForInspect: string[] | "all";
+  /** Rails' `attribute`: a type, and optionally a default, for one attribute. */
+  attribute(name: string, type: string, options?: ModelAttributeOptions): void;
+  declaredTypeFor(name: string): Type | undefined;
+  declaredAttributeNames(): string[];
   aliasAttribute(alias: string, column: string): void;
   resolveAttributeName(name: string): string;
   aliasConditions(conditions: Conditions): Conditions;
@@ -4270,10 +5605,23 @@ export interface ModelClass<A extends object> {
   readonly i18nScope: string;
   incrementCounter(column: string, id: unknown, by?: number): Promise<void>;
   decrementCounter(column: string, id: unknown, by?: number): Promise<void>;
+  updateCounters(id: unknown, counters: Record<string, number>): Promise<void>;
+  resetCounters(id: unknown, ...associations: string[]): Promise<void>;
+  counterCacheColumn(name: string): string;
+  columnsHash(): Promise<Record<string, ColumnSchema>>;
+  columnForAttribute(name: string): Promise<ColumnSchema | undefined>;
+  typeForAttribute(name: string): Promise<ColumnType | undefined>;
+  columnDefaults(): Promise<Record<string, string | null>>;
+  contentColumns(): Promise<string[]>;
+  decrementCounter(column: string, id: unknown, by?: number): Promise<void>;
   afterCreateCommit(callback: unknown): void;
   afterUpdateCommit(callback: unknown): void;
   afterDestroyCommit(callback: unknown): void;
   afterSaveCommit(callback: unknown): void;
+  aggregations: Record<string, AggregateReflection>;
+  reflectOnAllAggregations(): AggregateReflection[];
+  reflectOnAggregation(name: string): AggregateReflection | undefined;
+  aggregationNames(): string[];
   composedOf<V, P extends Record<string, unknown>>(
     name: string,
     options: ComposedOfOptions<V, P>,

@@ -9,6 +9,8 @@
  * there is no adapter between the framework and the runtime.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
+import { parameterParserFor } from "./parameter_wrapping.js";
 import { Current } from "@altair/support";
 import type { Router } from "@altair/router";
 import { Controller, type ControllerContext } from "./controller.js";
@@ -49,13 +51,25 @@ export class MissingController extends Error {
  * Reads the request body into params.
  *
  * Rails' ParamsParser middleware does this for JSON and form encodings; the
- * same two cover almost every request, and anything else is left to the action
- * to read off the request itself.
+ * same two cover almost every request. Anything else can register a parser
+ * with `registerParameterParser`.
  */
 export async function parseBody(request: Request): Promise<Record<string, unknown>> {
   if (request.method === "GET" || request.method === "HEAD") return {};
 
   const contentType = request.headers.get("content-type") ?? "";
+
+  // A registered parser wins, so an application can teach the framework a body
+  // format rather than reading it off the request in every action.
+  const registered = parameterParserFor(contentType);
+
+  if (registered) {
+    try {
+      return await registered(request.clone() as Request);
+    } catch {
+      return {};
+    }
+  }
 
   try {
     if (contentType.includes("application/json")) {
@@ -124,4 +138,20 @@ export function createDispatcher(
       throw error;
     }
   };
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten requests
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("controller");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("controller", logger);
 }

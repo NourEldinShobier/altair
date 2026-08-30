@@ -34,7 +34,25 @@ export interface InboundMessage {
   receivedAt?: Date;
 }
 
-export type InboundStatus = "pending" | "delivered" | "bounced" | "failed";
+/**
+ * What has become of an inbound message. Rails' `ActionMailbox::InboundEmail`
+ * statuses.
+ *
+ * `processing` and `success` are separate from `delivered` because they answer
+ * different questions: `processing` says a worker picked it up and did not
+ * finish — which is how a message stuck in a crashed worker is found — and
+ * `success` says the mailbox ran without deciding anything, where `delivered`
+ * says a mailbox took it. A single flag collapses "nobody has looked at this"
+ * and "something looked at it and crashed" into one state, and those need
+ * different actions.
+ */
+export type InboundStatus =
+  | "pending"
+  | "processing"
+  | "delivered"
+  | "success"
+  | "bounced"
+  | "failed";
 
 /** What a mailbox did with a message. */
 export interface InboundResult {
@@ -260,6 +278,52 @@ export function addressOf(value: Address | string): string {
   return (angled ? angled[1]! : raw).trim().toLowerCase();
 }
 
+/**
+ * Addresses a forwarding relay put the message through. Rails'
+ * `x_forwarded_to_addresses`.
+ *
+ * The header a mail server adds when it forwards, and the reason a mailbox
+ * cannot route on `to` alone: a message forwarded from `support@` to a
+ * catch-all arrives addressed to the catch-all, and the address that decides
+ * which mailbox handles it is in here instead.
+ */
+export function xForwardedToAddresses(message: InboundMessage): string[] {
+  return splitAddresses(message.headers?.["x-forwarded-to"]);
+}
+
+/** The address a message was originally sent to. Rails' `x_original_to_addresses`. */
+export function xOriginalToAddresses(message: InboundMessage): string[] {
+  return splitAddresses(message.headers?.["x-original-to"]);
+}
+
+/**
+ * Every address that could have brought this message here, in the order a
+ * mailbox should try them. Rails' `recipients_addresses`.
+ *
+ * The forwarded and original addresses come first, because they are the
+ * specific ones: `to` on a forwarded message is the catch-all that received
+ * it, and routing on that would send everything to one mailbox.
+ */
+export function recipientsAddresses(message: InboundMessage): string[] {
+  const all = [
+    ...xForwardedToAddresses(message),
+    ...xOriginalToAddresses(message),
+    ...message.to,
+    ...(message.cc ?? []),
+  ];
+
+  return [...new Set(all.map((one) => addressOf(one).toLowerCase()))];
+}
+
+function splitAddresses(header: string | undefined): string[] {
+  if (!header) return [];
+
+  return header
+    .split(",")
+    .map((one) => addressOf(one.trim()))
+    .filter((one) => one.length > 0);
+}
+
 export class MailboxRouter {
   readonly routes: Route[] = [];
 
@@ -273,6 +337,23 @@ export class MailboxRouter {
   route(pattern: MailboxPattern, mailbox: MailboxClass): this {
     this.routes.push({ pattern, mailbox });
     return this;
+  }
+
+  /**
+   * Several routes at once, in order. Rails' `add_routes`.
+   *
+   * Order is the whole of the semantics here — first match wins — so declaring
+   * a set together reads better than a chain of calls whose sequence matters
+   * but does not look like it does.
+   */
+  addRoutes(routes: readonly [MailboxPattern, MailboxClass][]): this {
+    for (const [pattern, mailbox] of routes) this.route(pattern, mailbox);
+    return this;
+  }
+
+  /** Every pattern this router will match, in order. */
+  routingPatterns(): MailboxPattern[] {
+    return this.routes.map((one) => one.pattern);
   }
 
   /** The mailbox for an address, or undefined. */
@@ -295,7 +376,11 @@ export class MailboxRouter {
       return { status: "delivered", reason: "already processed" };
     }
 
-    const recipients = [...message.to, ...(message.cc ?? [])];
+    // Every address that could have brought the message here, not just the
+    // envelope ones. A message forwarded from support@ to a catch-all arrives
+    // addressed to the catch-all, so routing on `to` alone sent every
+    // forwarded message to whichever mailbox owns the catch-all.
+    const recipients = recipientsAddresses(message);
 
     // The first route that matches any recipient takes it, as in Rails: a
     // message has one destination, and trying later routes when the first

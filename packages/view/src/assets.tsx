@@ -8,7 +8,7 @@
  */
 
 import { escapeHtml as escape, RawHtml, type Node } from "./render.js";
-import { usePath } from "./context.js";
+import { usePath, useUrl } from "./context.js";
 import { tagOptions, type TagAttributes } from "./tags.js";
 
 /** Where assets are served from, when they are not served from here. */
@@ -118,16 +118,101 @@ export function JavascriptIncludeTag(props: TagAttributes & { src: string }): No
   return new RawHtml(`<script${tagOptions({ src: javascriptPath(src), ...rest })}></script>`);
 }
 
-/** Whether a path is the one being rendered. Rails' `current_page?`. */
-export function isCurrentPage(path: string): boolean {
-  const here = usePath();
-  if (here === undefined) return false;
+export interface CurrentPageOptions {
+  /**
+   * Whether the query string has to match too.
+   *
+   * Off by default, following Rails: `/posts?page=2` is still the posts page,
+   * and a nav item that stops being current on page two looks broken. Turn it
+   * on for a link that *is* the query — a filter, a sort, a tab implemented as
+   * a parameter.
+   */
+  matchQuery?: boolean;
+  /** Treat `/posts` as current for `/posts/1` too, for a section heading. */
+  matchPrefix?: boolean;
+}
 
-  // Compared without a trailing slash, because `/posts` and `/posts/` are the
-  // same page and only one of them is in the link.
-  const trim = (one: string) => (one.length > 1 ? one.replace(/\/$/, "") : one);
+/** A path compared without a trailing slash: `/posts` and `/posts/` agree. */
+function trimPath(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
 
-  return trim(here) === trim(path);
+/**
+ * Whether a target is the page being rendered. Rails' `current_page?`.
+ *
+ * The host is checked, not only the path. Compared on path alone, a link to
+ * `https://elsewhere.test/posts` reads as current while you are on `/posts` —
+ * and `LinkToUnlessCurrent` then renders that external link as plain text,
+ * dropping it from the page entirely.
+ *
+ * False rather than throwing outside a request: a component rendered in a test
+ * with no request is not a bug, and a nav that threw in a unit test is a nav
+ * nobody unit tests.
+ */
+export function isCurrentPage(target: string, options: CurrentPageOptions = {}): boolean {
+  const here = useUrl();
+
+  if (here === undefined) {
+    // No request, but a path may still be known — the renderer sets one for a
+    // page rendered outside a served request. Fall back to the old comparison
+    // rather than answering false, which would un-mark every current link.
+    const path = usePath();
+
+    return path === undefined ? false : trimPath(path) === trimPath(target.split(/[?#]/)[0] ?? "");
+  }
+
+  let there: URL;
+
+  try {
+    there = new URL(target, here);
+  } catch {
+    return false;
+  }
+
+  if (there.host !== here.host || there.protocol !== here.protocol) return false;
+
+  const herePath = trimPath(here.pathname);
+  const therePath = trimPath(there.pathname);
+
+  if (options.matchPrefix === true) {
+    // Segment-wise, so `/post` is not a prefix of `/posts`.
+    if (therePath !== herePath && !herePath.startsWith(`${therePath}/`)) return false;
+  } else if (therePath !== herePath) {
+    return false;
+  }
+
+  if (options.matchQuery !== true) return true;
+
+  return sortedQuery(there) === sortedQuery(here);
+}
+
+/** The query as sorted pairs: the same filter written in another order is it. */
+function sortedQuery(url: URL): string {
+  return [...url.searchParams.entries()]
+    .sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("&");
+}
+
+/**
+ * The attributes a link to the current page should carry, or nothing.
+ *
+ * `aria-current="page"` is how a screen reader says which item in a list of
+ * links is the one you are on. Without it a navigation bar reads as a run of
+ * identical links, and the highlight a sighted reader sees conveys nothing —
+ * which makes this an accessibility requirement rather than styling, and the
+ * reason it ships with the class rather than being left to each call site.
+ */
+export function currentPageAttributes(
+  target: string,
+  options: CurrentPageOptions & { class?: string } = {},
+): Record<string, string> {
+  if (!isCurrentPage(target, options)) return {};
+
+  return {
+    "aria-current": "page",
+    ...(options.class === undefined ? {} : { class: options.class }),
+  };
 }
 
 export interface ConditionalLinkProps extends TagAttributes {

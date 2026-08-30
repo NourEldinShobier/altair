@@ -119,6 +119,19 @@ export interface CachedProps extends CacheEntryOptions {
    * where an editor should see their own unsaved change.
    */
   skip?: boolean;
+  /**
+   * Caches only when this holds. Rails' `cache_if`.
+   *
+   * The case it is for: a page whose logged-out version is the same for
+   * everybody and whose logged-in version is not. Without a condition the
+   * choice is to cache neither — losing the win on the requests that would
+   * benefit most, since a crawler and a first-time visitor are exactly the
+   * traffic a cache is cheapest on — or to cache both, which serves one
+   * person's page to another.
+   */
+  if?: boolean;
+  /** Caches unless this holds. Rails' `cache_unless`. */
+  unless?: boolean;
   children?: Node;
 }
 
@@ -130,9 +143,13 @@ export interface CachedProps extends CacheEntryOptions {
  * was not trusted on the way in.
  */
 export async function Cached(props: CachedProps): Promise<Node> {
-  const { on, skip, children, ...options } = props;
+  const { on, skip, if: when, unless, children, ...options } = props;
 
-  if (skip) return children ?? null;
+  // Read as a single question rather than three: whether this fragment is
+  // cacheable at all. Any one of them saying no is enough, and a caller
+  // passing two that disagree gets the safe answer rather than an order of
+  // precedence nobody would remember.
+  if (skip === true || when === false || unless === true) return children ?? null;
 
   const cache = fragmentCache();
 

@@ -8,12 +8,20 @@
  * placeholders are numbered, and how an inserted row's id comes back.
  */
 
+import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
-import { collectingCommitCallbacks } from "./after_commit.js";
+import { collectingCommitCallbacks, runBeforeCommitCallbacks } from "./after_commit.js";
 import { cachingQuery, clearQueryCache } from "./query_cache.js";
 import { withQueryLog } from "./query_logs.js";
+
+import {
+  capabilitiesFor,
+  maxIdentifierLength,
+  nativeDatabaseTypes,
+  type Capabilities,
+} from "./capabilities.js";
 
 export type Adapter = "sqlite" | "postgres" | "mysql";
 
@@ -217,7 +225,17 @@ export class Connection {
           // quietly write outside the transaction, and its writes would survive a
           // rollback. The scope follows the async call chain, so concurrent
           // requests each see their own.
-          return await inTransaction.run(scoped, async () => await body(scoped));
+          return await inTransaction.run(scoped, async () => {
+            const value = await body(scoped);
+
+            // Inside the block, so a callback that throws leaves through
+            // `begin` and the driver rolls back. Outside it, this would run
+            // after the COMMIT and could only report a problem it was supposed
+            // to prevent.
+            await runBeforeCommitCallbacks();
+
+            return value;
+          });
         })) as T,
     );
   }
@@ -265,6 +283,66 @@ export class Connection {
     await this.#finishTransaction("COMMIT");
   }
 
+  /**
+   * Opens a savepoint that outlives this call. Rails' `create_savepoint`.
+   *
+   * The same argument as `beginTransaction`: `transaction()` nests savepoints
+   * for a block, and a block has an end. A test harness that wants a savepoint
+   * per example opens it in one hook and rolls back in another, with the
+   * example in between — and there is no block that spans those.
+   *
+   * The name is returned rather than remembered by the caller, so two
+   * savepoints opened in the same scope cannot be released in the wrong order
+   * by getting the name wrong.
+   */
+  async createSavepoint(name?: string): Promise<string> {
+    this.#savepoints += 1;
+    const chosen = name ?? `altair_savepoint_${String(this.#savepoints)}`;
+
+    await this.execute(`SAVEPOINT ${this.quote(chosen)}`);
+
+    return chosen;
+  }
+
+  /**
+   * Keeps everything since a savepoint. Rails' `release_savepoint`.
+   *
+   * Releasing is not committing: the work stays inside the enclosing
+   * transaction and is still undone if that rolls back. The name is what
+   * catches people out — a release reads like a commit and is not one.
+   */
+  async releaseSavepoint(name: string): Promise<void> {
+    await this.execute(`RELEASE SAVEPOINT ${this.quote(name)}`);
+    this.#savepoints = Math.max(0, this.#savepoints - 1);
+  }
+
+  /** Discards everything since a savepoint. Rails' `rollback_to_savepoint`. */
+  async rollbackToSavepoint(name: string): Promise<void> {
+    await this.execute(`ROLLBACK TO SAVEPOINT ${this.quote(name)}`);
+    this.#savepoints = Math.max(0, this.#savepoints - 1);
+  }
+
+  /**
+   * How deep the nesting goes. Rails' `open_transactions`.
+   *
+   * One for the transaction and one per savepoint inside it, which is what a
+   * caller needs to decide whether it is already inside one — the question
+   * `isInTransaction` answers only as a boolean.
+   */
+  get openTransactions(): number {
+    return (this.#inTransaction ? 1 : 0) + this.#savepoints;
+  }
+
+  /** The name the next savepoint would take. Rails' `current_savepoint_name`. */
+  get currentSavepointName(): string {
+    return `altair_savepoint_${String(this.#savepoints)}`;
+  }
+
+  /** Whether a transaction is open at all. Rails' `transaction_open?`. */
+  get transactionOpen(): boolean {
+    return this.#inTransaction;
+  }
+
   async #finishTransaction(statement: string): Promise<void> {
     try {
       await this.execute(statement);
@@ -299,13 +377,207 @@ export class Connection {
   }
 
   /**
-   * The clause that makes an insert return the new row.
+   * What this database can do, asked by name.
    *
-   * PostgreSQL and SQLite support RETURNING; MySQL does not, and needs a
-   * follow-up read instead.
+   * Rails asks `supports_check_constraints?` rather than which adapter it is,
+   * and that is the point: the question survives the answer changing, and it
+   * says what the caller actually wanted to know. The answers live in one
+   * table in [capabilities.ts](./capabilities.ts).
    */
+  get capabilities(): Capabilities {
+    return capabilitiesFor(this.adapter);
+  }
+
+  /** The longest identifier this server accepts before it truncates. */
+  get maxIdentifierLength(): number {
+    return maxIdentifierLength(this.adapter);
+  }
+
+  /** The column types this adapter spells its own way. */
+  get nativeDatabaseTypes(): Record<string, string> {
+    return nativeDatabaseTypes(this.adapter);
+  }
+
+  /** Which database this is, under Rails' name for it. */
+  get adapterName(): string {
+    return this.adapter;
+  }
+
+  /** The clause that makes an insert return the new row. MySQL has none, and
+   * needs a follow-up read instead. */
   get supportsReturning(): boolean {
-    return this.adapter !== "mysql";
+    return this.capabilities.returning;
+  }
+
+  /** UPDATE ... RETURNING, which SQLite gained later than the INSERT form. */
+  get supportsUpdateReturning(): boolean {
+    return this.capabilities.updateReturning;
+  }
+
+  /** Nested transactions. */
+  get supportsSavepoints(): boolean {
+    return this.capabilities.savepoints;
+  }
+
+  /** Whether a failed migration rolls its DDL back rather than leaving the
+   * table half-changed. */
+  get supportsDdlTransactions(): boolean {
+    return this.capabilities.ddlTransactions;
+  }
+
+  /** SET TRANSACTION ISOLATION LEVEL. */
+  get supportsTransactionIsolation(): boolean {
+    return this.capabilities.transactionIsolation;
+  }
+
+  /** Advisory locks, which is what keeps two processes from migrating at once. */
+  get supportsAdvisoryLocks(): boolean {
+    return this.capabilities.advisoryLocks;
+  }
+
+  /** CHECK constraints as named, droppable objects. */
+  get supportsCheckConstraints(): boolean {
+    return this.capabilities.checkConstraints;
+  }
+
+  /** UNIQUE as a named constraint rather than only a unique index. */
+  get supportsUniqueConstraints(): boolean {
+    return this.capabilities.uniqueConstraints;
+  }
+
+  /** EXCLUDE constraints. */
+  get supportsExclusionConstraints(): boolean {
+    return this.capabilities.exclusionConstraints;
+  }
+
+  /** DEFERRABLE INITIALLY DEFERRED. */
+  get supportsDeferrableConstraints(): boolean {
+    return this.capabilities.deferrableConstraints;
+  }
+
+  /** Foreign keys that are actually enforced. */
+  get supportsForeignKeys(): boolean {
+    return this.capabilities.foreignKeys;
+  }
+
+  /** VALIDATE CONSTRAINT, for adding a foreign key without a full-table lock. */
+  get supportsValidateConstraints(): boolean {
+    return this.capabilities.validateConstraints;
+  }
+
+  /** CREATE INDEX ... WHERE. */
+  get supportsPartialIndex(): boolean {
+    return this.capabilities.partialIndex;
+  }
+
+  /** An index on an expression rather than a bare column. */
+  get supportsExpressionIndex(): boolean {
+    return this.capabilities.expressionIndex;
+  }
+
+  /** ASC and DESC per column within one index. */
+  get supportsIndexSortOrder(): boolean {
+    return this.capabilities.indexSortOrder;
+  }
+
+  /** INCLUDE columns on an index. */
+  get supportsIndexInclude(): boolean {
+    return this.capabilities.indexInclude;
+  }
+
+  /** Indexes declared inside CREATE TABLE. */
+  get supportsIndexesInCreate(): boolean {
+    return this.capabilities.indexesInCreate;
+  }
+
+  /** NULLS NOT DISTINCT on a unique index. */
+  get supportsNullsNotDistinct(): boolean {
+    return this.capabilities.nullsNotDistinct;
+  }
+
+  /** Views. */
+  get supportsViews(): boolean {
+    return this.capabilities.views;
+  }
+
+  /** Materialized views. */
+  get supportsMaterializedViews(): boolean {
+    return this.capabilities.materializedViews;
+  }
+
+  /** COMMENT ON, for documenting the schema in the schema. */
+  get supportsComments(): boolean {
+    return this.capabilities.comments;
+  }
+
+  /** Comments inline in CREATE TABLE rather than as separate statements. */
+  get supportsCommentsInCreate(): boolean {
+    return this.capabilities.commentsInCreate;
+  }
+
+  /** WITH ... AS. */
+  get supportsCommonTableExpressions(): boolean {
+    return this.capabilities.commonTableExpressions;
+  }
+
+  /** A native JSON column type. */
+  get supportsJson(): boolean {
+    return this.capabilities.json;
+  }
+
+  /** Generated columns. */
+  get supportsVirtualColumns(): boolean {
+    return this.capabilities.virtualColumns;
+  }
+
+  /** GENERATED ... AS IDENTITY. */
+  get supportsIdentityColumns(): boolean {
+    return this.capabilities.identityColumns;
+  }
+
+  /** ON CONFLICT or ON DUPLICATE KEY, in whichever spelling. */
+  get supportsInsertOnConflict(): boolean {
+    return this.capabilities.insertOnConflict;
+  }
+
+  /** A named conflict target rather than only a bare any-conflict clause. */
+  get supportsInsertConflictTarget(): boolean {
+    return this.capabilities.insertConflictTarget;
+  }
+
+  /** Several ALTER TABLE changes in one statement. */
+  get supportsBulkAlter(): boolean {
+    return this.capabilities.bulkAlter;
+  }
+
+  /** Query planner hints. */
+  get supportsOptimizerHints(): boolean {
+    return this.capabilities.optimizerHints;
+  }
+
+  /** Server extensions, as PostgreSQL means the word. */
+  get supportsExtensions(): boolean {
+    return this.capabilities.extensions;
+  }
+
+  /** Foreign tables. */
+  get supportsForeignTables(): boolean {
+    return this.capabilities.foreignTables;
+  }
+
+  /** Native table partitioning. */
+  get supportsNativePartitioning(): boolean {
+    return this.capabilities.nativePartitioning;
+  }
+
+  /** Sub-second precision on datetime columns. */
+  get supportsDatetimeWithPrecision(): boolean {
+    return this.capabilities.datetimeWithPrecision;
+  }
+
+  /** EXPLAIN. */
+  get supportsExplain(): boolean {
+    return this.capabilities.explain;
   }
 
   async close(): Promise<void> {
@@ -373,4 +645,20 @@ export function connection(): Connection {
     throw new Error("No database connection. Call connect(url) before using models.");
   }
   return current;
+}
+
+/**
+ * The logger this package writes through. Rails' `logger` on each base class.
+ *
+ * Its own rather than the shared one so an application can quieten the database
+ * without quietening itself — which with a single logger means turning
+ * everything down and then not being able to see its own lines either.
+ */
+export function defaultLogger(): Logger {
+  return componentLogger("orm");
+}
+
+/** Gives this package a logger of its own. Undefined puts the shared one back. */
+export function setDefaultLogger(logger: Logger | undefined): void {
+  setComponentLogger("orm", logger);
 }

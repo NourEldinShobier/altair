@@ -113,6 +113,7 @@
         "@altair/controller": "workspace:*",
         "@altair/core": "workspace:*",
         "@altair/jobs": "workspace:*",
+        "@altair/mailer": "workspace:*",
         "@altair/orm": "workspace:*",
         "@altair/support": "workspace:*",
         "@altair/view": "workspace:*",

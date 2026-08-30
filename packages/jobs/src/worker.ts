@@ -8,7 +8,8 @@
  */
 
 import { deserializeArguments } from "./serializers.js";
-import { Continuation, JobInterrupted } from "./continuable.js";
+import { Continuation, JobInterrupted, checkResumeLimit, resumedState } from "./continuable.js";
+import { announceDiscard, instrumentPerform, retryScheduled, retryStopped } from "./events.js";
 import { Job, type JobPayload, type QueueAdapter } from "./job.js";
 
 /**
@@ -179,14 +180,26 @@ export async function runJob(
   options: RunOptions = {},
 ): Promise<RunResult> {
   const klass = Job.lookup(payload.jobClass);
+
+  try {
+    // Before the job runs, so a job that has exhausted its resumptions fails
+    // once and leaves the queue rather than being started again and stopped
+    // again at its first checkpoint for ever.
+    if (payload.continuation) checkResumeLimit(payload.continuation, klass.maxResumptions);
+  } catch (error) {
+    return { status: "failed", payload: { ...payload, attempts: payload.attempts + 1 }, error };
+  }
+
   const continuation = new Continuation(payload.continuation, options.shouldStop);
 
   try {
-    await (
-      klass as unknown as {
-        performNowWith: (continuation: Continuation, ...args: unknown[]) => Promise<unknown>;
-      }
-    ).performNowWith(continuation, ...deserializeArguments(payload.arguments));
+    await instrumentPerform(payload, async () => {
+      await (
+        klass as unknown as {
+          performNowWith: (continuation: Continuation, ...args: unknown[]) => Promise<unknown>;
+        }
+      ).performNowWith(continuation, ...deserializeArguments(payload.arguments));
+    });
 
     return { status: "completed", payload };
   } catch (error) {
@@ -194,7 +207,11 @@ export async function runJob(
     // it stopped because it was asked to, and burning a retry for a deploy
     // would mean a long job dies after however many deploys the policy allows.
     if (error instanceof JobInterrupted) {
-      const resumed: JobPayload = { ...payload, continuation: error.continuation, runAt: 0 };
+      const resumed: JobPayload = {
+        ...payload,
+        continuation: resumedState(error.continuation),
+        runAt: 0,
+      };
       await adapter.enqueue(resumed);
 
       return { status: "interrupted", payload: resumed };
@@ -207,11 +224,22 @@ export async function runJob(
     // from a failure on purpose: a discard is the job working as intended, and
     // counting it as a failure trains people to ignore the failure count.
     if (policy === null) {
-      return { status: "discarded", payload: { ...payload, attempts }, error };
+      const discarded: JobPayload = { ...payload, attempts };
+
+      await announceDiscard(discarded, error);
+
+      return { status: "discarded", payload: discarded, error };
     }
 
     if (attempts >= policy.attempts) {
-      return { status: "failed", payload: { ...payload, attempts }, error };
+      const exhausted: JobPayload = { ...payload, attempts };
+
+      // Announced apart from a discard: this one ran out of tries and that one
+      // was refused by a rule, and an application usually wants to do
+      // different things about them.
+      retryStopped(exhausted, error);
+
+      return { status: "failed", payload: exhausted, error };
     }
 
     // Re-enqueued rather than retried in place, so a slow retry does not hold
@@ -222,6 +250,8 @@ export async function runJob(
       runAt: Date.now() + policy.backoff(attempts) * 1000,
     };
     await adapter.enqueue(retried);
+
+    retryScheduled(retried, error, retried.runAt);
 
     return { status: "retried", payload: retried, error };
   }

@@ -16,8 +16,9 @@
  * enqueued it, and may not exist yet.
  */
 
-import { Continuation, type ContinuationState, type StepContext } from "./continuable.js";
+import { Continuation, Step, type ContinuationState, type StepContext } from "./continuable.js";
 import { serializeArguments } from "./serializers.js";
+import { bulkEnqueued, enqueueAt, successfullyEnqueued } from "./events.js";
 import {
   runCallbacks,
   Callbacks,
@@ -215,6 +216,17 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
   static errorRules: ErrorRule[] = [];
 
   /**
+   * How many times this job may be resumed before it is treated as stuck.
+   * Rails' `max_resumptions`. Undefined means no limit, as in Rails.
+   *
+   * Worth setting on any continuable job whose steps are not certain to fit
+   * inside the shutdown window: such a job is interrupted on every attempt and
+   * re-enqueues itself for ever, which looks from the outside like a queue
+   * that is busy rather than one that is stuck.
+   */
+  static maxResumptions: number | undefined = undefined;
+
+  /**
    * What is about to be enqueued, for an `enqueue` callback to read.
    *
    * Only set on the instance the callbacks run on: a job that is performing
@@ -249,10 +261,18 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
    * interrupted resumes from the cursor it last recorded. Outside a worker
    * there is nothing to resume from and every step simply runs.
    */
-  async step(name: string, body: (step: StepContext) => unknown | Promise<unknown>): Promise<void> {
-    if (this.continuation) return await this.continuation.step(name, body);
+  async step(
+    name: string,
+    body: (step: StepContext) => unknown | Promise<unknown>,
+    options: { start?: unknown } = {},
+  ): Promise<void> {
+    if (this.continuation) return await this.continuation.step(name, body, options);
 
-    await body({ name, cursor: undefined, advance: async () => {}, set: () => {} });
+    // A real Step rather than a stand-in, so a body that asks whether it was
+    // resumed, or advances its cursor, behaves the same when the job is called
+    // straight from a test as it does under a worker. Its checkpoints do
+    // nothing and its cursor goes nowhere, because there is no next attempt.
+    await body(new Step(name, options.start, false, noop, noop));
   }
 
   /**
@@ -479,6 +499,8 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
     if (queue.enqueueAll) await queue.enqueueAll(payloads);
     else for (const payload of payloads) await queue.enqueue(payload);
 
+    bulkEnqueued(payloads);
+
     return payloads;
   }
 
@@ -548,6 +570,13 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       await runCallbacks(job, "enqueue", async () => {
         await this.queue.enqueue(payload);
       });
+
+      // After the adapter took it, so nothing announces work that was never
+      // queued. A scheduled job is announced separately: how much work is
+      // arriving and how much is waiting are different questions, and a
+      // dashboard adding them together reports a backlog that is not one.
+      if (payload.runAt > Date.now()) enqueueAt(payload, payload.runAt);
+      else successfullyEnqueued(payload);
     };
 
     if ((options.enqueueAfterCommit ?? true) && isDeferring()) {
@@ -580,6 +609,9 @@ function runAtFor(options: EnqueueOptions): number {
  * cannot be written down cannot be an argument. Failing here beats failing in
  * a worker at 3am with no context.
  */
+/** For the callbacks a Step outside a worker has nothing to do with. */
+function noop(): void {}
+
 export function assertSerializable(args: unknown[], jobName: string): void {
   for (const [index, arg] of args.entries()) {
     if (arg === undefined) continue;

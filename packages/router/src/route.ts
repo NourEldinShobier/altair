@@ -1,3 +1,5 @@
+import { escapeSegment } from "./urls.js";
+
 /**
  * Route compilation and matching.
  *
@@ -181,7 +183,11 @@ export class Route {
       if (value === undefined || value === null) {
         throw new Error(`Missing required parameter "${segment.value}" for route ${this.pattern}`);
       }
-      path += `/${encodeURIComponent(String(value))}`;
+      // Through the segment escaper rather than encodeURIComponent, which also
+      // escapes `:`, `@`, `=` and the rest — all legal in a path segment, so
+      // escaping them produces a URL that works, is not the one Rails builds,
+      // and is not the one anybody types or greps a log for.
+      path += `/${escapeSegment(String(value))}`;
     }
     return path === "" ? "/" : path;
   }

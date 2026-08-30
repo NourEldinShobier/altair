@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |       |
 | --------- | --------- | --------- | ----- |
-| **Total** | **4,388** | 26,775    | 16.4% |
+| **Total** | **7,348** | 26,775    | 27.4% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -23,18 +23,18 @@ one that needs no server.
 
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
-| `@altair/support`    | 1012  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 1294  | Connection, migrations, models, relations, associations, ActiveModel       |
-| `@altair/controller` | 570   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
+| `@altair/support`    | 1735  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
+| `@altair/orm`        | 2245  | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/controller` | 945   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 191   | Generators, db tasks, file loading, encrypted credentials                  |
-| `@altair/router`     | 97    | Resourceful routing, typed path helpers                                    |
-| `@altair/cable`      | 90    | Action Cable, protocol-compatible with Rails' client                       |
-| `@altair/storage`    | 199   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
-| `@altair/view`       | 312   | TSX rendering, layouts, Inertia protocol, form builders                    |
-| `@altair/jobs`       | 149   | Jobs, queues, retries, worker                                              |
-| `@altair/testing`    | 132   | Transactional tests, fixtures, factories, test databases                   |
-| `@altair/core`       | 170   | Config, boot lifecycle, request handler, credentials, logging              |
-| `@altair/mailer`     | 172   | Messages, TSX bodies, delivery methods                                     |
+| `@altair/router`     | 149   | Resourceful routing, typed path helpers                                    |
+| `@altair/cable`      | 208   | Action Cable, protocol-compatible with Rails' client                       |
+| `@altair/storage`    | 320   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
+| `@altair/view`       | 587   | TSX rendering, layouts, Inertia protocol, form builders                    |
+| `@altair/jobs`       | 219   | Jobs, queues, retries, worker                                              |
+| `@altair/testing`    | 243   | Transactional tests, fixtures, factories, test databases                   |
+| `@altair/core`       | 226   | Config, boot lifecycle, request handler, credentials, logging              |
+| `@altair/mailer`     | 280   | Messages, TSX bodies, delivery methods                                     |
 
 ---
 
@@ -187,7 +187,7 @@ pino-pretty works under Bun 1.4.
 environments/<env>.ts` layers over the defaults, `config/initializers/*.ts`
 run in filename order at boot, and `altair db:seed` runs `db/seeds.ts`.
 
-What remains everywhere is depth: 16.4% of Rails' test count, not 16.4% of Rails.
+What remains everywhere is depth: 27.4% of Rails' test count, not 27.4% of Rails.
 
 ## How to update this file
 

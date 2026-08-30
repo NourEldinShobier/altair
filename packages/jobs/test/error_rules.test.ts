@@ -11,8 +11,19 @@
  * never going to succeed, and the noise is what stops people reading it.
  */
 
-import { beforeEach, describe, expect, it } from "bun:test";
+import { Logger, setComponentLogger } from "@altair/support";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Job, runJob, type JobPayload, type QueueAdapter } from "../src/index.js";
+
+// A discarded job writes an error line, which is right in an application and
+// noise in a file that discards on purpose.
+beforeEach(() => {
+  setComponentLogger("jobs", new Logger({ level: "fatal", sink: () => undefined }));
+});
+
+afterEach(() => {
+  setComponentLogger("jobs", undefined);
+});
 
 class Gone extends Error {}
 class RateLimited extends Error {}

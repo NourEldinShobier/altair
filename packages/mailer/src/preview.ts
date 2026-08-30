@@ -17,6 +17,8 @@
  */
 
 import type { MailMessage } from "./mailer.js";
+import { underscore } from "@altair/support";
+import { informPreviewInterceptors } from "./preview_interceptors.js";
 import type { MessageFields } from "./message.js";
 import { formatAddresses } from "./message.js";
 
@@ -46,9 +48,47 @@ export function findPreview(previews: PreviewSet, slug: string): [string, Previe
   return undefined;
 }
 
-/** Builds a preview's message without delivering it. */
+/**
+ * Builds a preview's message without delivering it.
+ *
+ * The preview interceptors run here and the delivery interceptors do not: a
+ * rule that rewrites every recipient in staging has nothing to say about a
+ * page nobody receives, and a rule that makes an embedded image visible in a
+ * browser must not follow the message out to a mail client that understood the
+ * original perfectly well.
+ */
 export async function renderPreview(preview: Preview): Promise<MessageFields> {
-  return await (await preview()).toMessage();
+  return await informPreviewInterceptors(await (await preview()).toMessage());
+}
+
+/** The previews a set offers, by name. Rails' `emails`. */
+export function previewNames(previews: PreviewSet): string[] {
+  return Object.keys(previews).sort();
+}
+
+/**
+ * Whether a set has a given preview. Rails' `email_exists?`.
+ *
+ * By name rather than by slug, which is the question a link check asks —
+ * `findPreview` answers the URL's question and this one answers the code's.
+ */
+export function emailExists(previews: PreviewSet, name: string): boolean {
+  return Object.hasOwn(previews, name);
+}
+
+/**
+ * A preview's name without the suffix people give the file. Rails'
+ * `preview_name`.
+ *
+ * `UserMailerPreview` and `UserMailer` name the same thing, and a set written
+ * either way should produce the same URL rather than two that differ by seven
+ * characters nobody meant to type.
+ */
+export function previewName(name: string): string {
+  // Underscored before slugging, so `UserMailer` becomes `user-mailer` rather
+  // than `usermailer` — Rails' `underscore` does the same split, and a URL
+  // that runs the words together is one nobody can read back.
+  return previewSlug(underscore(name.replace(/Preview$/, "")));
 }
 
 function escape(value: string): string {

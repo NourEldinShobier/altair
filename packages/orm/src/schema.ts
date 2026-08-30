@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
+import { ADAPTERS, maxIdentifierLength, type Capabilities } from "./capabilities.js";
 import { columnTypeFor } from "./dump.js";
 import { columnSchemas, indexSchemas, type ColumnSchema } from "./introspect.js";
 
@@ -297,10 +298,14 @@ export class TableDefinition {
  * The shortest identifier limit of the three adapters.
  *
  * MySQL stops at 64 characters, PostgreSQL truncates at 63 without saying so,
- * and SQLite has no limit. Generating a name none of them will refuse means
- * living within the smallest.
+ * and SQLite has no practical limit. Generating a name none of them will
+ * refuse means living within the smallest, so this is derived from the
+ * per-adapter numbers rather than written out again beside them — one place to
+ * correct when a server moves its limit.
  */
-export const MAX_IDENTIFIER_LENGTH = 63;
+export const MAX_IDENTIFIER_LENGTH = Math.min(
+  ...ADAPTERS.map((adapter) => maxIdentifierLength(adapter)),
+);
 
 /**
  * Rails' name for an index, shortened when it has to be.
@@ -395,6 +400,11 @@ function defaultLiteral(value: unknown): string {
   if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
 
   return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+/** A comment as a SQL literal, or NULL to remove it. */
+function commentLiteral(comment: string | null): string {
+  return comment === null ? "NULL" : `'${comment.replaceAll("'", "''")}'`;
 }
 
 export class SchemaStatements {
@@ -807,6 +817,103 @@ export class SchemaStatements {
     );
   }
 
+  /**
+   * Writes a note against a table. Rails' `change_table_comment`.
+   *
+   * Stored in the database rather than in a migration file, which is the point:
+   * every tool that looks at the schema — psql, a GUI client, whatever the
+   * analytics team uses — shows it, and a comment that lives only in a
+   * migration is a comment only somebody reading the repository will find.
+   *
+   * SQLite has no comment support at all. It is refused rather than silently
+   * skipped, because a schema that quietly loses its documentation on one
+   * adapter is a schema whose documentation nobody can rely on.
+   */
+  async changeTableComment(table: string, comment: string | null): Promise<void> {
+    this.#requireComments("changeTableComment");
+
+    await this.connection.execute(
+      `COMMENT ON TABLE ${this.connection.quote(table)} IS ${commentLiteral(comment)}`,
+    );
+  }
+
+  /** The same for one column. Rails' `change_column_comment`. */
+  async changeColumnComment(table: string, column: string, comment: string | null): Promise<void> {
+    this.#requireComments("changeColumnComment");
+
+    await this.connection.execute(
+      `COMMENT ON COLUMN ${this.connection.quote(table)}.${this.connection.quote(column)} IS ${commentLiteral(comment)}`,
+    );
+  }
+
+  /** What a table's comment says, or undefined. Rails' `table_comment`. */
+  async tableComment(table: string): Promise<string | undefined> {
+    if (this.connection.adapter !== "postgres") return undefined;
+
+    const rows = await this.connection.query<Row>(
+      `SELECT obj_description(${this.connection.placeholder(0)}::regclass, 'pg_class') AS comment`,
+      [table],
+    );
+    const comment = rows[0]?.comment;
+
+    return comment === null || comment === undefined ? undefined : String(comment);
+  }
+
+  #requireComments(operation: string): void {
+    if (this.connection.adapter === "postgres") return;
+
+    throw new UnsupportedSchemaChange(
+      operation,
+      `${this.connection.adapter} has no schema comments. Keep the note in the migration instead.`,
+    );
+  }
+
+  /**
+   * Runs a block with foreign keys not enforced. Rails'
+   * `disable_referential_integrity`.
+   *
+   * What loading fixtures needs. A set of fixtures references itself in every
+   * direction — a post's author, an author's favourite post — so there is no
+   * insertion order that satisfies every constraint, and sorting them is
+   * solving a graph problem to avoid a switch the database already has.
+   *
+   * Turned back on in a `finally`, and that is the whole safety of it: a
+   * connection left with checks off is a connection that will accept broken
+   * data for the rest of its life, and nothing about the eventual corruption
+   * points back here.
+   */
+  async disableReferentialIntegrity<T>(body: () => Promise<T>): Promise<T> {
+    const off = this.#referentialIntegrityStatement(false);
+    const on = this.#referentialIntegrityStatement(true);
+
+    if (off === undefined || on === undefined) return await body();
+
+    await this.connection.execute(off);
+
+    try {
+      return await body();
+    } finally {
+      await this.connection.execute(on);
+    }
+  }
+
+  #referentialIntegrityStatement(enabled: boolean): string | undefined {
+    switch (this.connection.adapter) {
+      case "sqlite":
+        return `PRAGMA foreign_keys = ${enabled ? "ON" : "OFF"}`;
+      case "mysql":
+        return `SET FOREIGN_KEY_CHECKS = ${enabled ? "1" : "0"}`;
+      default:
+        // PostgreSQL has no session-wide switch that an ordinary user may
+        // throw: `session_replication_role` needs superuser. Rails disables
+        // each table's triggers instead, which needs ownership of every table
+        // — so the honest answer here is that this connection cannot, and the
+        // caller gets its block run with the constraints still on rather than
+        // a statement that will fail.
+        return undefined;
+    }
+  }
+
   async renameTable(from: string, to: string): Promise<void> {
     await this.connection.execute(
       `ALTER TABLE ${this.connection.quote(from)} RENAME TO ${this.connection.quote(to)}`,
@@ -1013,6 +1120,460 @@ export class SchemaStatements {
   async tableExists(name: string): Promise<boolean> {
     return (await this.tables()).includes(name);
   }
+
+  /**
+   * The name Rails gives a join table for two others.
+   *
+   * Sorted, so `createJoinTable("users", "posts")` and the same call with the
+   * arguments the other way round name the same table — a migration and the
+   * model that reads it are written by different people on different days, and
+   * neither should have to remember an order.
+   *
+   * A shared prefix is written once: `admin_posts` and `admin_users` join as
+   * `admin_posts_users`, not `admin_posts_admin_users`. Rails does this with a
+   * regular expression over a NUL-joined pair, and this is the same rule.
+   */
+  static joinTableName(first: string, second: string): string {
+    const [a, b] = [first, second].sort() as [string, string];
+    const joined = `${a}\0${b}`;
+
+    return joined.replace(/^(.*[_.])(.+)\0\1(.+)$/, "$1$2_$3").replace("\0", "_");
+  }
+
+  /**
+   * The table behind a `hasAndBelongsToMany`. Rails' `create_join_table`.
+   *
+   * No primary key, because a join row has no identity of its own — it is the
+   * pair. Both columns are NOT NULL, since a join row missing half of the pair
+   * joins nothing and is only ever a bug that outlived the code that wrote it.
+   */
+  async createJoinTable(
+    first: string,
+    second: string,
+    options: { tableName?: string; columnOptions?: ColumnOptions } = {},
+    define?: (t: TableDefinition) => void,
+  ): Promise<void> {
+    const name = options.tableName ?? SchemaStatements.joinTableName(first, second);
+    const columnOptions = { null: false, ...options.columnOptions };
+
+    await this.createTable(
+      name,
+      (t) => {
+        t.references(singularize(first), columnOptions);
+        t.references(singularize(second), columnOptions);
+        define?.(t);
+      },
+      { id: false },
+    );
+  }
+
+  /** Rails' `drop_join_table`. */
+  async dropJoinTable(
+    first: string,
+    second: string,
+    options: { tableName?: string; ifExists?: boolean } = {},
+  ): Promise<void> {
+    const name = options.tableName ?? SchemaStatements.joinTableName(first, second);
+
+    await this.dropTable(name, { ifExists: options.ifExists });
+  }
+
+  /**
+   * Renames an index. Rails' `rename_index`.
+   *
+   * Built rather than renamed in place, because only PostgreSQL has a direct
+   * ALTER INDEX ... RENAME and doing it the naive way works everywhere: create
+   * the new one with the same columns and uniqueness, then drop the old. Rails
+   * says the same thing in a comment on the same method.
+   *
+   * The new index is created first. Dropping first would leave the table
+   * unindexed for the length of the build, which on a large table is exactly
+   * when the queries that needed it are slowest.
+   */
+  async renameIndex(table: string, from: string, to: string): Promise<void> {
+    const existing = (await indexSchemas(this.connection, table)).find((one) => one.name === from);
+    if (!existing) return;
+
+    await this.addIndex(table, existing.columns, { name: to, unique: existing.unique });
+    await this.removeIndex(table, { name: from });
+  }
+
+  /** Whether an index of this name is there. Rails' `index_name_exists?`. */
+  async indexNameExists(table: string, name: string): Promise<boolean> {
+    return (await this.indexes(table)).includes(name);
+  }
+
+  /**
+   * Several columns in one go. Rails' `remove_columns`.
+   *
+   * One statement per column on the adapters that cannot batch, which is most
+   * of them, but one call in the migration — and one place for a rollback to
+   * put them back.
+   */
+  async removeColumns(table: string, ...names: string[]): Promise<void> {
+    for (const name of names) await this.removeColumn(table, name);
+  }
+
+  /** Whether a foreign key is there. Rails' `foreign_key_exists?`. */
+  async foreignKeyExists(
+    table: string,
+    options: { column?: string; to?: string; name?: string },
+  ): Promise<boolean> {
+    const wanted =
+      options.name ??
+      `fk_${table}_${options.column ?? (options.to ? `${singularize(options.to)}_id` : "")}`;
+
+    return (await this.foreignKeys(table)).some(
+      (one) => one === wanted || (options.column !== undefined && one.includes(options.column)),
+    );
+  }
+
+  /** Every foreign key on a table, by name. */
+  async foreignKeys(table: string): Promise<string[]> {
+    const connection = this.connection;
+
+    if (!connection.supportsForeignKeys) return [];
+
+    switch (connection.adapter) {
+      case "sqlite": {
+        // SQLite reports foreign keys positionally rather than by name, so the
+        // "name" is the column it is on. Nothing else is available, and an
+        // empty answer would make foreignKeyExists always false.
+        const rows = await connection.query<Row>(
+          `PRAGMA foreign_key_list(${connection.quote(table)})`,
+        );
+        return rows.map((row) => String(row.from));
+      }
+      case "postgres": {
+        const rows = await connection.query<Row>(
+          `SELECT conname AS name FROM pg_constraint
+           WHERE contype = 'f' AND conrelid = ${connection.placeholder(0)}::regclass`,
+          [table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "mysql": {
+        const rows = await connection.query<Row>(
+          `SELECT constraint_name AS name FROM information_schema.table_constraints
+           WHERE constraint_type = 'FOREIGN KEY' AND table_schema = DATABASE()
+             AND table_name = ${connection.placeholder(0)}`,
+          [table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+    }
+  }
+
+  /** Whether a check constraint is there. Rails' `check_constraint_exists?`. */
+  async checkConstraintExists(table: string, name: string): Promise<boolean> {
+    return (await this.constraintNames(table, "CHECK")).includes(name);
+  }
+
+  /** Whether a unique constraint is there. Rails' `unique_constraint_exists?`. */
+  async uniqueConstraintExists(table: string, name: string): Promise<boolean> {
+    if (await this.indexNameExists(table, name)) return true;
+
+    return (await this.constraintNames(table, "UNIQUE")).includes(name);
+  }
+
+  /** Drops a unique constraint. Rails' `remove_unique_constraint`. */
+  async removeUniqueConstraint(table: string, name: string): Promise<void> {
+    await this.removeIndex(table, { name });
+  }
+
+  /** Named constraints of one kind, for the adapters that report them. */
+  async constraintNames(table: string, kind: "CHECK" | "UNIQUE"): Promise<string[]> {
+    const connection = this.connection;
+
+    switch (connection.adapter) {
+      case "postgres": {
+        const rows = await connection.query<Row>(
+          `SELECT conname AS name FROM pg_constraint
+           WHERE contype = ${connection.placeholder(0)} AND conrelid = ${connection.placeholder(1)}::regclass`,
+          [kind === "CHECK" ? "c" : "u", table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "mysql": {
+        const rows = await connection.query<Row>(
+          `SELECT constraint_name AS name FROM information_schema.table_constraints
+           WHERE constraint_type = ${connection.placeholder(0)} AND table_schema = DATABASE()
+             AND table_name = ${connection.placeholder(1)}`,
+          [kind, table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "sqlite":
+        // SQLite keeps constraints in the table's original CREATE statement and
+        // has no catalog for them. Reading the DDL back and parsing it would be
+        // a SQL parser, so this reports none rather than half-answering.
+        return [];
+    }
+  }
+
+  /**
+   * Adds an EXCLUDE constraint. Rails' `add_exclusion_constraint`.
+   *
+   * PostgreSQL only, and this says so rather than emitting SQL the others will
+   * reject with a syntax error that names a column instead of the feature.
+   */
+  async addExclusionConstraint(
+    table: string,
+    expression: string,
+    options: { name?: string; using?: string; where?: string } = {},
+  ): Promise<void> {
+    this.#require("exclusionConstraints", "addExclusionConstraint");
+
+    const name = options.name ?? `excl_rails_${table}`;
+    const using = options.using ? ` USING ${options.using}` : "";
+    const where = options.where ? ` WHERE (${options.where})` : "";
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} ADD CONSTRAINT ${this.connection.quote(name)} ` +
+        `EXCLUDE${using} (${expression})${where}`,
+    );
+  }
+
+  /** Rails' `remove_exclusion_constraint`. */
+  async removeExclusionConstraint(table: string, name: string): Promise<void> {
+    this.#require("exclusionConstraints", "removeExclusionConstraint");
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} DROP CONSTRAINT ${this.connection.quote(name)}`,
+    );
+  }
+
+  /** Rails' `exclusion_constraint_exists?`. */
+  async exclusionConstraintExists(table: string, name: string): Promise<boolean> {
+    if (!this.connection.supportsExclusionConstraints) return false;
+
+    const rows = await this.connection.query<Row>(
+      `SELECT conname AS name FROM pg_constraint
+       WHERE contype = 'x' AND conrelid = ${this.connection.placeholder(0)}::regclass`,
+      [table],
+    );
+
+    return rows.some((row) => String(row.name) === name);
+  }
+
+  /**
+   * Creates an enum type. Rails' `create_enum`.
+   *
+   * PostgreSQL only. Elsewhere the same job is a CHECK constraint on a string
+   * column, which is why this refuses rather than silently doing something
+   * else: a schema that quietly means a different thing on another adapter is
+   * worse than one that will not load.
+   */
+  async createEnum(name: string, values: readonly string[]): Promise<void> {
+    this.#require("extensions", "createEnum");
+
+    const literals = values.map((one) => `'${one.replaceAll("'", "''")}'`).join(", ");
+
+    await this.connection.execute(
+      `CREATE TYPE ${this.connection.quote(name)} AS ENUM (${literals})`,
+    );
+  }
+
+  /** Rails' `drop_enum`. */
+  async dropEnum(name: string, options: { ifExists?: boolean } = {}): Promise<void> {
+    this.#require("extensions", "dropEnum");
+
+    await this.connection.execute(
+      `DROP TYPE ${options.ifExists ? "IF EXISTS " : ""}${this.connection.quote(name)}`,
+    );
+  }
+
+  /** Rails' `rename_enum`. */
+  async renameEnum(from: string, to: string): Promise<void> {
+    this.#require("extensions", "renameEnum");
+
+    await this.connection.execute(
+      `ALTER TYPE ${this.connection.quote(from)} RENAME TO ${this.connection.quote(to)}`,
+    );
+  }
+
+  /**
+   * Adds a value to an enum. Rails' `add_enum_value`.
+   *
+   * Position matters, because an enum's order is what comparisons and ORDER BY
+   * use — appending is not the same schema as inserting before an existing
+   * value, and a migration that got it wrong sorts wrongly ever after.
+   */
+  async addEnumValue(
+    name: string,
+    value: string,
+    options: { before?: string; after?: string; ifNotExists?: boolean } = {},
+  ): Promise<void> {
+    this.#require("extensions", "addEnumValue");
+
+    const where = options.before
+      ? ` BEFORE '${options.before.replaceAll("'", "''")}'`
+      : options.after
+        ? ` AFTER '${options.after.replaceAll("'", "''")}'`
+        : "";
+
+    await this.connection.execute(
+      `ALTER TYPE ${this.connection.quote(name)} ADD VALUE ${options.ifNotExists ? "IF NOT EXISTS " : ""}` +
+        `'${value.replaceAll("'", "''")}'${where}`,
+    );
+  }
+
+  /** Rails' `rename_enum_value`. */
+  async renameEnumValue(name: string, from: string, to: string): Promise<void> {
+    this.#require("extensions", "renameEnumValue");
+
+    await this.connection.execute(
+      `ALTER TYPE ${this.connection.quote(name)} RENAME VALUE ` +
+        `'${from.replaceAll("'", "''")}' TO '${to.replaceAll("'", "''")}'`,
+    );
+  }
+
+  /** Turns on a server extension. Rails' `enable_extension`. */
+  async enableExtension(name: string): Promise<void> {
+    this.#require("extensions", "enableExtension");
+
+    await this.connection.execute(`CREATE EXTENSION IF NOT EXISTS ${this.connection.quote(name)}`);
+  }
+
+  /** Rails' `disable_extension`. */
+  async disableExtension(name: string): Promise<void> {
+    this.#require("extensions", "disableExtension");
+
+    await this.connection.execute(`DROP EXTENSION IF EXISTS ${this.connection.quote(name)}`);
+  }
+
+  /** Every extension turned on. Rails' `extensions`. */
+  async extensions(): Promise<string[]> {
+    if (!this.connection.supportsExtensions) return [];
+
+    const rows = await this.connection.query<Row>("SELECT extname AS name FROM pg_extension");
+
+    return rows.map((row) => String(row.name));
+  }
+
+  /** Rails' `extension_enabled?`. */
+  async extensionEnabled(name: string): Promise<boolean> {
+    return (await this.extensions()).includes(name);
+  }
+
+  /**
+   * Empties a table without dropping it. Rails' `truncate`.
+   *
+   * SQLite has no TRUNCATE, and DELETE without a WHERE is what it does
+   * instead — the same outcome by a slower route, which is the right trade for
+   * a database that is usually a test fixture.
+   */
+  async truncateTable(table: string): Promise<void> {
+    const quoted = this.connection.quote(table);
+
+    await this.connection.execute(
+      this.connection.adapter === "sqlite" ? `DELETE FROM ${quoted}` : `TRUNCATE TABLE ${quoted}`,
+    );
+  }
+
+  /** Rails' `truncate_tables`. */
+  async truncateTables(...tables: string[]): Promise<void> {
+    for (const table of tables) await this.truncateTable(table);
+  }
+
+  /** Every view. Rails' `views`. */
+  async views(): Promise<string[]> {
+    const connection = this.connection;
+
+    switch (connection.adapter) {
+      case "sqlite": {
+        const rows = await connection.query<Row>(
+          "SELECT name FROM sqlite_master WHERE type = 'view'",
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "postgres": {
+        const rows = await connection.query<Row>(
+          "SELECT viewname AS name FROM pg_views WHERE schemaname = 'public'",
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "mysql": {
+        const rows = await connection.query<Row>(
+          `SELECT table_name AS name FROM information_schema.views
+           WHERE table_schema = DATABASE()`,
+        );
+        return rows.map((row) => String(row.name));
+      }
+    }
+  }
+
+  /** Rails' `view_exists?`. */
+  async viewExists(name: string): Promise<boolean> {
+    return (await this.views()).includes(name);
+  }
+
+  /**
+   * Everything a SELECT can read from. Rails' `data_sources`.
+   *
+   * Tables and views together, which is the question a model actually asks:
+   * it does not care which one it was told to read, only that reading works.
+   */
+  async dataSources(): Promise<string[]> {
+    return [...(await this.tables()), ...(await this.views())];
+  }
+
+  /** Rails' `data_source_exists?`. */
+  async dataSourceExists(name: string): Promise<boolean> {
+    return (await this.dataSources()).includes(name);
+  }
+
+  /** Every schema. Rails' `schema_names`. */
+  async schemaNames(): Promise<string[]> {
+    if (this.connection.adapter !== "postgres") return [];
+
+    const rows = await this.connection.query<Row>(
+      `SELECT nspname AS name FROM pg_namespace
+       WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'`,
+    );
+
+    return rows.map((row) => String(row.name));
+  }
+
+  /** Rails' `schema_exists?`. */
+  async schemaExists(name: string): Promise<boolean> {
+    return (await this.schemaNames()).includes(name);
+  }
+
+  /** Rails' `create_schema`. */
+  async createSchema(name: string, options: { ifNotExists?: boolean } = {}): Promise<void> {
+    this.#require("extensions", "createSchema");
+
+    await this.connection.execute(
+      `CREATE SCHEMA ${options.ifNotExists ? "IF NOT EXISTS " : ""}${this.connection.quote(name)}`,
+    );
+  }
+
+  /** Rails' `drop_schema`. */
+  async dropSchema(name: string, options: { ifExists?: boolean } = {}): Promise<void> {
+    this.#require("extensions", "dropSchema");
+
+    await this.connection.execute(
+      `DROP SCHEMA ${options.ifExists ? "IF EXISTS " : ""}${this.connection.quote(name)} CASCADE`,
+    );
+  }
+
+  /**
+   * Refuses a statement this adapter cannot run.
+   *
+   * Named rather than emitted and left to fail, because the database's own
+   * error for unsupported syntax points at a token — a stray parenthesis, a
+   * column that does not exist — and reads like a typo in the migration rather
+   * than a feature the server does not have.
+   */
+  #require(capability: keyof Capabilities, method: string): void {
+    if (this.connection.capabilities[capability]) return;
+
+    throw new UnsupportedSchemaChange(
+      method,
+      `${this.connection.adapterName} has no ${capability}, so ${method} cannot run there.`,
+    );
+  }
 }
 
 /**
@@ -1045,6 +1606,20 @@ export interface Migration {
 }
 
 /** Runs migrations and records which have been applied. */
+/**
+ * Raised when the database is behind the code.
+ *
+ * Names the versions rather than only saying "pending", because the first
+ * question is always which ones — and on a shared database the answer is
+ * usually somebody else's branch rather than your own.
+ */
+export class PendingMigrationError extends Error {
+  constructor(readonly versions: string[]) {
+    super(`Migrations are pending. Run them before continuing: ${versions.join(", ")}`);
+    this.name = "PendingMigrationError";
+  }
+}
+
 export class Migrator {
   readonly schema: SchemaStatements;
 
@@ -1069,11 +1644,189 @@ export class Migrator {
     return rows.map((row) => String(row.version));
   }
 
+  /** The table recording what has run. Rails' `schema_migration`. */
+  get schemaMigrationTable(): string {
+    return "schema_migrations";
+  }
+
+  /** The table recording which environment this database belongs to. */
+  get internalMetadataTable(): string {
+    return "ar_internal_metadata";
+  }
+
+  /**
+   * Records a version as applied without running it. Rails' `create_version`.
+   *
+   * For adopting a database that already has the shape — a copy taken before
+   * the migrations existed, a schema loaded from a dump rather than migrated.
+   * Running the migration against such a database fails on the first
+   * `CREATE TABLE` for a table that is already there.
+   */
+  async createVersion(version: string): Promise<void> {
+    await this.ensureSchemaTable();
+
+    const applied = new Set(await this.appliedVersions());
+
+    // Skipped rather than left to the primary key, so calling this twice is
+    // not an error a caller has to catch to write an idempotent setup script.
+    if (applied.has(version)) return;
+
+    await this.connection.execute(
+      `INSERT INTO ${this.connection.quote(this.schemaMigrationTable)} (${this.connection.quote("version")}) VALUES (${this.connection.placeholder(0)})`,
+      [version],
+    );
+  }
+
+  /** Records several. Rails' `create_versions`. */
+  async createVersions(versions: readonly string[]): Promise<void> {
+    for (const version of versions) await this.createVersion(version);
+  }
+
+  /**
+   * Marks every known migration up to a version as applied. Rails'
+   * `assume_migrated_upto_version`.
+   *
+   * What `db:schema:load` does after loading a dump: the tables are there, so
+   * the migrations that would have created them must not run, but the ones
+   * after it still must. Marking them individually rather than writing one
+   * high-water row, because a rollback needs a row per migration to know what
+   * to undo.
+   */
+  async assumeMigratedUptoVersion(version: string): Promise<string[]> {
+    const upTo = this.migrations
+      .map((migration) => migration.version)
+      .filter((known) => known.localeCompare(version) <= 0)
+      .sort((a, b) => a.localeCompare(b));
+
+    // The version itself even when no migration file matches it, since a dump
+    // records the schema's version and the file may have been squashed away.
+    const wanted = upTo.includes(version) ? upTo : [...upTo, version];
+
+    await this.createVersions(wanted);
+
+    return wanted;
+  }
+
+  /**
+   * Refuses to carry on while anything is outstanding. Rails'
+   * `check_all_pending!`.
+   *
+   * Worth doing at boot, and worth doing loudly. A deploy where the code
+   * shipped and the migration did not produces "no such column" from somewhere
+   * deep in a view — an error that names neither the migration nor the deploy,
+   * and that three people will read before somebody thinks to check. This says
+   * it once, at the front, with the versions in the message.
+   */
+  async checkAllPending(): Promise<void> {
+    const outstanding = await this.pendingMigrationVersions();
+
+    if (outstanding.length > 0) throw new PendingMigrationError(outstanding);
+  }
+
+  /** The same, under Rails' other name for it. */
+  async checkPendingMigrations(): Promise<void> {
+    await this.checkAllPending();
+  }
+
+  /**
+   * Refuses a version this Migrator does not know. Rails'
+   * `check_target_version`.
+   *
+   * `migrate VERSION=20260101` with a typo otherwise migrates to *nothing* and
+   * reports success, having quietly rolled the database back past every
+   * migration — which is the most destructive way a typo can be read.
+   */
+  checkTargetVersion(version: string): void {
+    const known = this.migrations.some((migration) => migration.version === version);
+
+    if (!known) {
+      throw new Error(
+        `Unknown migration version "${version}". Known versions: ${this.migrations.map((one) => one.version).join(", ") || "none"}.`,
+      );
+    }
+  }
+
+  /** The migration a version names, or undefined. Rails' `current_migration`. */
+  currentMigration(version: string): Migration | undefined {
+    return this.migrations.find((migration) => migration.version === version);
+  }
+
   async pending(): Promise<Migration[]> {
     const applied = new Set(await this.appliedVersions());
     return [...this.migrations]
       .sort((a, b) => a.version.localeCompare(b.version))
       .filter((migration) => !applied.has(migration.version));
+  }
+
+  /** Rails' `pending_migrations`, under its own name. */
+  async pendingMigrations(): Promise<Migration[]> {
+    return await this.pending();
+  }
+
+  /** The versions still to run. Rails' `pending_migration_versions`. */
+  async pendingMigrationVersions(): Promise<string[]> {
+    return (await this.pending()).map((migration) => migration.version);
+  }
+
+  /** Whether anything is outstanding. Rails' `needs_migration?`. */
+  async needsMigration(): Promise<boolean> {
+    return (await this.pending()).length > 0;
+  }
+
+  /** Every version the schema table records. Rails' `get_all_versions`. */
+  async getAllVersions(): Promise<string[]> {
+    return await this.appliedVersions();
+  }
+
+  /** The highest applied version, or undefined. Rails' `current_version`. */
+  async currentVersion(): Promise<string | undefined> {
+    return (await this.appliedVersions()).at(-1);
+  }
+
+  /**
+   * The version an `up` would take the schema to. Rails' `target_version`.
+   *
+   * The highest version this Migrator knows about, applied or not — which is
+   * what a deploy compares against to decide whether the database is ready for
+   * the code it is about to run.
+   */
+  targetVersion(): string | undefined {
+    return [...this.migrations].sort((a, b) => a.version.localeCompare(b.version)).at(-1)?.version;
+  }
+
+  /**
+   * Every migration with whether it has run. Rails' `db:migrate:status`.
+   *
+   * Sorted by version, and including applied versions this Migrator has no
+   * file for — those are the interesting ones. A version in the table with
+   * nothing to match it means the branch that added it was reverted while the
+   * database kept the row, and a rollback will not know what to undo.
+   */
+  async migrationsStatus(): Promise<{ status: "up" | "down"; version: string; name: string }[]> {
+    const applied = new Set(await this.appliedVersions());
+    const known = new Map(this.migrations.map((one) => [one.version, one]));
+    const versions = [...new Set([...applied, ...known.keys()])].sort((a, b) => a.localeCompare(b));
+
+    return versions.map((version) => ({
+      status: applied.has(version) ? "up" : "down",
+      version,
+      name: known.get(version)?.name ?? "*** NO FILE ***",
+    }));
+  }
+
+  /**
+   * Throws if anything is outstanding. Rails' `check_pending!`.
+   *
+   * What a development server calls before serving a request. Running against
+   * a schema the code does not expect fails somewhere far from the cause — a
+   * missing column surfaces as a query error in a partial, three layers from
+   * the migration nobody ran.
+   */
+  async checkPending(): Promise<void> {
+    const pending = await this.pending();
+    if (pending.length === 0) return;
+
+    throw new PendingMigrationError(pending.map((one) => one.version));
   }
 
   /** Runs every pending migration in version order. Rails' `db:migrate`. */

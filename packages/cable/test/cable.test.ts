@@ -76,7 +76,10 @@ let socket: FakeSocket;
 function connect(currentUser?: unknown): FakeSocket {
   const ws = new FakeSocket();
   ws.data = {
-    connection: { request: new Request("http://test.host/cable"), currentUser },
+    connection: {
+      request: new Request("http://test.host/cable", { headers: { origin: "http://test.host" } }),
+      currentUser,
+    },
     subscriptions: new Map(),
   };
   return ws;
@@ -160,7 +163,11 @@ describe("connecting", () => {
   });
 
   it("recognizes its mount path", () => {
-    expect(cable.handles(new Request("http://test.host/cable"))).toBe(true);
+    expect(
+      cable.handles(
+        new Request("http://test.host/cable", { headers: { origin: "http://test.host" } }),
+      ),
+    ).toBe(true);
     expect(cable.handles(new Request("http://test.host/posts"))).toBe(false);
   });
 
@@ -170,16 +177,25 @@ describe("connecting", () => {
 
   it("builds socket data for an allowed connection", async () => {
     const authorized = new Cable({
-      authorize: () => ({ request: new Request("http://test.host/cable"), currentUser: "ada" }),
+      authorize: () => ({
+        request: new Request("http://test.host/cable", { headers: { origin: "http://test.host" } }),
+        currentUser: "ada",
+      }),
     });
 
-    const data = await authorized.upgradeData(new Request("http://test.host/cable"));
+    const data = await authorized.upgradeData(
+      new Request("http://test.host/cable", { headers: { origin: "http://test.host" } }),
+    );
     expect(data?.connection.currentUser).toBe("ada");
   });
 
   it("refuses a connection the authorizer rejects", async () => {
     const guarded = new Cable({ authorize: () => null });
-    expect(await guarded.upgradeData(new Request("http://test.host/cable"))).toBeNull();
+    expect(
+      await guarded.upgradeData(
+        new Request("http://test.host/cable", { headers: { origin: "http://test.host" } }),
+      ),
+    ).toBeNull();
   });
 });
 

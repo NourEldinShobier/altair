@@ -71,6 +71,19 @@ export class Notifications {
     return this.#registrations.length;
   }
 
+  /**
+   * The subscribers that would receive this event name. Rails'
+   * `listeners_for`.
+   *
+   * The per-name counterpart to `subscriberCount`, and what a test needs to
+   * show that a scoped subscription really went away: a listener that outlives
+   * its block is invisible from the outside, since the events still arrive —
+   * just to somebody nobody is reading.
+   */
+  listenersFor(name: string): number {
+    return this.#registrations.filter((one) => matches(one.pattern, name)).length;
+  }
+
   /** Drops every subscriber. Used by tests. */
   reset(): void {
     this.#registrations = [];

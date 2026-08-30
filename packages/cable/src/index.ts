@@ -4,3 +4,7 @@ export * from "./server.js";
 export * from "./mount.js";
 export * from "./redis.js";
 export * from "./testing.js";
+export * from "./channel_testing.js";
+export * from "./identity.js";
+export * from "./callbacks.js";
+export * from "./origin.js";

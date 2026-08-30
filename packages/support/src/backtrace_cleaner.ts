@@ -92,6 +92,63 @@ export class BacktraceCleaner {
 
     return cleaned.length > 0 ? cleaned : filtered;
   }
+
+  /**
+   * One frame, cleaned. Rails' `clean_frame`.
+   *
+   * For the places that hold a single frame rather than a whole trace — an
+   * error report naming where it came from, a log line saying which query was
+   * slow. Cleaning the one frame by hand at each of those is how the filters
+   * drift apart.
+   */
+  cleanFrame(frame: string): string | undefined {
+    const filtered = this.#filters.reduce((text, filter) => filter(text), frame);
+
+    return this.silenced(filtered) ? undefined : filtered;
+  }
+
+  /**
+   * Every frame that survives, without the "at" prefix. Rails'
+   * `clean_locations`.
+   *
+   * A location is what a reader wants — `app/models/post.ts:42` — and the
+   * prefix is noise once the frames are already known to be a stack.
+   */
+  cleanLocations(backtrace: string | readonly string[] | undefined): string[] {
+    return this.clean(backtrace).map((line) => locationOf(line));
+  }
+
+  /**
+   * The first frame that is the application's own. Rails' `first_clean_frame`.
+   *
+   * The single most useful line in a stack trace: where the error actually
+   * came from, rather than the twenty frames of framework it travelled
+   * through to get there.
+   */
+  firstCleanFrame(backtrace: string | readonly string[] | undefined): string | undefined {
+    return this.clean(backtrace)[0];
+  }
+
+  /** Its location. Rails' `first_clean_location`. */
+  firstCleanLocation(backtrace: string | readonly string[] | undefined): string | undefined {
+    const frame = this.firstCleanFrame(backtrace);
+
+    return frame === undefined ? undefined : locationOf(frame);
+  }
+}
+
+/**
+ * The file and line out of a stack frame.
+ *
+ * Handles both shapes a runtime produces — `at name (file:1:2)` and the bare
+ * `at file:1:2` — because a frame with no function name is exactly what a
+ * top-level statement produces, and that is often the one being looked for.
+ */
+function locationOf(frame: string): string {
+  const parenthesised = /\(([^()]+)\)\s*$/.exec(frame);
+  if (parenthesised) return parenthesised[1] as string;
+
+  return frame.replace(/^\s*at\s+/, "").trim();
 }
 
 /**

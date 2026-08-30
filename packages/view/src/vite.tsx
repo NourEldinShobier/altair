@@ -121,8 +121,15 @@ export function resolveEntry(manifest: ViteManifest, entry: string): ResolvedEnt
   return { script: chunk.file, styles, preloads };
 }
 
-/** A built file's public URL. */
-export function assetUrl(file: string, base: string = config.base ?? "/"): string {
+/**
+ * A file from the Vite manifest, at the URL it is served from.
+ *
+ * Named for the build rather than plainly, because `assetUrl` next door is
+ * Rails' `asset_url` and means something else: this resolves a hashed build
+ * output against Vite's base, that one makes an application asset path
+ * absolute against a host.
+ */
+export function viteAssetUrl(file: string, base: string = config.base ?? "/"): string {
   if (/^(https?:)?\/\//.test(file)) return file;
   return `${base.replace(/\/$/, "")}/${file.replace(/^\//, "")}`;
 }
@@ -167,12 +174,12 @@ export function ViteAssets(props: { entry: string; config?: ViteConfig }): Node 
   return (
     <>
       {resolved.styles.map((stylesheet) => (
-        <link rel="stylesheet" href={assetUrl(stylesheet, base)} />
+        <link rel="stylesheet" href={viteAssetUrl(stylesheet, base)} />
       ))}
       {resolved.preloads.map((chunk) => (
-        <link rel="modulepreload" href={assetUrl(chunk, base)} />
+        <link rel="modulepreload" href={viteAssetUrl(chunk, base)} />
       ))}
-      <script type="module" src={assetUrl(resolved.script, base)} {...scriptAttributes} />
+      <script type="module" src={viteAssetUrl(resolved.script, base)} {...scriptAttributes} />
     </>
   );
 }
@@ -190,5 +197,5 @@ export function viteAsset(source: string, settings: ViteConfig = config): string
   const chunk = settings.manifest?.[source];
   if (!chunk) throw new Error(`No Vite asset named "${source}".`);
 
-  return assetUrl(chunk.file, settings.base ?? "/");
+  return viteAssetUrl(chunk.file, settings.base ?? "/");
 }

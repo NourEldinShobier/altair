@@ -94,8 +94,15 @@ jobs:
 
       # Not --parallel: these legs share one database, and a test file that
       # drops another file's tables mid-run is a failure nobody can reproduce.
+      # --timeout, because the default 5s is a budget for the test and these
+      # legs spend part of it on the database. A containerised MySQL
+      # intermittently takes several seconds to hand back a connection, and
+      # when that lands the runner reports a hook timeout naming whichever test
+      # came next — which sends you looking at a test that is not slow and not
+      # wrong. The tests themselves run in milliseconds; this only stops a slow
+      # server from being reported as a broken test.
       - name: Run the ORM suite
-        run: bun test packages/orm packages/testing packages/jobs packages/storage
+        run: bun test --timeout 30000 packages/orm packages/testing packages/jobs packages/storage
         env:
           ALTAIR_TEST_DATABASE_URL: ${{ matrix.url }}
 

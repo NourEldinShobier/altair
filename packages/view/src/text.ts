@@ -185,3 +185,40 @@ export function numberToPhone(
 
   return formatted;
 }
+
+/**
+ * Every tag removed, leaving the text. Rails' `strip_tags`.
+ *
+ * For a plain-text email, a search index, a meta description — anywhere markup
+ * would be shown as markup. Entities are decoded afterwards, because a reader
+ * seeing `&amp;` in a subject line is the same bug as seeing `<p>`.
+ *
+ * Not a sanitizer. This removes tags rather than deciding which are safe, so
+ * its output is text and must still be escaped before going back into a page.
+ * `sanitize` is the one that keeps markup and makes it safe.
+ */
+export function stripTags(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .trim();
+}
+
+/**
+ * Links removed, their text kept. Rails' `strip_links`.
+ *
+ * The narrow version of stripTags, and the one a comment field usually wants:
+ * formatting survives, and the spam link becomes the words it was hiding
+ * behind — which is both safer and more informative than deleting it outright,
+ * since a moderator can still see what was posted.
+ */
+export function stripLinks(html: string): string {
+  return html.replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, "$1");
+}

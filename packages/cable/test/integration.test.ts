@@ -29,7 +29,12 @@ const sockets: WebSocket[] = [];
 /** Connects, and resolves once the welcome frame has arrived. */
 async function client(): Promise<{ ws: WebSocket; frames: Record<string, unknown>[] }> {
   const frames: Record<string, unknown>[] = [];
-  const ws = new WebSocket(`ws://localhost:${server.port}/cable`);
+  // An Origin, because the cable refuses a handshake without one. A browser
+  // always sends it; the check that reads it is what stops another site
+  // opening a socket carrying this user's cookies.
+  const ws = new WebSocket(`ws://localhost:${server.port}/cable`, {
+    headers: { origin: `http://localhost:${server.port}` },
+  });
   sockets.push(ws);
 
   ws.addEventListener("message", (event) => {

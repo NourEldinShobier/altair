@@ -17,6 +17,7 @@
  * click can be missed. This posts a real form.
  */
 
+import { preventContentExfiltration } from "./sanitize_vendor.js";
 import { useCsrfToken } from "./context.js";
 import type { Node } from "./render.js";
 
@@ -82,22 +83,27 @@ export function ButtonTo({
   const overridden = method !== "get" && method !== "post";
 
   return (
-    <form action={to} method={method === "get" ? "get" : "post"} {...form}>
-      {overridden ? <input type="hidden" name="_method" value={method} /> : null}
+    <>
+      {/* Same reason as `form.tsx`: a button_to is a form, and a form after an
+          attacker's unclosed one submits to the attacker. */}
+      {preventContentExfiltration()}
+      <form action={to} method={method === "get" ? "get" : "post"} {...form}>
+        {overridden ? <input type="hidden" name="_method" value={method} /> : null}
 
-      {/* Not sent on a GET: the token would land in the query string, and from
-          there into the browser history, the server log and any referrer. */}
-      {token && method !== "get" ? (
-        <input type="hidden" name="authenticity_token" value={token} />
-      ) : null}
+        {/* Not sent on a GET: the token would land in the query string, and from
+            there into the browser history, the server log and any referrer. */}
+        {token && method !== "get" ? (
+          <input type="hidden" name="authenticity_token" value={token} />
+        ) : null}
 
-      {Object.entries(params ?? {}).map(([name, value]) => (
-        <input type="hidden" name={name} value={String(value)} />
-      ))}
+        {Object.entries(params ?? {}).map(([name, value]) => (
+          <input type="hidden" name={name} value={String(value)} />
+        ))}
 
-      <button type="submit" {...rest}>
-        {children}
-      </button>
-    </form>
+        <button type="submit" {...rest}>
+          {children}
+        </button>
+      </form>
+    </>
   );
 }
