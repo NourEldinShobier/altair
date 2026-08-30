@@ -25,3 +25,5 @@ export * from "./capabilities.js";
 export * from "./sanitization.js";
 export * from "./types.js";
 export * from "./fragment.js";
+export * from "./store.js";
+export * from "./serialization.js";
