@@ -286,6 +286,9 @@ const ALL_ROWS: Record<string, string> = {
   mysql: "18446744073709551615",
 };
 
+/** The aggregate functions `calculate` will dispatch to. */
+export type CalculationName = "count" | "sum" | "average" | "minimum" | "maximum";
+
 export class Relation<T> implements PromiseLike<T[]> {
   #source: RelationSource<T>;
   #wheres: WhereClause[] = [];
@@ -937,17 +940,87 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   async last(): Promise<T | null> {
-    const relation = this.#clone();
-    // Rails orders by the primary key when nothing else is specified.
-    if (relation.#orders.length === 0) {
-      relation.#orders.push({ column: this.#source.primaryKey, direction: "desc" });
-    } else {
-      relation.#orders = relation.#orders.map((order) => ({
-        ...order,
-        direction: order.direction === "asc" ? "desc" : "asc",
-      }));
-    }
-    const rows = await relation.limit(1).toArray();
+    const rows = await this.reverseOrder().limit(1).toArray();
+    return rows[0] ?? null;
+  }
+
+  /**
+   * The same rows, the other way up. Rails' `reverse_order`.
+   *
+   * Every ordering flips, not just the first, or a two-column sort would come
+   * back grouped the old way and only reversed within each group.
+   *
+   * With no ordering at all it sorts by the primary key descending, which is
+   * what makes `last` mean anything: a query with no ORDER BY has no last row,
+   * only whichever row the planner happened to hand back last.
+   */
+  reverseOrder(): Relation<T> {
+    const next = this.#clone();
+
+    next.#orders =
+      this.#orders.length === 0
+        ? [{ column: this.#source.primaryKey, direction: "desc" }]
+        : this.#orders.map((order) => ({
+            ...order,
+            direction: order.direction === "asc" ? "desc" : "asc",
+          }));
+
+    return next;
+  }
+
+  /**
+   * The nth record in order, counting from one.
+   *
+   * Rails names the first five and then, for its own amusement, the
+   * forty-second. They are useful in tests and in the console far more than in
+   * application code, which is the honest reason they exist.
+   *
+   * Ordered by the primary key when nothing else is, exactly as `first` is:
+   * without an ORDER BY there is no second row to speak of.
+   */
+  async #nth(position: number): Promise<T | null> {
+    const rows = await this.#firstOrdered()
+      .offset(position - 1)
+      .limit(1)
+      .toArray();
+
+    return rows[0] ?? null;
+  }
+
+  /** Rails' `second`. */
+  async second(): Promise<T | null> {
+    return await this.#nth(2);
+  }
+
+  /** Rails' `third`. */
+  async third(): Promise<T | null> {
+    return await this.#nth(3);
+  }
+
+  /** Rails' `fourth`. */
+  async fourth(): Promise<T | null> {
+    return await this.#nth(4);
+  }
+
+  /** Rails' `fifth`. */
+  async fifth(): Promise<T | null> {
+    return await this.#nth(5);
+  }
+
+  /** Rails' `forty_two`, which is a joke Rails has kept since 2012. */
+  async fortyTwo(): Promise<T | null> {
+    return await this.#nth(42);
+  }
+
+  /** Rails' `second_to_last`. */
+  async secondToLast(): Promise<T | null> {
+    const rows = await this.reverseOrder().offset(1).limit(1).toArray();
+    return rows[0] ?? null;
+  }
+
+  /** Rails' `third_to_last`. */
+  async thirdToLast(): Promise<T | null> {
+    const rows = await this.reverseOrder().offset(2).limit(1).toArray();
     return rows[0] ?? null;
   }
 
@@ -1129,6 +1202,39 @@ export class Relation<T> implements PromiseLike<T[]> {
 
   async maximum(column: string): Promise<number | null> {
     return await this.#aggregate("MAX", column);
+  }
+
+  /**
+   * One aggregate, named at run time. Rails' `calculate`.
+   *
+   * For where the operation is data rather than code — a report whose column
+   * and function both come from a saved definition. Written by hand,
+   * `sum("price")` says more than `calculate("sum", "price")` and should be
+   * preferred; this exists so that a caller holding the operation in a
+   * variable does not have to write the switch itself.
+   *
+   * `count` answers zero for no rows, as counting does. The others answer null,
+   * because the average of nothing is not zero.
+   */
+  async calculate(operation: CalculationName, column?: string): Promise<number | null> {
+    // COUNT(column) counts the rows where it is not null, which is the whole
+    // difference from COUNT(*) and the reason Rails takes a column here.
+    if (operation === "count") {
+      return column ? ((await this.#aggregate("COUNT", column)) ?? 0) : await this.count();
+    }
+
+    if (!column) throw new Error(`calculate("${operation}") needs a column`);
+
+    switch (operation) {
+      case "sum":
+        return await this.sum(column);
+      case "average":
+        return await this.average(column);
+      case "minimum":
+        return await this.minimum(column);
+      case "maximum":
+        return await this.maximum(column);
+    }
   }
 
   /**
