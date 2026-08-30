@@ -75,6 +75,9 @@ import {
   declarationApplies,
   runValidation,
   type ValidationDeclaration,
+  type ComparisonOptions,
+  type LengthOptions,
+  type NumericalityOptions,
   type ValidationOptions,
   type ValidationTarget,
 } from "./validations.js";
@@ -198,6 +201,30 @@ export class RecordInvalid extends Error {
   constructor(readonly errors: ValidationErrors) {
     super(`Validation failed: ${errors.fullMessages().join(", ")}`);
     this.name = "RecordInvalid";
+  }
+}
+
+/**
+ * The same validation declared across several attributes at once.
+ *
+ * Backs the `validates_*_of` family, where Rails' older
+ * `validates_presence_of :title, :body` reads better than three separate
+ * `validates` calls — the rule is fixed and the attributes are the variable,
+ * which for presence is most of the time. Each becomes a `validates`
+ * underneath; nothing new happens here, and the options are merged in so
+ * `{ on: "create" }` works as it does everywhere else.
+ *
+ * A free function rather than a static private method: a static `#name` is
+ * reachable only on the exact class that declares it, and every model here is
+ * a subclass of the one the mixin builds.
+ */
+function eachOf(
+  model: { validates(attribute: string, options: ValidationOptions): void },
+  names: string | readonly string[],
+  options: ValidationOptions,
+): void {
+  for (const name of typeof names === "string" ? [names] : names) {
+    model.validates(name, options);
   }
 }
 
@@ -916,6 +943,130 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // Copy on write, so a subclass adding validations leaves the parent alone.
       if (!Object.hasOwn(this, "validations")) this.validations = [...this.validations];
       this.validations.push({ attribute, options });
+    }
+
+    /** Rails' `validates_presence_of`. */
+    static validatesPresenceOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, presence: true });
+    }
+
+    /** Rails' `validates_absence_of`. */
+    static validatesAbsenceOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, absence: true });
+    }
+
+    /** Rails' `validates_confirmation_of`. */
+    static validatesConfirmationOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, confirmation: true });
+    }
+
+    /** Rails' `validates_acceptance_of`. */
+    static validatesAcceptanceOf(
+      names: string | readonly string[],
+      options: Omit<ValidationOptions, "presence" | "absence" | "confirmation" | "acceptance"> = {},
+    ): void {
+      eachOf(this, names, { ...options, acceptance: true });
+    }
+
+    /** Rails' `validates_length_of`. */
+    static validatesLengthOf(
+      names: string | readonly string[],
+      rule: LengthOptions = {} as LengthOptions,
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, length: rule });
+    }
+
+    /** Rails' `validates_format_of`. */
+    static validatesFormatOf(
+      names: string | readonly string[],
+      rule: { with?: RegExp; without?: RegExp } = {} as { with?: RegExp; without?: RegExp },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, format: rule });
+    }
+
+    /** Rails' `validates_inclusion_of`. */
+    static validatesInclusionOf(
+      names: string | readonly string[],
+      rule: { in: readonly unknown[] } = {} as { in: readonly unknown[] },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, inclusion: rule });
+    }
+
+    /** Rails' `validates_exclusion_of`. */
+    static validatesExclusionOf(
+      names: string | readonly string[],
+      rule: { in: readonly unknown[] } = {} as { in: readonly unknown[] },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, exclusion: rule });
+    }
+
+    /** Rails' `validates_comparison_of`. */
+    static validatesComparisonOf(
+      names: string | readonly string[],
+      rule: ComparisonOptions = {} as ComparisonOptions,
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, comparison: rule });
+    }
+
+    /** Rails' `validates_numericality_of`. */
+    static validatesNumericalityOf(
+      names: string | readonly string[],
+      rule: NumericalityOptions = {} as NumericalityOptions,
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, numericality: rule });
+    }
+
+    /** Rails' `validates_uniqueness_of`. */
+    static validatesUniquenessOf(
+      names: string | readonly string[],
+      rule: { scope?: string | string[] } = {} as { scope?: string | string[] },
+      options: ValidationOptions = {},
+    ): void {
+      eachOf(this, names, { ...options, uniqueness: rule });
+    }
+
+    /**
+     * The validations declared for one attribute. Rails' `validators_on`.
+     *
+     * For a form builder deciding whether to mark a field required, or a
+     * serializer describing its own constraints — anything that would
+     * otherwise be handed a list that then drifts from the model.
+     */
+    static validatorsOn(attribute: string): ValidationOptions[] {
+      return this.validations
+        .filter((one) => one.attribute === attribute)
+        .map((one) => one.options);
+    }
+
+    /** Every validation declared, whatever the attribute. Rails' `validators`. */
+    static validators(): ValidationDeclaration[] {
+      return [...this.validations];
+    }
+
+    /**
+     * Drops every validation on this class. Rails' `clear_validators!`.
+     *
+     * For tests that need a model to save something the rules forbid. Copy on
+     * write like the declarations themselves, so clearing on a subclass leaves
+     * the parent's rules intact rather than silently disarming every sibling.
+     */
+    static clearValidators(): void {
+      this.validations = [];
     }
 
     static {
@@ -4224,6 +4375,48 @@ export interface ModelClass<A extends object> {
 
   validations: ValidationDeclaration[];
   validates(attribute: string, options: ValidationOptions): void;
+  validatesPresenceOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesAbsenceOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesConfirmationOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesAcceptanceOf(names: string | readonly string[], options?: ValidationOptions): void;
+  validatesLengthOf(
+    names: string | readonly string[],
+    rule?: LengthOptions,
+    options?: ValidationOptions,
+  ): void;
+  validatesFormatOf(
+    names: string | readonly string[],
+    rule?: { with?: RegExp; without?: RegExp },
+    options?: ValidationOptions,
+  ): void;
+  validatesInclusionOf(
+    names: string | readonly string[],
+    rule?: { in: readonly unknown[] },
+    options?: ValidationOptions,
+  ): void;
+  validatesExclusionOf(
+    names: string | readonly string[],
+    rule?: { in: readonly unknown[] },
+    options?: ValidationOptions,
+  ): void;
+  validatesComparisonOf(
+    names: string | readonly string[],
+    rule?: ComparisonOptions,
+    options?: ValidationOptions,
+  ): void;
+  validatesNumericalityOf(
+    names: string | readonly string[],
+    rule?: NumericalityOptions,
+    options?: ValidationOptions,
+  ): void;
+  validatesUniquenessOf(
+    names: string | readonly string[],
+    rule?: { scope?: string | string[] },
+    options?: ValidationOptions,
+  ): void;
+  validatorsOn(attribute: string): ValidationOptions[];
+  validators(): ValidationDeclaration[];
+  clearValidators(): void;
   /** Rails' `validates_associated`. */
   validatesAssociated(...names: string[]): void;
   associatedValidations: string[];
