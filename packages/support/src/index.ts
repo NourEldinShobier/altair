@@ -31,3 +31,4 @@ export * from "./cache_local.js";
 export * from "./rescuable.js";
 export * from "./numbers.js";
 export * from "./date_extras.js";
+export * from "./cache_entry.js";
