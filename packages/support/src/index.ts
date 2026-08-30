@@ -45,3 +45,4 @@ export * from "./mutex.js";
 export * from "./http_date.js";
 export * from "./component_logger.js";
 export * from "./sanitize_css.js";
+export * from "./typed_serializer.js";
