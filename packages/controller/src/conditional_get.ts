@@ -23,6 +23,7 @@
  */
 
 import { CryptoHasher } from "bun";
+import { httpdate, notModifiedSince as notModifiedSinceHeader } from "@altair/support";
 
 /** Something with a cache key. Rails' `cache_key_with_version`. */
 export interface Cacheable {
@@ -105,12 +106,11 @@ function asDate(value: Date | string | number | null | undefined): Date | undefi
  * silently disable the whole mechanism.
  */
 export function notModifiedSince(header: string | null, lastModified: Date): boolean {
-  if (!header) return false;
-
-  const since = asDate(header);
-  if (!since) return false;
-
-  return Math.floor(lastModified.getTime() / 1000) <= Math.floor(since.getTime() / 1000);
+  // Through the HTTP date parser rather than `new Date(header)`: two of the
+  // three formats a client may send are obsolete and parsed inconsistently by
+  // the built-in, and an unparseable header silently reads as "no date" — a
+  // cache that never hits for one class of client, reported by nobody.
+  return notModifiedSinceHeader(header, lastModified);
 }
 
 /** Builds the `Cache-Control` value Rails would. */
@@ -144,7 +144,7 @@ export function freshnessFor(request: Request, options: FreshnessOptions): Fresh
   if (etag) headers.etag = etag;
 
   const lastModified = asDate(options.lastModified);
-  if (lastModified) headers["last-modified"] = lastModified.toUTCString();
+  if (lastModified) headers["last-modified"] = httpdate(lastModified);
 
   // Nothing to validate against means nothing can be fresh. Answering 304 for
   // a request that sent no validators would return an empty body for a page
