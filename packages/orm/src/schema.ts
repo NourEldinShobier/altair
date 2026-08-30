@@ -1504,6 +1504,20 @@ export interface Migration {
 }
 
 /** Runs migrations and records which have been applied. */
+/**
+ * Raised when the database is behind the code.
+ *
+ * Names the versions rather than only saying "pending", because the first
+ * question is always which ones — and on a shared database the answer is
+ * usually somebody else's branch rather than your own.
+ */
+export class PendingMigrationError extends Error {
+  constructor(readonly versions: string[]) {
+    super(`Migrations are pending. Run them before continuing: ${versions.join(", ")}`);
+    this.name = "PendingMigrationError";
+  }
+}
+
 export class Migrator {
   readonly schema: SchemaStatements;
 
@@ -1533,6 +1547,77 @@ export class Migrator {
     return [...this.migrations]
       .sort((a, b) => a.version.localeCompare(b.version))
       .filter((migration) => !applied.has(migration.version));
+  }
+
+  /** Rails' `pending_migrations`, under its own name. */
+  async pendingMigrations(): Promise<Migration[]> {
+    return await this.pending();
+  }
+
+  /** The versions still to run. Rails' `pending_migration_versions`. */
+  async pendingMigrationVersions(): Promise<string[]> {
+    return (await this.pending()).map((migration) => migration.version);
+  }
+
+  /** Whether anything is outstanding. Rails' `needs_migration?`. */
+  async needsMigration(): Promise<boolean> {
+    return (await this.pending()).length > 0;
+  }
+
+  /** Every version the schema table records. Rails' `get_all_versions`. */
+  async getAllVersions(): Promise<string[]> {
+    return await this.appliedVersions();
+  }
+
+  /** The highest applied version, or undefined. Rails' `current_version`. */
+  async currentVersion(): Promise<string | undefined> {
+    return (await this.appliedVersions()).at(-1);
+  }
+
+  /**
+   * The version an `up` would take the schema to. Rails' `target_version`.
+   *
+   * The highest version this Migrator knows about, applied or not — which is
+   * what a deploy compares against to decide whether the database is ready for
+   * the code it is about to run.
+   */
+  targetVersion(): string | undefined {
+    return [...this.migrations].sort((a, b) => a.version.localeCompare(b.version)).at(-1)?.version;
+  }
+
+  /**
+   * Every migration with whether it has run. Rails' `db:migrate:status`.
+   *
+   * Sorted by version, and including applied versions this Migrator has no
+   * file for — those are the interesting ones. A version in the table with
+   * nothing to match it means the branch that added it was reverted while the
+   * database kept the row, and a rollback will not know what to undo.
+   */
+  async migrationsStatus(): Promise<{ status: "up" | "down"; version: string; name: string }[]> {
+    const applied = new Set(await this.appliedVersions());
+    const known = new Map(this.migrations.map((one) => [one.version, one]));
+    const versions = [...new Set([...applied, ...known.keys()])].sort((a, b) => a.localeCompare(b));
+
+    return versions.map((version) => ({
+      status: applied.has(version) ? "up" : "down",
+      version,
+      name: known.get(version)?.name ?? "*** NO FILE ***",
+    }));
+  }
+
+  /**
+   * Throws if anything is outstanding. Rails' `check_pending!`.
+   *
+   * What a development server calls before serving a request. Running against
+   * a schema the code does not expect fails somewhere far from the cause — a
+   * missing column surfaces as a query error in a partial, three layers from
+   * the migration nobody ran.
+   */
+  async checkPending(): Promise<void> {
+    const pending = await this.pending();
+    if (pending.length === 0) return;
+
+    throw new PendingMigrationError(pending.map((one) => one.version));
   }
 
   /** Runs every pending migration in version order. Rails' `db:migrate`. */
