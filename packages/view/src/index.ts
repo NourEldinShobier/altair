@@ -26,3 +26,4 @@ export * from "./escaping.js";
 export * from "./asset_urls.js";
 export * from "./dom.js";
 export * from "./date_select.js";
+export * from "./meta_tags.js";
