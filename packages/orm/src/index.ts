@@ -22,3 +22,4 @@ export * from "./token_for.js";
 export * from "./attachables.js";
 export * from "./query_logs.js";
 export * from "./capabilities.js";
+export * from "./sanitization.js";
