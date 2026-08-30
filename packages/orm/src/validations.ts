@@ -19,7 +19,7 @@
  * validation on a persisted row.
  */
 
-import { isBlank, t } from "@altair/support";
+import { isBlank, t, underscore } from "@altair/support";
 import { humanAttributeName } from "./active_model.js";
 
 export interface LengthOptions {
@@ -213,7 +213,14 @@ export const MESSAGES = {
 export { isBlank };
 
 export interface ValidationTarget {
-  errors: { add: (attribute: string, message: string) => void };
+  errors: {
+    add: (
+      attribute: string,
+      message: string,
+      type?: string,
+      options?: Record<string, unknown>,
+    ) => void;
+  };
   [key: string]: unknown;
 }
 
@@ -238,10 +245,14 @@ export async function runValidation(
 ): Promise<void> {
   const { attribute, options } = declaration;
   const value = record[attribute];
-  const fail = (message: string) => record.errors.add(attribute, options.message ?? message);
+  // The type is carried alongside the message so an error can be asked what
+  // kind it is. The message is translated and a caller matching on it breaks
+  // in every locale but one; the type does not move.
+  const fail = (message: string, type = "invalid", detail: Record<string, unknown> = {}) =>
+    record.errors.add(attribute, options.message ?? message, type, detail);
 
-  if (options.presence && isBlank(value)) fail(MESSAGES.blank);
-  if (options.absence && !isBlank(value)) fail(MESSAGES.present);
+  if (options.presence && isBlank(value)) fail(MESSAGES.blank, "blank");
+  if (options.absence && !isBlank(value)) fail(MESSAGES.present, "present");
 
   // Rails skips the remaining rules for a nil or blank value when told to.
   if (options.allowNil && (value === null || value === undefined)) return;
@@ -254,9 +265,12 @@ export async function runValidation(
   if (options.length) {
     const length = String(value ?? "").length;
     const { minimum, maximum, is } = options.length;
-    if (minimum !== undefined && length < minimum) fail(MESSAGES.tooShort(minimum));
-    if (maximum !== undefined && length > maximum) fail(MESSAGES.tooLong(maximum));
-    if (is !== undefined && length !== is) fail(MESSAGES.wrongLength(is));
+    if (minimum !== undefined && length < minimum)
+      fail(MESSAGES.tooShort(minimum), "too_short", { count: minimum });
+    if (maximum !== undefined && length > maximum)
+      fail(MESSAGES.tooLong(maximum), "too_long", { count: maximum });
+    if (is !== undefined && length !== is)
+      fail(MESSAGES.wrongLength(is), "wrong_length", { count: is });
   }
 
   // Nor here. `validates("email", { format: { with: /@/ } })` accepted an
@@ -265,43 +279,53 @@ export async function runValidation(
   // exactly that.
   if (options.format) {
     const text = String(value ?? "");
-    if (options.format.with && !options.format.with.test(text)) fail(MESSAGES.invalid);
-    if (options.format.without && options.format.without.test(text)) fail(MESSAGES.invalid);
+    if (options.format.with && !options.format.with.test(text)) fail(MESSAGES.invalid, "invalid");
+    if (options.format.without && options.format.without.test(text))
+      fail(MESSAGES.invalid, "invalid");
   }
 
-  if (options.inclusion && !options.inclusion.in.includes(value)) fail(MESSAGES.inclusion);
-  if (options.exclusion && options.exclusion.in.includes(value)) fail(MESSAGES.exclusion);
+  if (options.inclusion && !options.inclusion.in.includes(value))
+    fail(MESSAGES.inclusion, "inclusion");
+  if (options.exclusion && options.exclusion.in.includes(value))
+    fail(MESSAGES.exclusion, "exclusion");
 
   if (options.numericality && !isBlank(value)) {
     const numeric = Number(value);
     if (Number.isNaN(numeric)) {
-      fail(MESSAGES.notANumber);
+      fail(MESSAGES.notANumber, "not_a_number");
     } else {
       const rules = options.numericality === true ? {} : options.numericality;
-      if (rules.onlyInteger && !Number.isInteger(numeric)) fail(MESSAGES.notAnInteger);
+      if (rules.onlyInteger && !Number.isInteger(numeric))
+        fail(MESSAGES.notAnInteger, "not_an_integer");
       if (rules.greaterThan !== undefined && numeric <= rules.greaterThan) {
-        fail(MESSAGES.greaterThan(rules.greaterThan));
+        fail(MESSAGES.greaterThan(rules.greaterThan), "greater_than", { count: rules.greaterThan });
       }
       if (rules.greaterThanOrEqualTo !== undefined && numeric < rules.greaterThanOrEqualTo) {
-        fail(MESSAGES.greaterThanOrEqualTo(rules.greaterThanOrEqualTo));
+        fail(
+          MESSAGES.greaterThanOrEqualTo(rules.greaterThanOrEqualTo),
+          "greater_than_or_equal_to",
+          { count: rules.greaterThanOrEqualTo },
+        );
       }
       if (rules.lessThan !== undefined && numeric >= rules.lessThan) {
-        fail(MESSAGES.lessThan(rules.lessThan));
+        fail(MESSAGES.lessThan(rules.lessThan), "less_than", { count: rules.lessThan });
       }
       if (rules.lessThanOrEqualTo !== undefined && numeric > rules.lessThanOrEqualTo) {
-        fail(MESSAGES.lessThanOrEqualTo(rules.lessThanOrEqualTo));
+        fail(MESSAGES.lessThanOrEqualTo(rules.lessThanOrEqualTo), "less_than_or_equal_to", {
+          count: rules.lessThanOrEqualTo,
+        });
       }
       if (rules.equalTo !== undefined && numeric !== rules.equalTo) {
-        fail(MESSAGES.equalTo(rules.equalTo));
+        fail(MESSAGES.equalTo(rules.equalTo), "equal_to", { count: rules.equalTo });
       }
       if (rules.otherThan !== undefined && numeric === rules.otherThan) {
-        fail(MESSAGES.otherThan(rules.otherThan));
+        fail(MESSAGES.otherThan(rules.otherThan), "other_than", { count: rules.otherThan });
       }
       // 2.5 is neither odd nor even and fails whichever was asked for, which
       // the remainder already says: 2.5 % 2 is 0.5, and that is neither 0 nor
       // 1. An `Number.isInteger` guard beside this changed no answer.
-      if (rules.odd && Math.abs(numeric % 2) !== 1) fail(MESSAGES.odd);
-      if (rules.even && numeric % 2 !== 0) fail(MESSAGES.even);
+      if (rules.odd && Math.abs(numeric % 2) !== 1) fail(MESSAGES.odd, "odd");
+      if (rules.even && numeric % 2 !== 0) fail(MESSAGES.even, "even");
     }
   }
 
@@ -319,7 +343,9 @@ export async function runValidation(
         if (against === null || against === undefined) continue;
 
         const ok = COMPARISONS[rule as keyof ComparisonOptions]?.(value, against);
-        if (ok === false) fail(MESSAGES[rule as keyof ComparisonOptions](against as number));
+        if (ok === false) {
+          fail(MESSAGES[rule as keyof ComparisonOptions](against as number), underscore(rule));
+        }
       }
     }
   }
@@ -327,12 +353,12 @@ export async function runValidation(
   if (options.confirmation) {
     const confirmation = record[`${attribute}_confirmation`];
     if (confirmation !== undefined && confirmation !== value) {
-      fail(MESSAGES.confirmation(humanAttributeName(attribute)));
+      fail(MESSAGES.confirmation(humanAttributeName(attribute)), "confirmation");
     }
   }
 
   if (options.acceptance && value !== true && value !== 1 && value !== "1") {
-    fail(MESSAGES.accepted);
+    fail(MESSAGES.accepted, "accepted");
   }
 
   if (options.uniqueness && probe && !isBlank(value)) {
@@ -346,6 +372,6 @@ export async function runValidation(
     // A persisted record must not collide with itself, so it is excluded by id.
     const taken = await probe.exists(conditions, probe.isPersisted ? probe.id : undefined);
 
-    if (taken) fail(MESSAGES.taken);
+    if (taken) fail(MESSAGES.taken, "taken");
   }
 }

@@ -229,22 +229,157 @@ function eachOf(
   }
 }
 
+/**
+ * One thing that went wrong, as an object rather than a string.
+ *
+ * Rails made this change for a reason worth keeping: a string cannot be asked
+ * what *kind* of error it is. `"is too long (maximum is 25 characters)"` is
+ * translated, so a caller matching on it breaks in every locale but one, and a
+ * form that wants to style length errors differently from blank ones has
+ * nothing to branch on. The type survives translation; the message does not.
+ */
+export class ValidationError {
+  constructor(
+    readonly attribute: string,
+    readonly message: string,
+    /** Rails' error `type` — `blank`, `too_long`, `taken`. */
+    readonly type: string = "invalid",
+    /** What the rule was given, so a message can be regenerated or inspected. */
+    readonly options: Record<string, unknown> = {},
+  ) {}
+
+  /**
+   * Whether this error is the one being asked about.
+   *
+   * A missing type matches any type, and each named option must match, so
+   * `match("title", "too_long", { count: 25 })` is as narrow as the caller
+   * makes it and no narrower.
+   */
+  match(attribute: string, type?: string, options: Record<string, unknown> = {}): boolean {
+    if (this.attribute !== attribute) return false;
+    if (type !== undefined && this.type !== type) return false;
+
+    return Object.entries(options).every(([key, value]) => this.options[key] === value);
+  }
+
+  /** Rails' `details`: the type and whatever the rule was given. */
+  get details(): Record<string, unknown> {
+    return { error: this.type, ...this.options };
+  }
+}
+
 /** Rails' `errors` object, in the shape apps actually use. */
 export class ValidationErrors {
-  #errors = new Map<string, string[]>();
+  #list: ValidationError[] = [];
 
-  add(attribute: string, message: string): void {
-    const existing = this.#errors.get(attribute) ?? [];
-    existing.push(message);
-    this.#errors.set(attribute, existing);
+  /**
+   * Records an error.
+   *
+   * The type and options are optional so that every existing
+   * `add(attribute, message)` call keeps working and reads the same; passing a
+   * type is what makes the error inspectable later.
+   */
+  add(
+    attribute: string,
+    message: string,
+    type = "invalid",
+    options: Record<string, unknown> = {},
+  ): void {
+    this.#list.push(new ValidationError(attribute, message, type, options));
+  }
+
+  /** Every error object, in the order they were added. */
+  get objects(): ValidationError[] {
+    return [...this.#list];
+  }
+
+  /**
+   * The errors matching an attribute, and optionally a type and options.
+   * Rails' `where`.
+   */
+  where(
+    attribute: string,
+    type?: string,
+    options: Record<string, unknown> = {},
+  ): ValidationError[] {
+    return this.#list.filter((one) => one.match(attribute, type, options));
+  }
+
+  /** The error objects for one attribute. Rails' `objects_for`. */
+  objectsFor(attribute: string): ValidationError[] {
+    return this.where(attribute);
+  }
+
+  /** The messages for one attribute, optionally narrowed by type. Rails' `messages_for`. */
+  messagesFor(attribute: string, type?: string): string[] {
+    return this.where(attribute, type).map((one) => one.message);
+  }
+
+  /** Every error object, grouped by attribute. Rails' `group_by_attribute`. */
+  groupByAttribute(): Record<string, ValidationError[]> {
+    const grouped: Record<string, ValidationError[]> = {};
+
+    for (const error of this.#list) {
+      (grouped[error.attribute] ??= []).push(error);
+    }
+
+    return grouped;
+  }
+
+  /**
+   * What went wrong, by attribute, in machine-readable form. Rails' `details`.
+   *
+   * This is what an API renders instead of prose: a client deciding which field
+   * to highlight, or whether to offer a "reset password" link because the error
+   * was `taken` rather than `invalid`, cannot read a translated sentence.
+   */
+  details(): Record<string, Record<string, unknown>[]> {
+    return Object.fromEntries(
+      Object.entries(this.groupByAttribute()).map(([attribute, errors]) => [
+        attribute,
+        errors.map((one) => one.details),
+      ]),
+    );
+  }
+
+  /**
+   * Whether an error of this kind is present. Rails' `of_kind?`.
+   *
+   * Takes a type or a whole message, because both are things a caller
+   * legitimately has in hand — but the type is the one that survives a
+   * translation.
+   */
+  ofKind(attribute: string, type = "invalid"): boolean {
+    if (this.messagesFor(attribute).includes(type)) return true;
+
+    return this.where(attribute, type).length > 0;
+  }
+
+  /** Takes another object's errors as its own. Rails' `import`. */
+  importErrors(other: ValidationErrors, prefix?: string): void {
+    for (const error of other.objects) {
+      this.#list.push(
+        new ValidationError(
+          prefix ? `${prefix}.${error.attribute}` : error.attribute,
+          error.message,
+          error.type,
+          error.options,
+        ),
+      );
+    }
+  }
+
+  /** Replaces these errors with another object's. Rails' `copy!`. */
+  copy(other: ValidationErrors): void {
+    this.#list = other.objects;
   }
 
   get isEmpty(): boolean {
-    return this.#errors.size === 0;
+    return this.#list.length === 0;
   }
 
   get count(): number {
-    return [...this.#errors.values()].reduce((total, messages) => total + messages.length, 0);
+    return this.#list.length;
   }
 
   /** Rails calls it `size`. Both are here, because both get typed. */
@@ -253,21 +388,26 @@ export class ValidationErrors {
   }
 
   on(attribute: string): string[] {
-    return this.#errors.get(attribute) ?? [];
+    return this.messagesFor(attribute);
   }
 
   get attributes(): string[] {
-    return [...this.#errors.keys()];
+    return [...new Set(this.#list.map((one) => one.attribute))];
   }
 
   /** Every message, by attribute. Rails' `messages`. */
   get messages(): Record<string, string[]> {
-    return Object.fromEntries(this.#errors);
+    return Object.fromEntries(
+      Object.entries(this.groupByAttribute()).map(([attribute, errors]) => [
+        attribute,
+        errors.map((one) => one.message),
+      ]),
+    );
   }
 
   /** Whether anything went wrong with this attribute. Rails' `include?`. */
   has(attribute: string): boolean {
-    return (this.#errors.get(attribute)?.length ?? 0) > 0;
+    return this.#list.some((one) => one.attribute === attribute);
   }
 
   /** Whether this exact message was added. Rails' `added?`. */
@@ -278,7 +418,7 @@ export class ValidationErrors {
   /** Drops an attribute's errors and returns them. Rails' `delete`. */
   delete(attribute: string): string[] {
     const messages = this.on(attribute);
-    this.#errors.delete(attribute);
+    this.#list = this.#list.filter((one) => one.attribute !== attribute);
     return messages;
   }
 
@@ -302,9 +442,7 @@ export class ValidationErrors {
   }
 
   fullMessages(): string[] {
-    return [...this.#errors.entries()].flatMap(([attribute, messages]) =>
-      messages.map((message) => this.fullMessage(attribute, message)),
-    );
+    return this.#list.map((one) => this.fullMessage(one.attribute, one.message));
   }
 
   /** The full messages for one attribute. Rails' `full_messages_for`. */
@@ -314,9 +452,7 @@ export class ValidationErrors {
 
   /** So `for (const { attribute, message } of errors)` works. */
   *[Symbol.iterator](): Iterator<{ attribute: string; message: string }> {
-    for (const [attribute, messages] of this.#errors) {
-      for (const message of messages) yield { attribute, message };
-    }
+    for (const { attribute, message } of this.#list) yield { attribute, message };
   }
 
   toJSON(): Record<string, string[]> {
@@ -324,7 +460,7 @@ export class ValidationErrors {
   }
 
   clear(): void {
-    this.#errors.clear();
+    this.#list = [];
   }
 }
 
