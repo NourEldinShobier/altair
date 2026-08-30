@@ -24,3 +24,4 @@ export * from "./request_details.js";
 export * from "./http_status.js";
 export * from "./session_store.js";
 export * from "./multiparameter.js";
+export * from "./digest_authentication.js";
