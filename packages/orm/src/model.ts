@@ -518,6 +518,17 @@ export interface BaseModelInstance<A> {
   readonly isPersisted: boolean;
   readonly errors: ValidationErrors;
   attributes(): A;
+  /** Rails' `association_cached?`: whether reading it would cost a query. */
+  associationCached(name: string): boolean;
+  /** Rails' `proxy_association`: the definition behind an accessor. */
+  proxyAssociation(name: string): AssociationDefinition | undefined;
+  /** Rails' `foreign_key_present?`: whether there is anything to load. */
+  foreignKeyPresent(name: string): boolean;
+  /** Rails' `records_for`: what an association already holds. */
+  recordsFor(name: string): unknown;
+  /** Rails' `load_target`: loads it now and remembers it. */
+  loadTarget(name: string): Promise<unknown>;
+
   /** Rails' `read_attribute`: a column's value, past any accessor. */
   readAttribute(name: string): unknown;
   /** Rails' `write_attribute`: sets it, past any accessor. */
@@ -3505,6 +3516,81 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       }
 
       return shown;
+    }
+
+    /**
+     * Whether an association is already in hand. Rails' `association_cached?`.
+     *
+     * What a view should ask before reading one. `post.author()` on a record
+     * that was preloaded costs nothing and on one that was not costs a query —
+     * and the two read identically at the call site, which is precisely why
+     * N+1s survive code review. This is the question that tells them apart.
+     */
+    associationCached(name: string): boolean {
+      return (this as unknown as Record<string, unknown>)[cacheKey(name)] !== undefined;
+    }
+
+    /**
+     * The association's definition. Rails' `proxy_association`.
+     *
+     * For code that has to work across associations it was not written for —
+     * a serializer, an audit log, a form builder — and needs to know whether
+     * this one is to-many, what it points at, and which key joins it.
+     */
+    proxyAssociation(name: string): AssociationDefinition | undefined {
+      return (this.constructor as typeof BaseModel).associations[name];
+    }
+
+    /**
+     * Whether the key this association reads through is set. Rails'
+     * `foreign_key_present?`.
+     *
+     * A `belongsTo` whose foreign key is null has nothing to load, and asking
+     * the database is a query guaranteed to return nothing. Checked before a
+     * preload rather than after, since a page of a hundred records with
+     * ninety nulls should issue one query for the ten, not for all hundred.
+     */
+    foreignKeyPresent(name: string): boolean {
+      const definition = this.proxyAssociation(name);
+
+      if (definition === undefined) return false;
+
+      // Only meaningful in the direction that holds the key. A hasMany reads
+      // through the *other* table's column, so this record holding nothing
+      // says nothing about whether there is anything to find.
+      if (definition.kind !== "belongsTo") return true;
+
+      const key = definition.foreignKey ?? `${definition.name}_id`;
+
+      return (this as unknown as Record<string, unknown>)[key] != null;
+    }
+
+    /** The records an association already holds, or undefined. Rails' `records_for`. */
+    recordsFor(name: string): unknown {
+      return (this as unknown as Record<string, unknown>)[cacheKey(name)];
+    }
+
+    /**
+     * Loads an association and remembers it. Rails' `load_target`.
+     *
+     * The explicit form of what reading one does, for a caller that wants the
+     * query to happen now — priming a record before handing it to a template
+     * that must not issue queries of its own.
+     */
+    async loadTarget(name: string): Promise<unknown> {
+      const held = this.recordsFor(name);
+
+      if (held !== undefined) return held;
+
+      const accessor = (this as unknown as Record<string, unknown>)[name];
+
+      if (typeof accessor !== "function") return undefined;
+
+      const loaded: unknown = await (accessor as () => unknown).call(this);
+
+      (this as unknown as Record<string, unknown>)[cacheKey(name)] = loaded;
+
+      return loaded;
     }
 
     attributes(): A {
