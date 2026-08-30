@@ -1542,6 +1542,113 @@ export class Migrator {
     return rows.map((row) => String(row.version));
   }
 
+  /** The table recording what has run. Rails' `schema_migration`. */
+  get schemaMigrationTable(): string {
+    return "schema_migrations";
+  }
+
+  /** The table recording which environment this database belongs to. */
+  get internalMetadataTable(): string {
+    return "ar_internal_metadata";
+  }
+
+  /**
+   * Records a version as applied without running it. Rails' `create_version`.
+   *
+   * For adopting a database that already has the shape — a copy taken before
+   * the migrations existed, a schema loaded from a dump rather than migrated.
+   * Running the migration against such a database fails on the first
+   * `CREATE TABLE` for a table that is already there.
+   */
+  async createVersion(version: string): Promise<void> {
+    await this.ensureSchemaTable();
+
+    const applied = new Set(await this.appliedVersions());
+
+    // Skipped rather than left to the primary key, so calling this twice is
+    // not an error a caller has to catch to write an idempotent setup script.
+    if (applied.has(version)) return;
+
+    await this.connection.execute(
+      `INSERT INTO ${this.connection.quote(this.schemaMigrationTable)} (${this.connection.quote("version")}) VALUES (${this.connection.placeholder(0)})`,
+      [version],
+    );
+  }
+
+  /** Records several. Rails' `create_versions`. */
+  async createVersions(versions: readonly string[]): Promise<void> {
+    for (const version of versions) await this.createVersion(version);
+  }
+
+  /**
+   * Marks every known migration up to a version as applied. Rails'
+   * `assume_migrated_upto_version`.
+   *
+   * What `db:schema:load` does after loading a dump: the tables are there, so
+   * the migrations that would have created them must not run, but the ones
+   * after it still must. Marking them individually rather than writing one
+   * high-water row, because a rollback needs a row per migration to know what
+   * to undo.
+   */
+  async assumeMigratedUptoVersion(version: string): Promise<string[]> {
+    const upTo = this.migrations
+      .map((migration) => migration.version)
+      .filter((known) => known.localeCompare(version) <= 0)
+      .sort((a, b) => a.localeCompare(b));
+
+    // The version itself even when no migration file matches it, since a dump
+    // records the schema's version and the file may have been squashed away.
+    const wanted = upTo.includes(version) ? upTo : [...upTo, version];
+
+    await this.createVersions(wanted);
+
+    return wanted;
+  }
+
+  /**
+   * Refuses to carry on while anything is outstanding. Rails'
+   * `check_all_pending!`.
+   *
+   * Worth doing at boot, and worth doing loudly. A deploy where the code
+   * shipped and the migration did not produces "no such column" from somewhere
+   * deep in a view — an error that names neither the migration nor the deploy,
+   * and that three people will read before somebody thinks to check. This says
+   * it once, at the front, with the versions in the message.
+   */
+  async checkAllPending(): Promise<void> {
+    const outstanding = await this.pendingMigrationVersions();
+
+    if (outstanding.length > 0) throw new PendingMigrationError(outstanding);
+  }
+
+  /** The same, under Rails' other name for it. */
+  async checkPendingMigrations(): Promise<void> {
+    await this.checkAllPending();
+  }
+
+  /**
+   * Refuses a version this Migrator does not know. Rails'
+   * `check_target_version`.
+   *
+   * `migrate VERSION=20260101` with a typo otherwise migrates to *nothing* and
+   * reports success, having quietly rolled the database back past every
+   * migration — which is the most destructive way a typo can be read.
+   */
+  checkTargetVersion(version: string): void {
+    const known = this.migrations.some((migration) => migration.version === version);
+
+    if (!known) {
+      throw new Error(
+        `Unknown migration version "${version}". Known versions: ${this.migrations.map((one) => one.version).join(", ") || "none"}.`,
+      );
+    }
+  }
+
+  /** The migration a version names, or undefined. Rails' `current_migration`. */
+  currentMigration(version: string): Migration | undefined {
+    return this.migrations.find((migration) => migration.version === version);
+  }
+
   async pending(): Promise<Migration[]> {
     const applied = new Set(await this.appliedVersions());
     return [...this.migrations]
