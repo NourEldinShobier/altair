@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
+import { ADAPTERS, maxIdentifierLength } from "./capabilities.js";
 import { columnTypeFor } from "./dump.js";
 import { columnSchemas, indexSchemas, type ColumnSchema } from "./introspect.js";
 
@@ -297,10 +298,14 @@ export class TableDefinition {
  * The shortest identifier limit of the three adapters.
  *
  * MySQL stops at 64 characters, PostgreSQL truncates at 63 without saying so,
- * and SQLite has no limit. Generating a name none of them will refuse means
- * living within the smallest.
+ * and SQLite has no practical limit. Generating a name none of them will
+ * refuse means living within the smallest, so this is derived from the
+ * per-adapter numbers rather than written out again beside them — one place to
+ * correct when a server moves its limit.
  */
-export const MAX_IDENTIFIER_LENGTH = 63;
+export const MAX_IDENTIFIER_LENGTH = Math.min(
+  ...ADAPTERS.map((adapter) => maxIdentifierLength(adapter)),
+);
 
 /**
  * Rails' name for an index, shortened when it has to be.
