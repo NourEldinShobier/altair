@@ -44,3 +44,4 @@ export * from "./acts_like.js";
 export * from "./mutex.js";
 export * from "./http_date.js";
 export * from "./component_logger.js";
+export * from "./sanitize_css.js";
