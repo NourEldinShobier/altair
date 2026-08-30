@@ -4186,7 +4186,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // error, it simply does not write that column.
       for (const column of klass.readonlyAttributes) delete changes[column];
 
-      if ((await klass.columnNames()).includes("updated_at")) changes.updated_at = new Date();
+      if (klass.recordTimestamps && (await klass.columnNames()).includes("updated_at")) {
+        changes.updated_at = new Date();
+      }
 
       // A save that writes nothing still happened, and what it changed is
       // nothing. Left alone, the record would keep answering with whatever the
