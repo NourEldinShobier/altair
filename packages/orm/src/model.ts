@@ -20,7 +20,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { secureToken } from "@altair/support";
+import { didYouMean, secureToken } from "@altair/support";
 import { errors } from "@altair/support";
 import {
   camelize,
@@ -2258,7 +2258,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = this.connection;
       const columns = await this.columnNames();
 
-      if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+      if (!columns.includes(column)) {
+        throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+      }
 
       const quoted = connection.quote(column);
 
@@ -2293,7 +2295,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const columns = await this.columnNames();
 
       for (const [column] of entries) {
-        if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+        if (!columns.includes(column)) {
+          throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+        }
       }
 
       const assignments = entries.map(([column], index) => {
@@ -3694,7 +3698,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         // Checked rather than escaped, as everywhere else a column name
         // reaches SQL: an unknown name is a mistake, and a crafted one is
         // worse.
-        if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+        if (!columns.includes(column)) {
+          throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+        }
       }
 
       const assignments = entries
@@ -3744,7 +3750,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const connection = klass.connection;
       const columns = await klass.columnNames();
 
-      if (!columns.includes(column)) throw new Error(`Invalid column name: ${column}`);
+      if (!columns.includes(column)) {
+        throw new Error(`Invalid column name: ${column}.${didYouMean(column, columns)}`);
+      }
 
       const quoted = connection.quote(column);
 
