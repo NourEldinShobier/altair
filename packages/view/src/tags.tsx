@@ -39,6 +39,64 @@ export function voidTag(name: string, attributes: TagAttributes = {}): Node {
   return new RawHtml(`<${name}${tagOptions(attributes)}>`);
 }
 
+/**
+ * An element with nothing inside it, closed. Rails' `tag` in XHTML mode.
+ *
+ * For SVG and for anything else parsed as XML, where `<circle>` without a
+ * closing slash is an unclosed element rather than an empty one — and an
+ * unclosed element swallows everything after it into itself, so one missing
+ * slash silently empties the rest of the drawing.
+ */
+export function selfClosingTag(name: string, attributes: TagAttributes = {}): Node {
+  return new RawHtml(`<${name}${tagOptions(attributes)} />`);
+}
+
+/**
+ * The markup for an element, as a string. Rails' `content_tag_string`.
+ *
+ * Exposed because a caller sometimes needs the string rather than a node — to
+ * put it in an attribute, to measure it, to hand it to something that is not
+ * the renderer — and the alternative is that caller doing its own escaping,
+ * which is where escaping stops happening.
+ */
+export function contentTagString(
+  name: string,
+  content: string,
+  attributes: TagAttributes = {},
+  escapeContent = true,
+): string {
+  const inner = escapeContent ? escape(content) : content;
+
+  return `<${name}${tagOptions(attributes)}>${inner}</${name}>`;
+}
+
+/**
+ * Makes a helper for one element. Rails' `define_element`.
+ *
+ *     const Widget = defineElement("my-widget")
+ *     Widget("Hello", { theme: "dark" })
+ *
+ * The point is that the element's name is fixed at definition rather than
+ * passed at every call: a custom element or an SVG shape used in twenty places
+ * is twenty chances to mistype the tag, and a mistyped tag renders as nothing
+ * rather than as an error.
+ */
+export function defineElement(
+  name: string,
+): (content?: string, attributes?: TagAttributes) => Node {
+  return (content = "", attributes = {}) => contentTag(name, content, attributes);
+}
+
+/** The same for an element that has no content. Rails' `define_void_element`. */
+export function defineVoidElement(name: string): (attributes?: TagAttributes) => Node {
+  return (attributes = {}) => voidTag(name, attributes);
+}
+
+/** The same for one that closes itself. Rails' `define_self_closing_element`. */
+export function defineSelfClosingElement(name: string): (attributes?: TagAttributes) => Node {
+  return (attributes = {}) => selfClosingTag(name, attributes);
+}
+
 /** The id Rails gives a field, derived from its name. */
 function idFor(name: string): string {
   return name
