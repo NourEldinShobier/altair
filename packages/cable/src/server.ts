@@ -12,6 +12,7 @@
  * sending every client another client's identifier.
  */
 
+import { UnauthorizedConnection, allowRequestOrigin, type OriginPolicy } from "./origin.js";
 import type { Broadcaster, CableSocket, ChannelContext, ConnectionContext } from "./channel.js";
 import { Channel, topicFor } from "./channel.js";
 import {
@@ -47,6 +48,16 @@ export interface CableOptions {
   /** Seconds between pings. Rails uses 3; the client watches for gaps. */
   pingInterval?: number;
   onError?: (error: unknown, context: { command?: string; identifier?: string }) => void;
+  /**
+   * Who may open a socket. Rails' `allowed_request_origins` and friends.
+   *
+   * Defaults to the request's own host and nothing else, which is what makes
+   * cross-site WebSocket hijacking not work: a WebSocket handshake carries the
+   * user's cookies and is not subject to the same-origin policy, so a page on
+   * any other site could otherwise connect as the user and read everything
+   * they are subscribed to.
+   */
+  origins?: OriginPolicy;
 }
 
 /** Publishes through a Bun server. The default when everything is one process. */
@@ -211,11 +222,35 @@ export class Cable {
     return new URL(request.url).pathname === this.path;
   }
 
-  /** Builds the per-socket data an upgrade should carry, or null to refuse. */
+  /** Whether this handshake may proceed at all. Rails' `allow_request_origin?`. */
+  allowRequestOrigin(request: Request): boolean {
+    return allowRequestOrigin(request, this.options.origins ?? {});
+  }
+
+  /**
+   * Builds the per-socket data an upgrade should carry, or null to refuse.
+   *
+   * The origin is checked before `authorize` runs, so a page from somewhere
+   * else never reaches application code — and so an `authorize` that reads a
+   * session cookie cannot accidentally hand a connection to a site that only
+   * had the cookie because the browser attached it.
+   */
   async upgradeData(request: Request): Promise<SocketData | null> {
-    const connection = this.options.authorize
-      ? await this.options.authorize(request)
-      : ({ request } as ConnectionContext);
+    if (!this.allowRequestOrigin(request)) return null;
+
+    let connection: ConnectionContext | null;
+
+    try {
+      connection = this.options.authorize
+        ? await this.options.authorize(request)
+        : ({ request } as ConnectionContext);
+    } catch (error) {
+      // A rejection is an answer, not a failure: it means authorize identified
+      // somebody and decided against them, which is exactly the null case.
+      if (error instanceof UnauthorizedConnection) return null;
+
+      throw error;
+    }
 
     if (!connection) return null;
     return { connection, subscriptions: new Map() };

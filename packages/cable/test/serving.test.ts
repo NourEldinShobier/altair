@@ -39,7 +39,12 @@ class Client {
   }
 
   static async open(url: string): Promise<Client> {
-    const socket = new WebSocket(url);
+    // An Origin, because the cable refuses a handshake without one — a browser
+    // always sends it, and the check that reads it is what stops another site
+    // opening a socket with this user's cookies.
+    const socket = new WebSocket(url, {
+      headers: { origin: new URL(url).origin.replace("ws", "http") },
+    });
 
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("open", () => resolve());
