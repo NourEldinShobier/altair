@@ -9,7 +9,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Model, SchemaStatements, setConnection, StrictLoadingViolation } from "../src/index.js";
+import { errors } from "@altair/support";
+import {
+  configureStrictLoading,
+  Model,
+  SchemaStatements,
+  setConnection,
+  StrictLoadingViolation,
+} from "../src/index.js";
 import type { Connection } from "../src/connection.js";
 import { isSqlite, testConnection } from "./support/database.js";
 
@@ -187,5 +194,67 @@ describe("a record that was built rather than loaded", () => {
     Post.strictLoadingByDefault = true;
 
     expect(new Post({ title: "New" }).isStrictLoading).toBe(false);
+  });
+});
+
+/**
+ * Turning strict loading on across an application that already has N+1s breaks
+ * every page at once, so there is no way in from a standing start. Rails solves
+ * that with `action_on_strict_loading_violation = :log`, and so does this: the
+ * violations are reported and the association still loads, which turns "we
+ * cannot switch this on" into a list of things to fix.
+ */
+describe("logging a violation instead of raising", () => {
+  afterEach(() => {
+    configureStrictLoading({ onViolation: "raise" });
+    errors.reset();
+  });
+
+  it("lets the association load", async () => {
+    configureStrictLoading({ onViolation: "log" });
+
+    const post = (await Post.all().first())!.strictLoading();
+
+    expect((await post.author())?.name).toBe("Martin");
+  });
+
+  it("still reports it, so it is a list rather than a silence", async () => {
+    configureStrictLoading({ onViolation: "log" });
+
+    const seen: unknown[] = [];
+    errors.subscribe((error) => void seen.push(error));
+
+    const post = (await Post.all().first())!.strictLoading();
+    await post.author();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeInstanceOf(StrictLoadingViolation);
+  });
+
+  it("says which model and association, so the list is actionable", async () => {
+    configureStrictLoading({ onViolation: "log" });
+
+    const contexts: Record<string, unknown>[] = [];
+    errors.subscribe((_error, context) => contexts.push(context.context ?? {}));
+
+    const post = (await Post.all().first())!.strictLoading();
+    await post.author();
+
+    expect(contexts[0]).toMatchObject({ model: "Post", association: "author" });
+  });
+
+  it("raises again once switched back", async () => {
+    configureStrictLoading({ onViolation: "log" });
+    configureStrictLoading({ onViolation: "raise" });
+
+    const post = (await Post.all().first())!.strictLoading();
+
+    expect(() => post.author()).toThrow(StrictLoadingViolation);
+  });
+
+  it("raises by default, so nobody gets logging by accident", async () => {
+    const post = (await Post.all().first())!.strictLoading();
+
+    expect(() => post.author()).toThrow(StrictLoadingViolation);
   });
 });

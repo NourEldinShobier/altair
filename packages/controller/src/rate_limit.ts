@@ -57,6 +57,21 @@ export interface RateLimitOptions {
    * a cache outage makes the limited endpoint unavailable rather than
    * unlimited — so `allow` is there for an application that would rather stay
    * up, on a limit where that is the better trade.
+   *
+   * The two ecosystems disagree, which is why this is an option rather than a
+   * position. Rails fails open: `rate_limiting` reads
+   * `count = store.increment(...)` and then `if count && count > to`, and its
+   * Redis store returns nil rather than raising, so an unreachable cache means
+   * the limit simply never fires. That is emergent — a consequence of a cache
+   * being designed to be optional — rather than a decision about limiting.
+   * `express-rate-limit` made it a decision: `passOnStoreError` defaults to
+   * false, so a store error blocks the request, and failing open is the
+   * documented opt-in.
+   *
+   * The default here follows the latter, because of what people actually put a
+   * limit on. It is sign-ups, sign-ins, password resets and API keys — Rails'
+   * own guide reaches for `SignUpsController` — and for those, "unlimited
+   * during an outage" is the worse of the two failures.
    */
   onStoreFailure?: "block" | "allow";
   /** Distinguishes one limit from another on the same caller. */

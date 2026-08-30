@@ -96,13 +96,12 @@ describe("a default scope", () => {
   });
 });
 
-// A deliberate difference from Rails, and worth pinning. There, a default
-// scope also fills in what `create` writes — the most complained about
-// behaviour in ActiveRecord, and the reason people are told to avoid default
-// scopes at all. Here a scope says which rows you want to see and nothing
-// about what to write.
+// A default scope fills in what `create` writes, from its equality conditions,
+// as Rails' does. This diverged for a while; the alternative made a record the
+// scope could not then find, which reads as a persistence bug rather than as a
+// scope doing its job.
 describe("what a default scope does to a write", () => {
-  it("does not fill the scoped column in on create", async () => {
+  it("fills the scoped column in on create", async () => {
     class Archived extends Model<PostRow>("posts") {
       static {
         this.defaultScope((posts) => posts.where({ title: "archived" }));
@@ -114,12 +113,26 @@ describe("what a default scope does to a write", () => {
 
     const created = await Archived.create({ deleted_at: null });
 
-    expect(created.title).toBeNull();
+    expect(created.title).toBe("archived");
 
-    // And so the record it just made is outside its own scope, which is the
-    // honest consequence: the scope is a filter, not a template.
-    expect(await Archived.count()).toBe(0);
-    expect(await Archived.unscoped().count()).toBe(1);
+    // And so the record it just made is inside its own scope, which is the
+    // point: the scope says what one of these is.
+    expect(await Archived.count()).toBe(1);
+  });
+
+  it("still lets an explicit value win", async () => {
+    class Archived extends Model<PostRow>("posts") {
+      static {
+        this.defaultScope((posts) => posts.where({ title: "archived" }));
+      }
+    }
+
+    Archived.columnCache = undefined;
+    Archived.columnTypeCache = undefined;
+
+    // Outside its own scope, and deliberately so: the caller said what they
+    // wanted and a default is only a default.
+    expect((await Archived.create({ title: "live" })).title).toBe("live");
   });
 });
 
