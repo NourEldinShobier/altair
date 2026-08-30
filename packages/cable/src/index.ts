@@ -4,3 +4,4 @@ export * from "./server.js";
 export * from "./mount.js";
 export * from "./redis.js";
 export * from "./testing.js";
+export * from "./channel_testing.js";
