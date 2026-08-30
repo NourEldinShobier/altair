@@ -1244,6 +1244,17 @@ export class Relation<T> implements PromiseLike<T[]> {
    * for `where(published: 1)` is the flag. Rails does the same, and it is what
    * makes `author.books.create(title)` link the book without being told to.
    */
+  /**
+   * The equality conditions as an object. Rails' `where_values_hash`.
+   *
+   * The public form of the seed a `build` starts from, so a caller can ask
+   * what a relation implies about a new record without building one — which is
+   * what a form needs to prefill a hidden field.
+   */
+  whereValues(): Record<string, unknown> {
+    return this.#seed();
+  }
+
   #seed(): Record<string, unknown> {
     const seed: Record<string, unknown> = {};
 

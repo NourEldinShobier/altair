@@ -1411,6 +1411,61 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      *
      * `unscoped` escapes both halves.
      */
+    /**
+     * The relation `all` builds, named. Rails' `default_scoped`.
+     *
+     * The same thing `all` returns, but saying so at the call site: code that
+     * means "with the default scopes applied" reads better than code that
+     * means "everything" and happens to be right for the same reason.
+     */
+    static defaultScoped<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
+      return this.all();
+    }
+
+    /**
+     * A relation matching nothing, without asking the database. Rails'
+     * `none` / `null_relation`.
+     *
+     * For a guard clause that has decided there is nothing to show. Returning
+     * an empty array instead would give the caller something that is not a
+     * relation, so every `.order(...)` after the guard would have to be
+     * conditional too.
+     */
+    static nullRelation<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
+      return this.all().none();
+    }
+
+    /** Rails calls it `empty_scope`. Same relation. */
+    static emptyScope<M extends typeof BaseModel>(this: M): Relation<InstanceType<M>> {
+      return this.nullRelation();
+    }
+
+    /**
+     * The attributes a record built from the current scope starts with. Rails'
+     * `scope_for_create`.
+     *
+     * What makes `author.books.create(title)` set the author without being
+     * told: every equality condition on the relation becomes a default.
+     */
+    static scopeForCreate<M extends typeof BaseModel>(this: M): Record<string, unknown> {
+      return this.all().whereValues();
+    }
+
+    /**
+     * Runs a block with the default scopes off. Rails' `unscoped { }`.
+     *
+     * The block form matters for the same reason `silence` takes one: a flag
+     * set and unset by hand stays set when something in between throws, and a
+     * process that has quietly lost its default scope starts returning soft-
+     * deleted rows to everybody.
+     */
+    static async withUnscoped<M extends typeof BaseModel, T>(
+      this: M,
+      body: (relation: Relation<InstanceType<M>>) => T | Promise<T>,
+    ): Promise<T> {
+      return await body(this.unscoped());
+    }
+
     static defaultScope(body: (relation: Relation<unknown>) => Relation<unknown>): void {
       // Copy on write, so a subclass adding one leaves its parent alone.
       if (!Object.hasOwn(this, "defaultScopes")) this.defaultScopes = [...this.defaultScopes];
@@ -4593,6 +4648,14 @@ export interface ModelClass<A extends object> {
   unscoped<T>(this: ModelConstructor<A, T>): Relation<T>;
   /** Rails' `default_scope`. Applies to writes as well as reads. */
   defaultScope(body: (relation: Relation<unknown>) => Relation<unknown>): void;
+  defaultScoped<T>(this: ModelConstructor<A, T>): Relation<T>;
+  nullRelation<T>(this: ModelConstructor<A, T>): Relation<T>;
+  emptyScope<T>(this: ModelConstructor<A, T>): Relation<T>;
+  scopeForCreate(): Record<string, unknown>;
+  withUnscoped<T, R>(
+    this: ModelConstructor<A, T>,
+    body: (relation: Relation<T>) => R | Promise<R>,
+  ): Promise<R>;
   defaultScopes: ((relation: Relation<unknown>) => Relation<unknown>)[];
   /** Rails' `has_secure_token`. */
   hasSecureToken(column: string, options?: { length?: number }): void;
