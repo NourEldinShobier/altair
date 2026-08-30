@@ -13,9 +13,19 @@
  */
 
 /** How the browser should treat it. */
+import { ACCEPT_RANGES, partialResponse } from "./ranges.js";
+
 export type Disposition = "attachment" | "inline";
 
 export interface SendOptions {
+  /**
+   * The request, so a `Range` can be honoured.
+   *
+   * Optional because a caller with no request — a job writing a file, a test —
+   * still wants to build the response. Given one, a media file becomes
+   * seekable and a large download resumable.
+   */
+  request?: { headers: { get(name: string): string | null } };
   filename?: string;
   /** The content type. Guessed from the filename when it is not given. */
   type?: string;
@@ -104,8 +114,36 @@ export async function sendFile(path: string, options: SendOptions = {}): Promise
   if (!(await file.exists())) throw new FileNotFound(path);
 
   const filename = options.filename ?? path.split(/[\\/]/u).pop();
+  const type = options.type ?? file.type;
 
-  return sendData(file, { ...options, filename, type: options.type ?? file.type });
+  if (options.request) {
+    // `file.slice` is a range over the file on disk, so a partial response
+    // still costs a handle rather than the file's size — which is the reason
+    // to send a file this way at all, and would be lost by reading it in
+    // order to slice it.
+    const partial = partialResponse(
+      options.request,
+      (range) => file.slice(range.start, range.end + 1),
+      {
+        size: file.size,
+        contentType: type,
+        headers: {
+          "content-disposition": contentDisposition(options.disposition ?? "attachment", filename),
+          "cache-control": "private, no-transform",
+        },
+      },
+    );
+
+    if (partial) return partial;
+  }
+
+  const whole = sendData(file, { ...options, filename, type });
+
+  // Advertised on the whole response too: a player decides whether it can seek
+  // from this before it ever asks for a range, and without it will not try.
+  for (const [name, value] of Object.entries(ACCEPT_RANGES)) whole.headers.set(name, value);
+
+  return whole;
 }
 
 export class FileNotFound extends Error {
