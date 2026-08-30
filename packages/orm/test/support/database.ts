@@ -116,7 +116,7 @@ export async function dropAllTables(connection: Connection): Promise<void> {
   // leaves it behind for every file that runs after it — which shows up as a
   // failure in whichever unrelated test happens to list what the database
   // holds.
-  await dropAllViews(connection);
+  await dropAll(connection, "VIEW", await viewNames(connection));
 
   const names = await tableNames(connection);
   if (names.length === 0) return;
@@ -132,12 +132,42 @@ export async function dropAllTables(connection: Connection): Promise<void> {
     await connection.execute("SET SESSION lock_wait_timeout = 2");
   }
 
-  for (const name of names) {
-    const cascade = connection.adapter === "postgres" ? " CASCADE" : "";
-    await connection.execute(`DROP TABLE IF EXISTS ${connection.quote(name)}${cascade}`);
-  }
+  await dropAll(connection, "TABLE", names);
 
   if (connection.adapter === "mysql") await connection.execute("SET FOREIGN_KEY_CHECKS = 1");
+}
+
+/**
+ * Drops everything named, in as few statements as the adapter allows.
+ *
+ * One statement rather than one per name, because on a server each is a round
+ * trip and DDL is not cheap: a file that built a dozen tables was spending
+ * seconds here, and this runs between every pair of tests. It was overrunning
+ * the runner's hook budget, which gets reported as a timeout naming whichever
+ * test came next.
+ *
+ * SQLite drops one at a time because it has no multi-name form — and it costs
+ * nothing there, since each test gets its own in-memory database anyway.
+ */
+async function dropAll(
+  connection: Connection,
+  kind: "TABLE" | "VIEW",
+  names: readonly string[],
+): Promise<void> {
+  if (names.length === 0) return;
+
+  if (connection.adapter === "sqlite") {
+    for (const name of names) {
+      await connection.execute(`DROP ${kind} IF EXISTS ${connection.quote(name)}`);
+    }
+
+    return;
+  }
+
+  const quoted = names.map((name) => connection.quote(name)).join(", ");
+  const cascade = connection.adapter === "postgres" ? " CASCADE" : "";
+
+  await connection.execute(`DROP ${kind} IF EXISTS ${quoted}${cascade}`);
 }
 
 /**
@@ -155,15 +185,6 @@ export async function columnNamesOf(connection: Connection, table: string): Prom
 export async function indexNamesOf(connection: Connection, table: string): Promise<string[]> {
   const schema = await introspect(connection);
   return schema.tables.find((entry) => entry.name === table)?.indexes.map((i) => i.name) ?? [];
-}
-
-/** Every view, dropped. Empty on SQLite in memory, where each test gets its own database. */
-async function dropAllViews(connection: Connection): Promise<void> {
-  const names = await viewNames(connection);
-
-  for (const name of names) {
-    await connection.execute(`DROP VIEW IF EXISTS ${connection.quote(name)}`);
-  }
 }
 
 async function viewNames(connection: Connection): Promise<string[]> {
