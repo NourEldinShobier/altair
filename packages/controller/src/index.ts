@@ -21,3 +21,4 @@ export * from "./http_authentication.js";
 export * from "./request_info.js";
 export * from "./allow_browser.js";
 export * from "./request_details.js";
+export * from "./http_status.js";
