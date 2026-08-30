@@ -36,12 +36,19 @@ export function realtimeSync<T>(body: () => T): { duration: number; result: T } 
 }
 
 /**
- * How much CPU the block used, in milliseconds. Rails' `cpu_time`.
+ * How much CPU the *process* used while the block ran, in milliseconds.
+ * Rails' `cpu_time`.
  *
- * Different from elapsed time in the way that matters for a slow endpoint:
- * elapsed time counts waiting on the database, CPU time does not. A request
- * that takes 900ms and uses 12ms of CPU is waiting on something; one that
- * takes 900ms and uses 880ms is computing, and those want opposite fixes.
+ * The distinction that makes it worth having: elapsed time counts waiting on
+ * the database and CPU time does not, so a request taking 900ms on 12ms of CPU
+ * is waiting on something while one taking 900ms on 880ms is computing, and
+ * those want opposite fixes.
+ *
+ * Process-wide, and the word is load-bearing. `process.cpuUsage` cannot
+ * attribute work to one block, so anything else the process does while this
+ * awaits is counted too. That makes it a fair measure in a quiet process and a
+ * misleading one in a busy server handling other requests concurrently — worth
+ * knowing before quoting a figure from production.
  */
 export async function cpuTime<T>(body: () => T | Promise<T>): Promise<{
   duration: number;
