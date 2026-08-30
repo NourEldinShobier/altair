@@ -33,3 +33,4 @@ export * from "./select_statements.js";
 export * from "./connection_pool.js";
 export * from "./command_recorder.js";
 export * from "./content.js";
+export * from "./editor.js";
