@@ -34,3 +34,4 @@ export * from "./date_extras.js";
 export * from "./cache_entry.js";
 export * from "./options.js";
 export * from "./benchmark.js";
+export * from "./digest.js";
