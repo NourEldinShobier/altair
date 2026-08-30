@@ -375,3 +375,91 @@ export async function runValidation(
     if (taken) fail(MESSAGES.taken, "taken");
   }
 }
+
+/**
+ * A rule an application writes for itself, ported from
+ * `ActiveModel::Validator` and `ActiveModel::EachValidator`.
+ *
+ * The declared options cover the rules every application needs. This covers
+ * the ones only one application needs — a VAT number, a booking that cannot
+ * overlap another, a password refused because it appears in a breach list —
+ * and the reason it is a class rather than a callback is reuse: the same rule
+ * on six models should be written once, and a callback copied six times is one
+ * that gets fixed five times.
+ */
+export interface Validator<R = ValidationTarget> {
+  /** Adds errors to the record. Rails' `validate`. */
+  validate(record: R): void | Promise<void>;
+  /**
+   * Refuses a declaration that could never work. Rails' `check_validity!`.
+   *
+   * Called when the rule is declared rather than when it runs, so a validator
+   * configured wrongly says so on the first request rather than the first time
+   * a record happens to reach it — which for a rare branch can be months.
+   */
+  checkValidity?(): void;
+}
+
+/** A rule applied to each of several named attributes. Rails' `EachValidator`. */
+export interface EachValidator<R = ValidationTarget> {
+  validateEach(record: R, attribute: string, value: unknown): void | Promise<void>;
+  checkValidity?(): void;
+}
+
+/** What a class-level custom rule is stored as. */
+export interface CustomValidation<R = ValidationTarget> {
+  validator: Validator<R>;
+  /** Present when the rule is per-attribute rather than per-record. */
+  attributes?: readonly string[];
+  options: ValidationOptions;
+}
+
+/** Whether a validator works attribute by attribute. */
+export function isEachValidator<R>(
+  validator: Validator<R> | EachValidator<R>,
+): validator is EachValidator<R> {
+  return typeof (validator as EachValidator<R>).validateEach === "function";
+}
+
+/**
+ * The message for a kind of failure, with the record's own override honoured.
+ * Rails' `generate_message`.
+ *
+ * Exported because a custom validator needs the same lookup the declared rules
+ * use — one that writes its own English string is one that stays English in a
+ * translated application, and nothing about it looks wrong until somebody
+ * reads the French.
+ */
+export function generateMessage(type: string, options: ValidationOptions = {}): string {
+  if (typeof options.message === "string") return options.message;
+
+  const known = (MESSAGES as Record<string, unknown>)[type];
+
+  if (typeof known === "string") return known;
+
+  return MESSAGES.invalid;
+}
+
+/**
+ * Runs one custom rule against a record.
+ *
+ * An each-validator with no attributes is a mistake rather than a rule that
+ * applies to everything: applying it to every column is never what somebody
+ * meant and would run a bespoke check against `created_at`.
+ */
+export async function runCustomValidation<R extends ValidationTarget>(
+  record: R,
+  declaration: CustomValidation<R>,
+): Promise<void> {
+  const { validator, attributes } = declaration;
+
+  if (isEachValidator(validator)) {
+    for (const attribute of attributes ?? []) {
+      await validator.validateEach(record, attribute, record[attribute]);
+    }
+
+    return;
+  }
+
+  await validator.validate(record);
+}

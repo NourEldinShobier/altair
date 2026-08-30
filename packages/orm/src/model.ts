@@ -81,6 +81,9 @@ import {
   MESSAGES,
   declarationApplies,
   runValidation,
+  runCustomValidation,
+  type CustomValidation,
+  type Validator,
   type ValidationDeclaration,
   type ComparisonOptions,
   type LengthOptions,
@@ -674,6 +677,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     static columnTypeCache: Record<string, ColumnType> | undefined;
     static associations: Record<string, AssociationDefinition> = {};
     static validations: ValidationDeclaration[] = [];
+    /** Rules the application wrote itself. Rails' `validates_with`. */
+    static customValidations: CustomValidation[] = [];
 
     /** The column optimistic locking uses, when the table has one. */
     static lockingColumn = "lock_version";
@@ -1091,6 +1096,63 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // Copy on write, so a subclass adding validations leaves the parent alone.
       if (!Object.hasOwn(this, "validations")) this.validations = [...this.validations];
       this.validations.push({ attribute, options });
+    }
+
+    /**
+     * Adds a rule the application wrote itself. Rails' `validates_with`.
+     *
+     *     this.validatesWith(new NotOverlapping({ column: "period" }))
+     *
+     * An object rather than a class, because a validator that takes options
+     * is configured when it is declared and there is nothing for the framework
+     * to do with a constructor it would have to guess the arguments of.
+     */
+    static validatesWith(validator: Validator, options: ValidationOptions = {}): void {
+      // Refused here rather than at run time, so a rule configured wrongly
+      // says so on the first request rather than the first time a record
+      // happens to reach it — months, for a rare branch.
+      validator.checkValidity?.();
+
+      if (!Object.hasOwn(this, "customValidations")) {
+        this.customValidations = [...this.customValidations];
+      }
+
+      this.customValidations.push({ validator, options });
+    }
+
+    /**
+     * Runs a rule against each of several attributes. Rails' `validates_each`.
+     *
+     *     this.validatesEach(["title", "body"], (record, attribute, value) => {
+     *       if (typeof value === "string" && value.includes("	")) {
+     *         record.errors.add(attribute, "cannot contain tabs")
+     *       }
+     *     })
+     *
+     * The shape for a check that is the same for several columns and worth
+     * writing once, where a whole validator class would be more ceremony than
+     * the rule deserves.
+     */
+    static validatesEach(
+      attributes: string | readonly string[],
+      body: (record: ValidationTarget, attribute: string, value: unknown) => void | Promise<void>,
+      options: ValidationOptions = {},
+    ): void {
+      const names = typeof attributes === "string" ? [attributes] : [...attributes];
+
+      if (names.length === 0) {
+        throw new Error("validatesEach needs at least one attribute to check.");
+      }
+
+      if (!Object.hasOwn(this, "customValidations")) {
+        this.customValidations = [...this.customValidations];
+      }
+
+      this.customValidations.push({
+        validator: { validateEach: body } as unknown as Validator,
+        attributes: names,
+        options,
+      });
     }
 
     /** Rails' `validates_presence_of`. */
@@ -3829,6 +3891,11 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // the tests happened to declare something else as well. The probe that
       // caught it declared nothing.
       if (klass.validations.length === 0) {
+        // The custom ones still run. A model whose only rule is a validator
+        // object has no attribute declarations, and returning without them
+        // would skip the single thing it declared — the same shape of bug the
+        // association checks below were added for.
+        await this.runCustomValidations(klass, running);
         this.validateRequiredParents(klass);
         await this.validateAssociated(klass);
         return;
@@ -3851,9 +3918,22 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         await runValidation(this as unknown as ValidationTarget, declaration, probe);
       }
 
+      await this.runCustomValidations(klass, running);
+
       this.validateRequiredParents(klass);
 
       await this.validateAssociated(klass);
+    }
+
+    /** Runs the rules declared with `validatesWith` and `validatesEach`. */
+    private async runCustomValidations(klass: typeof BaseModel, running: string): Promise<void> {
+      for (const declaration of klass.customValidations) {
+        // The same `on:`, `if:` and `unless:` a declared rule honours, so a
+        // custom rule is not the one that runs where nothing else does.
+        if (!(await declarationApplies(declaration.options, this, running))) continue;
+
+        await runCustomValidation(this as unknown as ValidationTarget, declaration);
+      }
     }
 
     /**
@@ -4936,6 +5016,15 @@ export interface ModelClass<A extends object> {
   suppress<T>(body: () => T | Promise<T>): Promise<T>;
 
   validations: ValidationDeclaration[];
+  customValidations: CustomValidation[];
+  /** Rails' `validates_with`: a rule the application wrote itself. */
+  validatesWith(validator: Validator, options?: ValidationOptions): void;
+  /** Rails' `validates_each`: one rule across several attributes. */
+  validatesEach(
+    attributes: string | readonly string[],
+    body: (record: ValidationTarget, attribute: string, value: unknown) => void | Promise<void>,
+    options?: ValidationOptions,
+  ): void;
   validates(attribute: string, options: ValidationOptions): void;
   validatesPresenceOf(names: string | readonly string[], options?: ValidationOptions): void;
   validatesAbsenceOf(names: string | readonly string[], options?: ValidationOptions): void;
