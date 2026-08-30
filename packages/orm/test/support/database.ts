@@ -19,6 +19,48 @@ export const isSqlite = TEST_ADAPTER === "sqlite";
 let shared: Connection | undefined;
 
 /**
+ * Times one step of the handover and says so when it is slow.
+ *
+ * A `beforeEach` that runs out of budget is reported by the runner as a
+ * timeout naming the test, which says nothing about which part of the handover
+ * was slow. This names it.
+ */
+const SLOW_STEP_MS = Number(process.env["ALTAIR_TEST_SLOW_STEP_MS"] ?? 750);
+
+async function step<T>(name: string, body: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+
+  try {
+    return await body();
+  } finally {
+    const took = Date.now() - started;
+
+    if (took >= SLOW_STEP_MS) {
+      process.stderr.write(`[test-connection] ${name} took ${String(took)}ms
+`);
+    }
+  }
+}
+
+/**
+ * Closes the outgoing pool, tolerating one that was never used.
+ *
+ * A pool is connected lazily, so one created and replaced without a query in
+ * between rejects here instead of closing quietly. Nothing has leaked — there
+ * was no socket — and failing the next test over the harness's own tidy-up
+ * would report the wrong thing.
+ */
+async function closeQuietly(connection: Connection | undefined): Promise<void> {
+  if (!connection) return;
+
+  try {
+    await connection.close();
+  } catch (error) {
+    if (!String(error).includes("before the connection was established")) throw error;
+  }
+}
+
+/**
  * A connection to an empty database.
  *
  * On SQLite that is a new in-memory database each time. On a server it is one
@@ -53,11 +95,11 @@ export async function testConnection(): Promise<Connection> {
   // which surfaces as a `beforeEach` timing out in a file that did nothing
   // wrong, and then as "table already exists" when the hook finally gives up
   // and the create runs anyway.
-  await shared?.close();
+  await step("close", () => closeQuietly(shared));
 
-  shared = new Connection(TEST_DATABASE_URL);
+  shared = await step("open", async () => new Connection(TEST_DATABASE_URL));
 
-  await dropAllTables(shared);
+  await step("drop", () => dropAllTables(shared as Connection));
 
   return shared;
 }
