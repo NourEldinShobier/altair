@@ -22,6 +22,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { didYouMean, secureToken } from "@altair/support";
 import { errors } from "@altair/support";
+import { lookupType, typeNames, typeRegistered, type Type, type TypeOptions } from "./types.js";
 import {
   camelize,
   humanize,
@@ -668,6 +669,33 @@ export function isUniqueViolation(error: unknown): boolean {
   return code === "SQLITE_CONSTRAINT" && /UNIQUE constraint failed/i.test(message);
 }
 
+/**
+ * What a persisted model's `attribute` takes.
+ *
+ * Distinct from `AttributeOptions` in attributes.ts, which is the same idea for
+ * a model with no table behind it: that one casts with a plain function, this
+ * one with a `Type` from the registry, because a column has a precision and a
+ * limit and a virtual attribute does not.
+ */
+export interface ModelAttributeOptions extends TypeOptions {
+  /**
+   * The value a new record starts with.
+   *
+   * A function for anything mutable — an array, an object, a timestamp —
+   * since a value shared by every record built from this class is a bug that
+   * shows up as one record's change appearing on another.
+   */
+  default?: unknown;
+}
+
+/** One attribute a model declared for itself. */
+export interface DeclaredAttribute {
+  type: Type;
+  /** The name it was declared with, for a caller reporting on the schema. */
+  typeName: string;
+  default?: unknown;
+}
+
 export function Model<A extends object>(tableName?: string, options: ModelOptions = {}) {
   class BaseModel extends Callbacks {
     static tableName = tableName ?? "";
@@ -1312,6 +1340,22 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const declared: Record<string, unknown> = {};
       const columns: Record<string, unknown> = {};
 
+      // Declared defaults go in first, so anything the caller passed overrides
+      // them. A new record therefore carries its defaults before it is saved —
+      // which is the point: a database default only exists after an INSERT, so
+      // a form rendered from `Model.build()` would show an empty field for a
+      // value that is about to become 0.
+      if (!persisted) {
+        for (const [name, definition] of Object.entries(klass.declaredAttributes)) {
+          if (definition.default === undefined) continue;
+
+          columns[name] =
+            typeof definition.default === "function"
+              ? (definition.default as () => unknown)()
+              : definition.default;
+        }
+      }
+
       for (const [key, value] of Object.entries(attributes)) {
         // Through the alias here too: the constructor writes columns directly
         // rather than through the proxy, so an alias resolved only there would
@@ -1383,6 +1427,9 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     /** Second names for columns, by alias. Rails' `attribute_aliases`. */
     static attributeAliases: Record<string, string> = {};
 
+    /** Attributes the model declared for itself. Rails' `attribute`. */
+    static declaredAttributes: Record<string, DeclaredAttribute> = {};
+
     /**
      * A second name for a column. Rails' `alias_attribute`.
      *
@@ -1400,6 +1447,65 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * database, and rewriting strings that might be expressions is how a query
      * builder starts guessing.
      */
+    /**
+     * Declares an attribute's type, and optionally a default. Rails'
+     * `attribute`.
+     *
+     *     static { this.attribute("price", "integer", { default: 0 }) }
+     *     static { this.attribute("published", "boolean") }
+     *
+     * Three things it does, and each is a real need:
+     *
+     *   - **Overrides a column's type.** A legacy table storing a number in a
+     *     varchar, a boolean kept as `"Y"`/`"N"`. Without this the application
+     *     compares strings everywhere and one comparison eventually forgets.
+     *   - **Declares an attribute with no column.** A value assembled from
+     *     others that still has to be assigned, validated and read back the
+     *     same way a column is.
+     *   - **Gives a default that exists before the insert.** A database
+     *     default only applies once the row is written, so a form rendered
+     *     from an unsaved record shows an empty field for a value that is
+     *     about to become 0.
+     *
+     * The default may be a function, which is how a mutable one — an array, an
+     * object, a timestamp — avoids being shared by every record built from
+     * this class.
+     */
+    static attribute(name: string, type: string, options: ModelAttributeOptions = {}): void {
+      // Copy on write, like the aliases and the validations, so declaring on a
+      // subclass leaves the parent alone.
+      if (!Object.hasOwn(this, "declaredAttributes")) {
+        this.declaredAttributes = { ...this.declaredAttributes };
+      }
+
+      // Refused rather than left to fall back. `lookupType` deliberately gives
+      // the base type for a name it does not know, which is right for a column
+      // whose database type nobody taught the ORM — but this name was typed by
+      // hand on purpose, so an unrecognised one is a typo, and silently
+      // reading the column uncast is exactly the bug declaring a type was
+      // meant to prevent.
+      if (!typeRegistered(type)) {
+        throw new Error(
+          `Unknown attribute type "${type}" for ${this.name}.${name}. ` +
+            `Known types: ${typeNames().join(", ")}.`,
+        );
+      }
+
+      const built = lookupType(type, options);
+
+      this.declaredAttributes[name] = { type: built, typeName: type, default: options.default };
+    }
+
+    /** The `Type` a declared attribute casts with, or undefined. */
+    static declaredTypeFor(name: string): Type | undefined {
+      return this.declaredAttributes[name]?.type;
+    }
+
+    /** The names this model declared, in the order they were declared. */
+    static declaredAttributeNames(): string[] {
+      return Object.keys(this.declaredAttributes);
+    }
+
     static aliasAttribute(alias: string, column: string): void {
       // Copy on write, so declaring on a subclass leaves the parent alone —
       // the same rule the callbacks and associations follow.
@@ -2441,8 +2547,19 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return (await this.columnsHash())[name];
     }
 
-    /** One column's logical type, or undefined. Rails' `type_for_attribute`. */
+    /**
+     * One attribute's logical type, or undefined. Rails' `type_for_attribute`.
+     *
+     * A declaration wins over the column, since that is what the application
+     * actually reads and writes — answering with the column's type after
+     * `attribute("price", "integer")` overrode it would be reporting the
+     * storage rather than the model.
+     */
     static async typeForAttribute(name: string): Promise<ColumnType | undefined> {
+      const declared = this.declaredAttributes[name];
+
+      if (declared) return declared.typeName as ColumnType;
+
       return (await this.columnTypes())[name];
     }
 
@@ -4597,8 +4714,17 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         const options = this.encryptedAttributes[key];
         // Decrypt before casting: the column's type describes the plain value,
         // and the ciphertext is a string whatever the column says.
+        // A declared type wins over the column's, which is the whole point of
+        // declaring one: the column says varchar and the application says this
+        // is a number.
+        const declared = this.declaredAttributes[key];
+
         cast[key] =
-          options && decrypting ? decryptValue(value, key, options) : castValue(value, types[key]);
+          options && decrypting
+            ? decryptValue(value, key, options)
+            : declared
+              ? declared.type.cast(value)
+              : castValue(value, types[key]);
       }
 
       return cast;
@@ -5109,6 +5235,11 @@ export interface ModelClass<A extends object> {
   reflectOnAssociation(name: string): AssociationDefinition | undefined;
   associationNames(): string[];
   attributeAliases: Record<string, string>;
+  declaredAttributes: Record<string, DeclaredAttribute>;
+  /** Rails' `attribute`: a type, and optionally a default, for one attribute. */
+  attribute(name: string, type: string, options?: ModelAttributeOptions): void;
+  declaredTypeFor(name: string): Type | undefined;
+  declaredAttributeNames(): string[];
   aliasAttribute(alias: string, column: string): void;
   resolveAttributeName(name: string): string;
   aliasConditions(conditions: Conditions): Conditions;
