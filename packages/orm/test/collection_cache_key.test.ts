@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Model, SchemaStatements, setConnection } from "../src/index.js";
+import { serialize } from "../src/model.js";
 import type { Connection } from "../src/connection.js";
 import { isSqlite, testConnection } from "./support/database.js";
 
@@ -73,9 +74,13 @@ describe("collectionCacheKey", () => {
     // with the current time, which inside one test is the time the row already
     // had — so the key would not move for a reason that has nothing to do with
     // what is being tested.
+    //
+    // Through `serialize` rather than `toISOString`, because writing the bind
+    // by hand means writing it for one adapter: MySQL refuses ISO 8601 for a
+    // DATETIME outright, and wants `2026-01-01 12:00:00` for the same instant.
     await connection.execute(
       `UPDATE posts SET title = 'b', updated_at = ${connection.placeholder(0)} WHERE id = ${connection.placeholder(1)}`,
-      [new Date(Date.now() + 86_400_000).toISOString(), post.id],
+      [serialize(new Date(Date.now() + 86_400_000), connection), post.id],
     );
 
     expect(await Post.all().collectionCacheKey()).not.toBe(before);

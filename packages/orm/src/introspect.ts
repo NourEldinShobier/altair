@@ -86,8 +86,15 @@ export async function tableNames(connection: Connection): Promise<string[]> {
       return rows.map((row) => String(row.name));
     }
     case "mysql": {
+      // Base tables only, which is what the other two adapters already report:
+      // SQLite filters on `type = 'table'` and `pg_tables` holds no views. Left
+      // unfiltered, `information_schema.tables` lists views as well, so a
+      // schema dump taken on MySQL would try to recreate every view as a table
+      // — and the same query answered differently on one adapter is the kind of
+      // difference that only shows up on the database nobody develops against.
       const rows = await connection.query<Row>(
-        "SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()",
+        `SELECT table_name AS name FROM information_schema.tables
+         WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'`,
       );
       return rows.map((row) => String(row.name));
     }

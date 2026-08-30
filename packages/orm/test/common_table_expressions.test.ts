@@ -35,6 +35,19 @@ let connection: Connection;
 
 const sqlOf = (relation: { toSql(): { sql: string } }) => relation.toSql().sql;
 
+/**
+ * An identifier quoted the way the database running these tests quotes it.
+ *
+ * Written out, `"posts"` is only correct on SQLite and PostgreSQL — MySQL uses
+ * backticks — so a hard-coded assertion is really asserting which adapter is
+ * running. Asking the connection makes the test say what it means: that the
+ * name was quoted, not that it was quoted in one particular dialect.
+ */
+const q = (name: string) => connection.quote(name);
+
+/** The same for a bind placeholder: `?` on SQLite and MySQL, `$1` on PostgreSQL. */
+const ph = (index = 0) => connection.placeholder(index);
+
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
@@ -72,7 +85,7 @@ describe("with", () => {
   it("names it", () => {
     const sql = sqlOf(Post.with({ recent: Post.where({ status: "published" }) }));
 
-    expect(sql).toContain('"recent" AS (');
+    expect(sql).toContain(`${q("recent")} AS (`);
   });
 
   it("is not recursive unless asked", () => {
@@ -87,8 +100,8 @@ describe("with", () => {
       }),
     );
 
-    expect(sql).toContain('"drafts" AS (');
-    expect(sql).toContain('"published" AS (');
+    expect(sql).toContain(`${q("drafts")} AS (`);
+    expect(sql).toContain(`${q("published")} AS (`);
   });
 
   /**
@@ -102,15 +115,15 @@ describe("with", () => {
       }),
     );
 
-    expect(sql.match(/"recent" AS \(/g)).toHaveLength(1);
+    expect(sql.split(`${q("recent")} AS (`)).toHaveLength(2);
   });
 
   it("takes raw sql with its own bindings", () => {
     const { sql, bindings } = Post.with({
-      recent: { sql: "SELECT * FROM posts WHERE status = ?", bindings: ["published"] },
+      recent: { sql: `SELECT * FROM posts WHERE status = ${ph()}`, bindings: ["published"] },
     }).toSql();
 
-    expect(sql).toContain('"recent" AS (SELECT * FROM posts WHERE status = ?)');
+    expect(sql).toContain(`${q("recent")} AS (SELECT * FROM posts WHERE status = ${ph()})`);
     expect(bindings).toEqual(["published"]);
   });
 
@@ -168,8 +181,8 @@ describe("withRecursive", () => {
     );
 
     expect(sql.match(/RECURSIVE/g)).toHaveLength(1);
-    expect(sql).toContain('"roots" AS (');
-    expect(sql).toContain('"thread" AS (');
+    expect(sql).toContain(`${q("roots")} AS (`);
+    expect(sql).toContain(`${q("thread")} AS (`);
   });
 
   /** The whole point: a tree in one round trip. */
@@ -214,19 +227,19 @@ describe("withRecursive", () => {
 
 describe("from", () => {
   it("selects from what it was given", () => {
-    expect(sqlOf(Post.from("archived_posts"))).toContain('FROM "archived_posts"');
+    expect(sqlOf(Post.from("archived_posts"))).toContain(`FROM ${q("archived_posts")}`);
   });
 
   /** Every join and every `table.*` has to follow it or they name a table
    * the statement no longer selects. */
   it("qualifies the star against it", () => {
-    expect(sqlOf(Post.from("archived_posts"))).toContain('"archived_posts".*');
+    expect(sqlOf(Post.from("archived_posts"))).toContain(`${q("archived_posts")}.*`);
   });
 
   it("carries the rest of the query", () => {
     const sql = sqlOf(Post.from("archived_posts").where({ status: "draft" }).order("title"));
 
-    expect(sql).toContain('FROM "archived_posts"');
+    expect(sql).toContain(`FROM ${q("archived_posts")}`);
     expect(sql).toContain("WHERE");
     expect(sql).toContain("ORDER BY");
   });

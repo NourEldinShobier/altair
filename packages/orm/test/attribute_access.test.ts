@@ -34,7 +34,11 @@ beforeEach(async () => {
 
   await new SchemaStatements(connection).createTable("posts", (t) => {
     t.string("title");
-    t.string("body");
+    // Text, not string. The inspect tests write kilobytes into this column,
+    // which is the situation the feature exists for — and `string` is a
+    // VARCHAR(255) on MySQL and PostgreSQL, so only SQLite's unbounded TEXT
+    // let that pass.
+    t.text("body");
     t.integer("status");
     t.string("email");
   });
