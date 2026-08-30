@@ -37,3 +37,4 @@ export * from "./benchmark.js";
 export * from "./digest.js";
 export * from "./broadcast_logger.js";
 export * from "./time_zone.js";
+export * from "./source_extract.js";
