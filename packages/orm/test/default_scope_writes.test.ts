@@ -73,28 +73,46 @@ describe("reading", () => {
 });
 
 /**
- * The deliberate divergence. Rails would set `state: "draft"` here.
+ * A default scope fills in what `create` writes, from its equality conditions,
+ * as Rails' does.
  *
- * The trade is stated rather than hidden: a create fills in only what it was
- * given, and the cost is the case below it.
+ * This diverged for a while, on the reasoning that Rails' seeding is the most
+ * complained-about behaviour in ActiveRecord. The reasoning did not survive
+ * the alternative: `Draft.create(...)` made a record `Draft` could not find,
+ * which reads as a persistence bug rather than as a scope doing its job. The
+ * complaints are about scopes used to filter rather than to define, which the
+ * Rails guides themselves warn against.
  */
 describe("writing", () => {
-  it("does not fill in the column the scope filters on", async () => {
+  it("fills in the column the scope filters on", async () => {
     const draft = await Draft.create({ title: "C" });
 
-    expect(draft.state).toBeNull();
+    expect(draft.state).toBe("draft");
+  });
+
+  /** The point of the change: a record made through a scope is one it can find. */
+  it("so the new record is visible to the model that made it", async () => {
+    await Draft.create({ title: "C" });
+
+    expect(await Draft.all().count()).toBe(2);
+    expect(await Draft.unscoped().count()).toBe(3);
   });
 
   /**
-   * The consequence, spelled out. A record made through a default-scoped model
-   * is not necessarily one that model can find — which is the price of the
-   * decision above, and the reason anybody revisiting it should start here.
+   * Rails seeds from a Hash condition and not from a string or an array, since
+   * there is no one value those mean. The same rule falls out here for free:
+   * a clause records the value it compared against only when there was one.
    */
-  it("so the new record is not visible to the model that made it", async () => {
-    await Draft.create({ title: "C" });
+  it("seeds nothing from a condition with no single value", async () => {
+    class Recent extends Model<PostRow>("posts") {
+      static {
+        this.defaultScope((posts) => posts.where("state != ?", "archived"));
+      }
+    }
+    Recent.columnCache = undefined;
+    Recent.columnTypeCache = undefined;
 
-    expect(await Draft.all().count()).toBe(1);
-    expect(await Draft.unscoped().count()).toBe(3);
+    expect((await Recent.create({ title: "D" })).state).toBeNull();
   });
 
   it("keeps a value that was given, including one the scope would exclude", async () => {
@@ -103,9 +121,10 @@ describe("writing", () => {
     expect(post.state).toBe("live");
   });
 
-  // The way to get Rails' behaviour, and one line rather than a framework
-  // decision: the relation seeds what it builds from its own conditions.
-  it("is what a relation's own create already does", async () => {
+  // The two paths agree now. They did not: `Draft.all().create()` seeded from
+  // the scope and `Draft.create()` did not, so the same record came out
+  // differently depending on which was called.
+  it("agrees with what a relation's own create does", async () => {
     const post = await Post.where({ state: "draft" }).create({ title: "C" });
 
     expect(post.state).toBe("draft");

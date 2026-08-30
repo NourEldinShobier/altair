@@ -21,6 +21,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { secureToken } from "@altair/support";
+import { errors } from "@altair/support";
 import {
   camelize,
   humanize,
@@ -416,6 +417,29 @@ export interface BaseModelInstance<A> {
  * attribute. Marking the query strict turns that into a failure at the moment
  * it happens rather than a graph in a dashboard three weeks later.
  */
+/**
+ * What a strict-loading violation does. Rails'
+ * `config.active_record.action_on_strict_loading_violation`.
+ *
+ * `raise` by default, and `log` is what makes the feature adoptable: turning
+ * strict loading on across an application that already has N+1s breaks every
+ * page at once, so there is no way in from a standing start. In `log` mode the
+ * violations are reported and the association still loads, which turns "we
+ * cannot turn this on" into a list of things to fix.
+ */
+export type StrictLoadingAction = "raise" | "log";
+
+let strictLoadingAction: StrictLoadingAction = "raise";
+
+/** Sets what a violation does. */
+export function configureStrictLoading(options: { onViolation: StrictLoadingAction }): void {
+  strictLoadingAction = options.onViolation;
+}
+
+export function strictLoadingActionFor(): StrictLoadingAction {
+  return strictLoadingAction;
+}
+
 export class StrictLoadingViolation extends Error {
   constructor(
     readonly model: string,
@@ -1078,16 +1102,25 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * every query that forgot to say so would find it. Declaring it once is
      * the only way that stays true as queries are added.
      *
-     * One deliberate difference from Rails. There, a default scope also fills
-     * in what `create` writes, so `default_scope { where(archived: true) }`
-     * quietly makes every new record archived — it is the most complained
-     * about behaviour in ActiveRecord, and the reason people are told to
-     * avoid default scopes altogether.
+     * A default scope also fills in what `create` writes, as Rails' does, and
+     * only from equality conditions — `where({ archived: true })` seeds
+     * `archived`, while a range, a list or raw SQL seeds nothing, since there
+     * is no one value those mean.
      *
-     * Here it narrows reads and nothing else. A scope is a statement about
-     * which rows you want to see, and reading that as a statement about what
-     * to write is a second meaning nobody asked for. `create` fills in what it
-     * was given; `unscoped` escapes the reading.
+     * This used to narrow reads and nothing else, on the reasoning that Rails'
+     * seeding is the most complained-about behaviour in ActiveRecord. That
+     * reasoning does not survive looking at what the alternative does:
+     * `Draft.create(...)` made a record `Draft` could not then find. A record
+     * you cannot see is a worse surprise than an attribute you declared, and
+     * it reads as a persistence bug rather than as a scope doing its job.
+     *
+     * The complaints are about using a default scope to filter rather than to
+     * define — `where(archived: true)` on a model that is not "the archived
+     * ones". That is a misuse, and Rails' own guides warn about it. For the
+     * correct use, seeding is what makes the feature coherent: the scope says
+     * what one of these is, so creating one should make one.
+     *
+     * `unscoped` escapes both halves.
      */
     static defaultScope(body: (relation: Relation<unknown>) => Relation<unknown>): void {
       // Copy on write, so a subclass adding one leaves its parent alone.
@@ -1922,7 +1955,19 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           // it. A preloaded association is always allowed: strict loading is
           // about the query, not about the association.
           if (cached === undefined && (this as Record<symbol, unknown>)[STRICT_LOADING] === true) {
-            throw new StrictLoadingViolation(this.constructor.name, definition.name);
+            const violation = new StrictLoadingViolation(this.constructor.name, definition.name);
+
+            // Raised, or reported and allowed through. The second is what lets
+            // an application already full of N+1s turn this on at all: it
+            // turns "we cannot switch it on" into a list of things to fix.
+            if (strictLoadingActionFor() === "raise") throw violation;
+
+            errors.report(violation, {
+              handled: true,
+              severity: "warning",
+              source: "altair",
+              context: { model: this.constructor.name, association: definition.name },
+            });
           }
 
           // A to-many association is always a Relation so the declared type is
@@ -2318,7 +2363,17 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     static build<M extends typeof BaseModel>(this: M, values: Partial<A> = {}): InstanceType<M> {
       this.checkInherited();
 
-      return new this(values) as InstanceType<M>;
+      // Through the default-scoped relation, so a record built from a scope is
+      // one that scope can find. `Draft.all().build()` already seeded from the
+      // scope's equality conditions and `Draft.build()` did not, so the same
+      // record came out differently depending on which was called — and the
+      // shorter one produced a Draft that `Draft` could not see.
+      //
+      // Only single-value equality conditions seed anything: a range, a list or
+      // raw SQL leaves the value unset, because there is no one value those
+      // mean. That is exactly Rails' rule, which seeds from a Hash condition
+      // and not from a string or an array.
+      return this.all().build(values as Partial<InstanceType<M>>);
     }
 
     /**
