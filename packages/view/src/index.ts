@@ -22,3 +22,4 @@ export * from "./text.js";
 export * from "./options.js";
 export * from "./tags.js";
 export * from "./assets.js";
+export * from "./escaping.js";

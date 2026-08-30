@@ -24,3 +24,4 @@ export * from "./formats.js";
 export * from "./assertion.js";
 export * from "./backtrace_cleaner.js";
 export * from "./hash.js";
+export * from "./strings.js";
