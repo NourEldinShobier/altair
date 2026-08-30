@@ -13,3 +13,4 @@ export * from "./operations.js";
 export * from "./service_operations.js";
 export * from "./representable.js";
 export * from "./previewers.js";
+export * from "./integrity.js";

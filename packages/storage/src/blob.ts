@@ -6,6 +6,7 @@
  * this is the row that knows how to find them again.
  */
 
+import { checksumOf } from "./integrity.js";
 import { Model, type SchemaStatements } from "@altair/orm";
 import { secureToken } from "@altair/support";
 // A variant needs a blob and a blob makes variants, so these two import each
@@ -159,13 +160,17 @@ export function generateKey(): string {
 }
 
 /**
- * Rails records an MD5 digest, base64 encoded.
+ * The digest recorded for a blob's bytes.
  *
- * MD5 is not a security claim here and never was: it answers "did the bytes
- * arrive intact", which is what S3's Content-MD5 header checks too.
+ * MD5 by default, as Rails records. Not a security claim and never was: it
+ * answers "did the bytes arrive intact", which is what S3's Content-MD5
+ * header checks too.
  */
 export function checksumFor(data: Uint8Array): string {
-  return new Bun.CryptoHasher("md5").update(data).digest("base64");
+  // Through the configurable implementation rather than hard-coded, so an
+  // application that changed the digest gets the same one everywhere — a blob
+  // written with one digest and checked with another fails every comparison.
+  return checksumOf(data);
 }
 
 /** Guesses a content type from the filename, as Rails does from the extension. */
