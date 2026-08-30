@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests     | of Rails' |       |
 | --------- | --------- | --------- | ----- |
-| **Total** | **4,791** | 26,775    | 17.9% |
+| **Total** | **4,841** | 26,775    | 18.1% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -23,7 +23,7 @@ one that needs no server.
 
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
-| `@altair/support`    | 1114  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
+| `@altair/support`    | 1147  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
 | `@altair/orm`        | 1432  | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 605   | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 191   | Generators, db tasks, file loading, encrypted credentials                  |
@@ -32,7 +32,7 @@ one that needs no server.
 | `@altair/storage`    | 209   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
 | `@altair/view`       | 362   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 149   | Jobs, queues, retries, worker                                              |
-| `@altair/testing`    | 158   | Transactional tests, fixtures, factories, test databases                   |
+| `@altair/testing`    | 175   | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 170   | Config, boot lifecycle, request handler, credentials, logging              |
 | `@altair/mailer`     | 195   | Messages, TSX bodies, delivery methods                                     |
 
@@ -187,7 +187,7 @@ pino-pretty works under Bun 1.4.
 environments/<env>.ts` layers over the defaults, `config/initializers/*.ts`
 run in filename order at boot, and `altair db:seed` runs `db/seeds.ts`.
 
-What remains everywhere is depth: 17.9% of Rails' test count, not 17.9% of Rails.
+What remains everywhere is depth: 18.1% of Rails' test count, not 18.1% of Rails.
 
 ## How to update this file
 
