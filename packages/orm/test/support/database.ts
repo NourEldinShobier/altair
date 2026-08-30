@@ -8,7 +8,7 @@
  */
 
 import { Connection, adapterFor } from "../../src/connection.js";
-import { introspect, tableNames } from "../../src/introspect.js";
+import { introspect } from "../../src/introspect.js";
 
 export const TEST_DATABASE_URL = process.env.ALTAIR_TEST_DATABASE_URL ?? "sqlite://:memory:";
 export const TEST_ADAPTER = adapterFor(TEST_DATABASE_URL);
@@ -111,30 +111,84 @@ export async function testConnection(): Promise<Connection> {
  * and the next file's shape is not this one's.
  */
 export async function dropAllTables(connection: Connection): Promise<void> {
-  // Views first, and separately: `tableNames` reports base tables only, and
-  // `DROP TABLE` will not remove a view. One test creating a view otherwise
-  // leaves it behind for every file that runs after it — which shows up as a
-  // failure in whichever unrelated test happens to list what the database
-  // holds.
-  await dropAll(connection, "VIEW", await viewNames(connection));
+  const { tables, views } = await step("list", () => dataSourceNames(connection));
 
-  const names = await tableNames(connection);
-  if (names.length === 0) return;
+  // Views first, and separately: `DROP TABLE` will not remove a view, so one
+  // test creating a view otherwise leaves it behind for every file that runs
+  // after it — which shows up as a failure in whichever unrelated test happens
+  // to list what the database holds.
+  await step("drop views", () => dropAll(connection, "VIEW", views));
+
+  if (tables.length === 0) return;
 
   // MySQL refuses to drop a table another table references, and the order that
   // would satisfy every foreign key is not worth computing for a test database.
   if (connection.adapter === "mysql") {
     await connection.execute("SET FOREIGN_KEY_CHECKS = 0");
     // Fail fast instead of hanging. If something does hold a metadata lock,
-    // five seconds of waiting is reported by the test runner as a hook timeout
-    // naming an unrelated test; two seconds of waiting is reported by MySQL as
-    // a lock timeout naming the table.
+    // two seconds of waiting is reported by MySQL as a lock timeout naming the
+    // table, rather than five seconds of waiting reported by the runner as a
+    // hook timeout naming an unrelated test.
     await connection.execute("SET SESSION lock_wait_timeout = 2");
   }
 
-  await dropAll(connection, "TABLE", names);
+  await step("drop tables", () => dropAll(connection, "TABLE", tables));
 
   if (connection.adapter === "mysql") await connection.execute("SET FOREIGN_KEY_CHECKS = 1");
+}
+
+/**
+ * Everything in the database, split into tables and views, in one query.
+ *
+ * Deliberately not `information_schema` on MySQL. That view is slow enough on
+ * MySQL 8 to matter here — this runs between every pair of tests, and asking it
+ * twice was most of a five-second hook budget. `SHOW FULL TABLES` answers the
+ * same question without it.
+ *
+ * Its first column is named after the database (`Tables_in_altair_test`), so
+ * the values are read by position rather than by name.
+ */
+async function dataSourceNames(
+  connection: Connection,
+): Promise<{ tables: string[]; views: string[] }> {
+  const tables: string[] = [];
+  const views: string[] = [];
+
+  const add = (name: string, kind: string) => {
+    (kind.toUpperCase().includes("VIEW") ? views : tables).push(name);
+  };
+
+  switch (connection.adapter) {
+    case "sqlite": {
+      const rows = await connection.query<{ name: unknown; type: unknown }>(
+        "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'",
+      );
+
+      for (const row of rows) add(String(row.name), String(row.type));
+      break;
+    }
+    case "postgres": {
+      const rows = await connection.query<{ name: unknown; kind: unknown }>(
+        `SELECT tablename AS name, 'TABLE' AS kind FROM pg_tables WHERE schemaname = 'public'
+         UNION ALL
+         SELECT viewname AS name, 'VIEW' AS kind FROM pg_views WHERE schemaname = 'public'`,
+      );
+
+      for (const row of rows) add(String(row.name), String(row.kind));
+      break;
+    }
+    case "mysql": {
+      const rows = await connection.query<Record<string, unknown>>("SHOW FULL TABLES");
+
+      for (const row of rows) {
+        const [name, kind] = Object.values(row);
+        add(String(name), String(kind ?? "BASE TABLE"));
+      }
+      break;
+    }
+  }
+
+  return { tables, views };
 }
 
 /**
@@ -185,17 +239,4 @@ export async function columnNamesOf(connection: Connection, table: string): Prom
 export async function indexNamesOf(connection: Connection, table: string): Promise<string[]> {
   const schema = await introspect(connection);
   return schema.tables.find((entry) => entry.name === table)?.indexes.map((i) => i.name) ?? [];
-}
-
-async function viewNames(connection: Connection): Promise<string[]> {
-  const rows = await connection.query<{ name: unknown }>(
-    connection.adapter === "sqlite"
-      ? "SELECT name FROM sqlite_master WHERE type = 'view'"
-      : connection.adapter === "postgres"
-        ? "SELECT viewname AS name FROM pg_views WHERE schemaname = 'public'"
-        : `SELECT table_name AS name FROM information_schema.tables
-           WHERE table_schema = DATABASE() AND table_type = 'VIEW'`,
-  );
-
-  return rows.map((row) => String(row.name));
 }
