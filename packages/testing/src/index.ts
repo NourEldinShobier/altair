@@ -19,3 +19,4 @@ export * from "./notification_assertions.js";
 export * from "./plain_assertions.js";
 export * from "./deprecation_assertions.js";
 export * from "./mail_assertions.js";
+export * from "./fixture_set.js";
