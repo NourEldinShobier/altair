@@ -7,6 +7,7 @@
  * in-memory SQLite, so running the tests needs nothing installed.
  */
 
+import { SQL } from "bun";
 import { Connection, adapterFor } from "../../src/connection.js";
 import { introspect } from "../../src/introspect.js";
 
@@ -67,6 +68,21 @@ async function closeQuietly(connection: Connection | undefined): Promise<void> {
  * pool, emptied — opening a pool per test would exhaust the server's
  * connections long before the suite finished.
  */
+/**
+ * A connection holding as few sockets as it can.
+ *
+ * Bun pools by default, so every create/close cycle here was opening a handful
+ * of sockets and closing them again — a few thousand times over one run. The
+ * server eventually stops handing them back promptly, which shows up as a
+ * single query stalling for half a minute and is reported by the runner as a
+ * timeout on whichever test was unlucky.
+ *
+ * A test does one thing at a time and needs exactly one socket.
+ */
+function openTestConnection(): Connection {
+  return new Connection(TEST_DATABASE_URL, new SQL(TEST_DATABASE_URL, { max: 1, idleTimeout: 1 }));
+}
+
 export async function testConnection(): Promise<Connection> {
   if (isSqlite) return new Connection(TEST_DATABASE_URL);
 
@@ -97,7 +113,7 @@ export async function testConnection(): Promise<Connection> {
   // and the create runs anyway.
   await step("close", () => closeQuietly(shared));
 
-  shared = await step("open", async () => new Connection(TEST_DATABASE_URL));
+  shared = await step("open", async () => openTestConnection());
 
   await step("drop", () => dropAllTables(shared as Connection));
 
