@@ -539,6 +539,11 @@ export interface BaseModelInstance<A> {
   clearChangesInformation(): void;
   attributeBeforeLastSave(attribute: keyof A & string): unknown;
   changes(): Record<string, [unknown, unknown]>;
+  changeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined;
+  savedChangeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined;
+  willSaveChangeTo(attribute: keyof A & string): boolean;
+  restoreAttribute(attribute: keyof A & string): void;
+  clearAttributeChanges(...attributes: (keyof A & string)[]): void;
   changed(): (keyof A & string)[];
   hasChanged(attribute?: keyof A & string): boolean;
   attributeWas(attribute: keyof A & string): unknown;
@@ -3408,6 +3413,70 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     hasChanged(attribute?: keyof A & string): boolean {
       return attribute ? this.changed().includes(attribute) : this.changed().length > 0;
+    }
+
+    /**
+     * One attribute's change, as `[was, is]`. Rails' `attribute_change`.
+     *
+     * Undefined when it did not change, which is what separates "was set to
+     * null" from "was not touched" — `changes()[name]` cannot tell those apart
+     * without the caller checking the key is present, and that check is the one
+     * people leave out.
+     */
+    changeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined {
+      return this.changes()[attribute];
+    }
+
+    /**
+     * The same, for the save that has already happened. Rails'
+     * `saved_change_to_attribute`.
+     *
+     * The one an `afterSave` callback wants. `changeToAttribute` is empty by
+     * then — the record has been written and has no pending changes — so a
+     * callback asking that question gets nothing and quietly does not run.
+     */
+    savedChangeToAttribute(attribute: keyof A & string): [unknown, unknown] | undefined {
+      return this[SAVED_CHANGES]?.[attribute];
+    }
+
+    /**
+     * Whether saving now would write this attribute. Rails'
+     * `will_save_change_to_attribute?`.
+     *
+     * For a `beforeSave` callback deciding whether to do work — regenerating a
+     * slug, re-encrypting a field — where the answer has to be about what is
+     * about to be written rather than what already was.
+     */
+    willSaveChangeTo(attribute: keyof A & string): boolean {
+      return attribute in this.changedAttributes();
+    }
+
+    /**
+     * Puts one attribute back. Rails' `restore_attribute!`.
+     *
+     * The narrow form of `restoreAttributes`, for undoing a single assignment
+     * without discarding everything else the caller has set on the record.
+     */
+    restoreAttribute(attribute: keyof A & string): void {
+      if (!(attribute in this.changedAttributes())) return;
+
+      this[ATTRIBUTES][attribute] = this[ORIGINAL][attribute];
+    }
+
+    /**
+     * Forgets that an attribute changed, without putting the value back.
+     * Rails' `clear_attribute_change`.
+     *
+     * For code that has written a column itself and does not want the next
+     * save to write it again — a counter updated in one statement, say. The
+     * value stays; only the record's memory of having changed it goes.
+     */
+    clearAttributeChanges(...attributes: (keyof A & string)[]): void {
+      const names = attributes.length > 0 ? attributes : Object.keys(this.changedAttributes());
+
+      for (const name of names) {
+        this[ORIGINAL][name as string] = this[ATTRIBUTES][name as string];
+      }
     }
 
     /** What it held when the record was last loaded or saved. */
