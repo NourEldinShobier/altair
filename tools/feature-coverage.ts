@@ -152,7 +152,7 @@ async function ourNames(packages: string[]): Promise<Set<string>> {
       const source = readFileSync(join(root, file), "utf8");
 
       for (const match of source.matchAll(
-        /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?([a-zA-Z][a-zA-Z0-9]*)\s*[(<:=]/g,
+        /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?\*?\s*([a-zA-Z][a-zA-Z0-9]*)\s*[(<:=]/g,
       )) {
         names.add(key(match[1] as string));
       }
