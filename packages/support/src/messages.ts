@@ -75,6 +75,65 @@ const SEPARATOR = ".";
  * Signs a payload so tampering is detectable. The payload stays readable —
  * signing is not encryption.
  */
+/**
+ * How long a message is good for. Rails' `expires_in` / `expires_at`.
+ *
+ * Worth setting on anything that travels: a signed download link, a password
+ * reset, a confirmation token. A signature says who made the message and says
+ * nothing about when, so without an expiry a token that turns up in a log, a
+ * referrer header, or somebody's browser history stays valid for as long as
+ * the secret does — which is normally the life of the application.
+ */
+export interface MessageOptions {
+  /** What this message is for. A message signed for one purpose is not another. */
+  purpose?: string;
+  /** Milliseconds from now. */
+  expiresIn?: number;
+  /** A specific moment. Wins over `expiresIn` if both are given. */
+  expiresAt?: Date;
+}
+
+/** Callers may still pass a bare purpose, which is what most of them want. */
+export type MessageOptionsOrPurpose = string | MessageOptions | undefined;
+
+function optionsFor(given: MessageOptionsOrPurpose): MessageOptions {
+  if (given === undefined) return {};
+
+  return typeof given === "string" ? { purpose: given } : given;
+}
+
+/** When a message stops being good, as epoch milliseconds, or null for never. */
+function expiryFor(options: MessageOptions): number | null {
+  if (options.expiresAt !== undefined) return options.expiresAt.getTime();
+  if (options.expiresIn !== undefined) return Date.now() + options.expiresIn;
+
+  return null;
+}
+
+/** The envelope both classes put around a value. */
+interface Envelope<T> {
+  value: T;
+  purpose: string | null;
+  /** Absent on a message with no expiry, so old messages still parse. */
+  exp?: number;
+}
+
+/**
+ * Whether an envelope is still acceptable for this purpose and this moment.
+ *
+ * Checked after the signature rather than before, so an attacker learns
+ * nothing from how long the answer took: an expired-but-valid message and a
+ * forged one both come back as null having done the same work.
+ */
+function envelopeAccepted(
+  envelope: { purpose: string | null; exp?: number },
+  purpose?: string,
+): boolean {
+  if ((envelope.purpose ?? undefined) !== purpose) return false;
+
+  return envelope.exp === undefined || envelope.exp > Date.now();
+}
+
 export class MessageVerifier {
   readonly #secret: Buffer;
 
@@ -85,8 +144,19 @@ export class MessageVerifier {
     this.#secret = Buffer.from(secret as string);
   }
 
-  generate(value: unknown, purpose?: string): string {
-    const payload = encode(JSON.stringify({ value, purpose: purpose ?? null }));
+  generate(value: unknown, options?: MessageOptionsOrPurpose): string {
+    const resolved = optionsFor(options);
+    const expiry = expiryFor(resolved);
+    const envelope: Envelope<unknown> = {
+      value,
+      purpose: resolved.purpose ?? null,
+      // Left off entirely when there is none, so a message generated before
+      // expiries existed still parses and a message with none is not one
+      // claiming to expire at the epoch.
+      ...(expiry === null ? {} : { exp: expiry }),
+    };
+    const payload = encode(JSON.stringify(envelope));
+
     return `${payload}${SEPARATOR}${this.#digestFor(payload)}`;
   }
 
@@ -141,12 +211,12 @@ export class MessageVerifier {
     if (!this.#matches(this.#digestFor(payload), signature)) return null;
 
     try {
-      const parsed = JSON.parse(decode(payload).toString("utf8")) as {
-        value: T;
-        purpose: string | null;
-      };
-      // A message signed for one purpose must not be accepted for another.
-      if ((parsed.purpose ?? undefined) !== purpose) return null;
+      const parsed = JSON.parse(decode(payload).toString("utf8")) as Envelope<T>;
+
+      // A message signed for one purpose must not be accepted for another, and
+      // one that has run out is no longer a message.
+      if (!envelopeAccepted(parsed, purpose)) return null;
+
       return parsed.value;
     } catch {
       return null;
@@ -197,11 +267,40 @@ export class MessageEncryptor {
     this.#key = material;
   }
 
-  encrypt(value: unknown, purpose?: string): string {
+  /**
+   * Older keys this encryptor will still read. Rails' `rotate`.
+   *
+   * The same reason the verifier has them: an encrypted cookie signed with the
+   * old key is still in somebody's browser, and a deploy that only knows the
+   * new key logs everybody out. The new key encrypts; the old ones are tried
+   * only when the new one fails to authenticate.
+   */
+  #rotations: MessageEncryptor[] = [];
+
+  rotate(key: Buffer | string): this {
+    this.#rotations.push(new MessageEncryptor(key));
+
+    return this;
+  }
+
+  /** Forgets the older keys. For a test, and for the day one is retired. */
+  clearRotations(): this {
+    this.#rotations = [];
+
+    return this;
+  }
+
+  encrypt(value: unknown, options?: MessageOptionsOrPurpose): string {
+    const resolved = optionsFor(options);
+    const expiry = expiryFor(resolved);
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", this.#key, iv);
 
-    const plaintext = JSON.stringify({ value, purpose: purpose ?? null });
+    const plaintext = JSON.stringify({
+      value,
+      purpose: resolved.purpose ?? null,
+      ...(expiry === null ? {} : { exp: expiry }),
+    });
     const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
     const tag = cipher.getAuthTag();
 
@@ -210,6 +309,22 @@ export class MessageEncryptor {
 
   /** Returns the value, or null when the message cannot be authenticated. */
   decrypt<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
+    const current = this.#decryptWith<T>(message, purpose);
+
+    if (current !== null) return current;
+
+    // Only after the current key has failed, so the common path costs nothing
+    // and a rotation is not a way to make decryption slower.
+    for (const older of this.#rotations) {
+      const value = older.decrypt<T>(message, purpose);
+
+      if (value !== null) return value;
+    }
+
+    return null;
+  }
+
+  #decryptWith<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
     if (!message) return null;
 
     const parts = message.split(SEPARATOR);
@@ -225,8 +340,10 @@ export class MessageEncryptor {
         decipher.final(),
       ]).toString("utf8");
 
-      const parsed = JSON.parse(plaintext) as { value: T; purpose: string | null };
-      if ((parsed.purpose ?? undefined) !== purpose) return null;
+      const parsed = JSON.parse(plaintext) as Envelope<T>;
+
+      if (!envelopeAccepted(parsed, purpose)) return null;
+
       return parsed.value;
     } catch {
       // A failed tag check throws; that is the intended signal, not an error
