@@ -28,3 +28,5 @@ export * from "./strings.js";
 export * from "./objects.js";
 export * from "./deprecation.js";
 export * from "./cache_local.js";
+export * from "./rescuable.js";
+export * from "./numbers.js";
