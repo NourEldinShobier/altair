@@ -509,6 +509,11 @@ const WAS_NEW = Symbol("altair.model.wasNew");
 
 export interface ModelOptions {
   primaryKey?: string;
+  /**
+   * The columns that identify one row, when the primary key alone does not.
+   * Rails' `query_constraints`.
+   */
+  queryConstraints?: string[];
   connection?: Connection;
 }
 
@@ -749,6 +754,21 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
   class BaseModel extends Callbacks {
     static tableName = tableName ?? "";
     static primaryKey = options.primaryKey ?? "id";
+
+    /**
+     * The columns that identify one row. Rails' `query_constraints`.
+     *
+     * Undefined means the primary key alone, which is nearly always right.
+     * Naming more is for a table where it is not: a legacy schema keyed on a
+     * pair, or a sharded one where `(tenant_id, id)` identifies a row and `id`
+     * alone identifies one per tenant.
+     *
+     * The consequence of getting this wrong is not a failed save. An UPDATE
+     * whose WHERE names too few columns matches the wrong row, or several, and
+     * writes to all of them — so a save against such a table without this
+     * silently edits somebody else's record and reports success.
+     */
+    static queryConstraints: string[] | undefined = options.queryConstraints;
     static connectionOverride: Connection | undefined = options.connection;
     static columnCache: string[] | undefined;
     static columnTypeCache: Record<string, ColumnType> | undefined;
@@ -1582,6 +1602,17 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     /** The column a name means here, following an alias if there is one. */
+    /**
+     * The columns a statement must name to reach exactly this row. Rails'
+     * `query_constraints_list`.
+     *
+     * The primary key when nothing else was declared, so every existing model
+     * behaves as it did and only a model that says otherwise pays for it.
+     */
+    static queryConstraintsList(): string[] {
+      return this.queryConstraints ?? [this.primaryKey];
+    }
+
     static resolveAttributeName(name: string): string {
       return this.attributeAliases[name] ?? name;
     }
@@ -4141,11 +4172,22 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         .map(([column], index) => `${connection.quote(column)} = ${connection.placeholder(index)}`)
         .join(", ");
 
+      // Every column that identifies the row, not just the primary key. Naming
+      // too few matches the wrong row — or several — and writes to all of
+      // them, which reports success and edits somebody else's record.
+      const identifying = klass.queryConstraintsList();
+      const where = identifying
+        .map(
+          (column, at) =>
+            `${connection.quote(column)} = ${connection.placeholder(entries.length + at)}`,
+        )
+        .join(" AND ");
+
       await connection.execute(
-        `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`,
+        `UPDATE ${connection.quote(klass.table)} SET ${assignments} WHERE ${where}`,
         [
           ...entries.map(([column, value]) => klass.encryptFor(column, value)),
-          this[ATTRIBUTES][klass.primaryKey],
+          ...identifying.map((column) => this[ATTRIBUTES][column]),
         ],
       );
 
@@ -4769,11 +4811,24 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         .map(([key], index) => `${connection.quote(key)} = ${connection.placeholder(index)}`)
         .join(", ");
       const bindings = entries.map(([, value]) => serialize(value, connection));
-      bindings.push(this[ATTRIBUTES][klass.primaryKey]);
 
-      let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(entries.length)}`;
+      // Every column that identifies the row, not just the primary key. On a
+      // table whose key is unique only within a tenant, naming one column
+      // matches every tenant's row and writes to all of them — a save that
+      // reports success having edited somebody else's record.
+      const identifying = klass.queryConstraintsList();
+
+      for (const column of identifying) bindings.push(this[ATTRIBUTES][column]);
+
+      let where = identifying
+        .map(
+          (column, at) =>
+            `${connection.quote(column)} = ${connection.placeholder(entries.length + at)}`,
+        )
+        .join(" AND ");
+
       if (locking) {
-        where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(entries.length + 1)}`;
+        where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(entries.length + identifying.length)}`;
         bindings.push(Number(readVersion ?? 0));
       }
 
@@ -4812,11 +4867,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const readVersion = Number(this[ORIGINAL][klass.lockingColumn] ?? 0);
 
       const result = await runCallbacks(this, "destroy", async () => {
-        const bindings: unknown[] = [this[ATTRIBUTES][klass.primaryKey]];
-        let where = `${connection.quote(klass.primaryKey)} = ${connection.placeholder(0)}`;
+        const identifying = klass.queryConstraintsList();
+        const bindings: unknown[] = identifying.map((column) => this[ATTRIBUTES][column]);
+        let where = identifying
+          .map((column, at) => `${connection.quote(column)} = ${connection.placeholder(at)}`)
+          .join(" AND ");
 
         if (locking) {
-          where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(1)}`;
+          where += ` AND ${connection.quote(klass.lockingColumn)} = ${connection.placeholder(bindings.length)}`;
           bindings.push(readVersion);
         }
 
@@ -5271,6 +5329,9 @@ export interface ModelClass<A extends object> {
 
   tableName: string;
   primaryKey: string;
+  /** Rails' `query_constraints`: the columns that identify one row. */
+  queryConstraints: string[] | undefined;
+  queryConstraintsList(): string[];
   connectionOverride: Connection | undefined;
   columnCache: string[] | undefined;
   databaseName: string | undefined;
