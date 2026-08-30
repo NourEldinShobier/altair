@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
-import { ADAPTERS, maxIdentifierLength } from "./capabilities.js";
+import { ADAPTERS, maxIdentifierLength, type Capabilities } from "./capabilities.js";
 import { columnTypeFor } from "./dump.js";
 import { columnSchemas, indexSchemas, type ColumnSchema } from "./introspect.js";
 
@@ -1017,6 +1017,460 @@ export class SchemaStatements {
 
   async tableExists(name: string): Promise<boolean> {
     return (await this.tables()).includes(name);
+  }
+
+  /**
+   * The name Rails gives a join table for two others.
+   *
+   * Sorted, so `createJoinTable("users", "posts")` and the same call with the
+   * arguments the other way round name the same table — a migration and the
+   * model that reads it are written by different people on different days, and
+   * neither should have to remember an order.
+   *
+   * A shared prefix is written once: `admin_posts` and `admin_users` join as
+   * `admin_posts_users`, not `admin_posts_admin_users`. Rails does this with a
+   * regular expression over a NUL-joined pair, and this is the same rule.
+   */
+  static joinTableName(first: string, second: string): string {
+    const [a, b] = [first, second].sort() as [string, string];
+    const joined = `${a}\0${b}`;
+
+    return joined.replace(/^(.*[_.])(.+)\0\1(.+)$/, "$1$2_$3").replace("\0", "_");
+  }
+
+  /**
+   * The table behind a `hasAndBelongsToMany`. Rails' `create_join_table`.
+   *
+   * No primary key, because a join row has no identity of its own — it is the
+   * pair. Both columns are NOT NULL, since a join row missing half of the pair
+   * joins nothing and is only ever a bug that outlived the code that wrote it.
+   */
+  async createJoinTable(
+    first: string,
+    second: string,
+    options: { tableName?: string; columnOptions?: ColumnOptions } = {},
+    define?: (t: TableDefinition) => void,
+  ): Promise<void> {
+    const name = options.tableName ?? SchemaStatements.joinTableName(first, second);
+    const columnOptions = { null: false, ...options.columnOptions };
+
+    await this.createTable(
+      name,
+      (t) => {
+        t.references(singularize(first), columnOptions);
+        t.references(singularize(second), columnOptions);
+        define?.(t);
+      },
+      { id: false },
+    );
+  }
+
+  /** Rails' `drop_join_table`. */
+  async dropJoinTable(
+    first: string,
+    second: string,
+    options: { tableName?: string; ifExists?: boolean } = {},
+  ): Promise<void> {
+    const name = options.tableName ?? SchemaStatements.joinTableName(first, second);
+
+    await this.dropTable(name, { ifExists: options.ifExists });
+  }
+
+  /**
+   * Renames an index. Rails' `rename_index`.
+   *
+   * Built rather than renamed in place, because only PostgreSQL has a direct
+   * ALTER INDEX ... RENAME and doing it the naive way works everywhere: create
+   * the new one with the same columns and uniqueness, then drop the old. Rails
+   * says the same thing in a comment on the same method.
+   *
+   * The new index is created first. Dropping first would leave the table
+   * unindexed for the length of the build, which on a large table is exactly
+   * when the queries that needed it are slowest.
+   */
+  async renameIndex(table: string, from: string, to: string): Promise<void> {
+    const existing = (await indexSchemas(this.connection, table)).find((one) => one.name === from);
+    if (!existing) return;
+
+    await this.addIndex(table, existing.columns, { name: to, unique: existing.unique });
+    await this.removeIndex(table, { name: from });
+  }
+
+  /** Whether an index of this name is there. Rails' `index_name_exists?`. */
+  async indexNameExists(table: string, name: string): Promise<boolean> {
+    return (await this.indexes(table)).includes(name);
+  }
+
+  /**
+   * Several columns in one go. Rails' `remove_columns`.
+   *
+   * One statement per column on the adapters that cannot batch, which is most
+   * of them, but one call in the migration — and one place for a rollback to
+   * put them back.
+   */
+  async removeColumns(table: string, ...names: string[]): Promise<void> {
+    for (const name of names) await this.removeColumn(table, name);
+  }
+
+  /** Whether a foreign key is there. Rails' `foreign_key_exists?`. */
+  async foreignKeyExists(
+    table: string,
+    options: { column?: string; to?: string; name?: string },
+  ): Promise<boolean> {
+    const wanted =
+      options.name ??
+      `fk_${table}_${options.column ?? (options.to ? `${singularize(options.to)}_id` : "")}`;
+
+    return (await this.foreignKeys(table)).some(
+      (one) => one === wanted || (options.column !== undefined && one.includes(options.column)),
+    );
+  }
+
+  /** Every foreign key on a table, by name. */
+  async foreignKeys(table: string): Promise<string[]> {
+    const connection = this.connection;
+
+    if (!connection.supportsForeignKeys) return [];
+
+    switch (connection.adapter) {
+      case "sqlite": {
+        // SQLite reports foreign keys positionally rather than by name, so the
+        // "name" is the column it is on. Nothing else is available, and an
+        // empty answer would make foreignKeyExists always false.
+        const rows = await connection.query<Row>(
+          `PRAGMA foreign_key_list(${connection.quote(table)})`,
+        );
+        return rows.map((row) => String(row.from));
+      }
+      case "postgres": {
+        const rows = await connection.query<Row>(
+          `SELECT conname AS name FROM pg_constraint
+           WHERE contype = 'f' AND conrelid = ${connection.placeholder(0)}::regclass`,
+          [table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "mysql": {
+        const rows = await connection.query<Row>(
+          `SELECT constraint_name AS name FROM information_schema.table_constraints
+           WHERE constraint_type = 'FOREIGN KEY' AND table_schema = DATABASE()
+             AND table_name = ${connection.placeholder(0)}`,
+          [table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+    }
+  }
+
+  /** Whether a check constraint is there. Rails' `check_constraint_exists?`. */
+  async checkConstraintExists(table: string, name: string): Promise<boolean> {
+    return (await this.constraintNames(table, "CHECK")).includes(name);
+  }
+
+  /** Whether a unique constraint is there. Rails' `unique_constraint_exists?`. */
+  async uniqueConstraintExists(table: string, name: string): Promise<boolean> {
+    if (await this.indexNameExists(table, name)) return true;
+
+    return (await this.constraintNames(table, "UNIQUE")).includes(name);
+  }
+
+  /** Drops a unique constraint. Rails' `remove_unique_constraint`. */
+  async removeUniqueConstraint(table: string, name: string): Promise<void> {
+    await this.removeIndex(table, { name });
+  }
+
+  /** Named constraints of one kind, for the adapters that report them. */
+  async constraintNames(table: string, kind: "CHECK" | "UNIQUE"): Promise<string[]> {
+    const connection = this.connection;
+
+    switch (connection.adapter) {
+      case "postgres": {
+        const rows = await connection.query<Row>(
+          `SELECT conname AS name FROM pg_constraint
+           WHERE contype = ${connection.placeholder(0)} AND conrelid = ${connection.placeholder(1)}::regclass`,
+          [kind === "CHECK" ? "c" : "u", table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "mysql": {
+        const rows = await connection.query<Row>(
+          `SELECT constraint_name AS name FROM information_schema.table_constraints
+           WHERE constraint_type = ${connection.placeholder(0)} AND table_schema = DATABASE()
+             AND table_name = ${connection.placeholder(1)}`,
+          [kind, table],
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "sqlite":
+        // SQLite keeps constraints in the table's original CREATE statement and
+        // has no catalog for them. Reading the DDL back and parsing it would be
+        // a SQL parser, so this reports none rather than half-answering.
+        return [];
+    }
+  }
+
+  /**
+   * Adds an EXCLUDE constraint. Rails' `add_exclusion_constraint`.
+   *
+   * PostgreSQL only, and this says so rather than emitting SQL the others will
+   * reject with a syntax error that names a column instead of the feature.
+   */
+  async addExclusionConstraint(
+    table: string,
+    expression: string,
+    options: { name?: string; using?: string; where?: string } = {},
+  ): Promise<void> {
+    this.#require("exclusionConstraints", "addExclusionConstraint");
+
+    const name = options.name ?? `excl_rails_${table}`;
+    const using = options.using ? ` USING ${options.using}` : "";
+    const where = options.where ? ` WHERE (${options.where})` : "";
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} ADD CONSTRAINT ${this.connection.quote(name)} ` +
+        `EXCLUDE${using} (${expression})${where}`,
+    );
+  }
+
+  /** Rails' `remove_exclusion_constraint`. */
+  async removeExclusionConstraint(table: string, name: string): Promise<void> {
+    this.#require("exclusionConstraints", "removeExclusionConstraint");
+
+    await this.connection.execute(
+      `ALTER TABLE ${this.connection.quote(table)} DROP CONSTRAINT ${this.connection.quote(name)}`,
+    );
+  }
+
+  /** Rails' `exclusion_constraint_exists?`. */
+  async exclusionConstraintExists(table: string, name: string): Promise<boolean> {
+    if (!this.connection.supportsExclusionConstraints) return false;
+
+    const rows = await this.connection.query<Row>(
+      `SELECT conname AS name FROM pg_constraint
+       WHERE contype = 'x' AND conrelid = ${this.connection.placeholder(0)}::regclass`,
+      [table],
+    );
+
+    return rows.some((row) => String(row.name) === name);
+  }
+
+  /**
+   * Creates an enum type. Rails' `create_enum`.
+   *
+   * PostgreSQL only. Elsewhere the same job is a CHECK constraint on a string
+   * column, which is why this refuses rather than silently doing something
+   * else: a schema that quietly means a different thing on another adapter is
+   * worse than one that will not load.
+   */
+  async createEnum(name: string, values: readonly string[]): Promise<void> {
+    this.#require("extensions", "createEnum");
+
+    const literals = values.map((one) => `'${one.replaceAll("'", "''")}'`).join(", ");
+
+    await this.connection.execute(
+      `CREATE TYPE ${this.connection.quote(name)} AS ENUM (${literals})`,
+    );
+  }
+
+  /** Rails' `drop_enum`. */
+  async dropEnum(name: string, options: { ifExists?: boolean } = {}): Promise<void> {
+    this.#require("extensions", "dropEnum");
+
+    await this.connection.execute(
+      `DROP TYPE ${options.ifExists ? "IF EXISTS " : ""}${this.connection.quote(name)}`,
+    );
+  }
+
+  /** Rails' `rename_enum`. */
+  async renameEnum(from: string, to: string): Promise<void> {
+    this.#require("extensions", "renameEnum");
+
+    await this.connection.execute(
+      `ALTER TYPE ${this.connection.quote(from)} RENAME TO ${this.connection.quote(to)}`,
+    );
+  }
+
+  /**
+   * Adds a value to an enum. Rails' `add_enum_value`.
+   *
+   * Position matters, because an enum's order is what comparisons and ORDER BY
+   * use — appending is not the same schema as inserting before an existing
+   * value, and a migration that got it wrong sorts wrongly ever after.
+   */
+  async addEnumValue(
+    name: string,
+    value: string,
+    options: { before?: string; after?: string; ifNotExists?: boolean } = {},
+  ): Promise<void> {
+    this.#require("extensions", "addEnumValue");
+
+    const where = options.before
+      ? ` BEFORE '${options.before.replaceAll("'", "''")}'`
+      : options.after
+        ? ` AFTER '${options.after.replaceAll("'", "''")}'`
+        : "";
+
+    await this.connection.execute(
+      `ALTER TYPE ${this.connection.quote(name)} ADD VALUE ${options.ifNotExists ? "IF NOT EXISTS " : ""}` +
+        `'${value.replaceAll("'", "''")}'${where}`,
+    );
+  }
+
+  /** Rails' `rename_enum_value`. */
+  async renameEnumValue(name: string, from: string, to: string): Promise<void> {
+    this.#require("extensions", "renameEnumValue");
+
+    await this.connection.execute(
+      `ALTER TYPE ${this.connection.quote(name)} RENAME VALUE ` +
+        `'${from.replaceAll("'", "''")}' TO '${to.replaceAll("'", "''")}'`,
+    );
+  }
+
+  /** Turns on a server extension. Rails' `enable_extension`. */
+  async enableExtension(name: string): Promise<void> {
+    this.#require("extensions", "enableExtension");
+
+    await this.connection.execute(`CREATE EXTENSION IF NOT EXISTS ${this.connection.quote(name)}`);
+  }
+
+  /** Rails' `disable_extension`. */
+  async disableExtension(name: string): Promise<void> {
+    this.#require("extensions", "disableExtension");
+
+    await this.connection.execute(`DROP EXTENSION IF EXISTS ${this.connection.quote(name)}`);
+  }
+
+  /** Every extension turned on. Rails' `extensions`. */
+  async extensions(): Promise<string[]> {
+    if (!this.connection.supportsExtensions) return [];
+
+    const rows = await this.connection.query<Row>("SELECT extname AS name FROM pg_extension");
+
+    return rows.map((row) => String(row.name));
+  }
+
+  /** Rails' `extension_enabled?`. */
+  async extensionEnabled(name: string): Promise<boolean> {
+    return (await this.extensions()).includes(name);
+  }
+
+  /**
+   * Empties a table without dropping it. Rails' `truncate`.
+   *
+   * SQLite has no TRUNCATE, and DELETE without a WHERE is what it does
+   * instead — the same outcome by a slower route, which is the right trade for
+   * a database that is usually a test fixture.
+   */
+  async truncateTable(table: string): Promise<void> {
+    const quoted = this.connection.quote(table);
+
+    await this.connection.execute(
+      this.connection.adapter === "sqlite" ? `DELETE FROM ${quoted}` : `TRUNCATE TABLE ${quoted}`,
+    );
+  }
+
+  /** Rails' `truncate_tables`. */
+  async truncateTables(...tables: string[]): Promise<void> {
+    for (const table of tables) await this.truncateTable(table);
+  }
+
+  /** Every view. Rails' `views`. */
+  async views(): Promise<string[]> {
+    const connection = this.connection;
+
+    switch (connection.adapter) {
+      case "sqlite": {
+        const rows = await connection.query<Row>(
+          "SELECT name FROM sqlite_master WHERE type = 'view'",
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "postgres": {
+        const rows = await connection.query<Row>(
+          "SELECT viewname AS name FROM pg_views WHERE schemaname = 'public'",
+        );
+        return rows.map((row) => String(row.name));
+      }
+      case "mysql": {
+        const rows = await connection.query<Row>(
+          `SELECT table_name AS name FROM information_schema.views
+           WHERE table_schema = DATABASE()`,
+        );
+        return rows.map((row) => String(row.name));
+      }
+    }
+  }
+
+  /** Rails' `view_exists?`. */
+  async viewExists(name: string): Promise<boolean> {
+    return (await this.views()).includes(name);
+  }
+
+  /**
+   * Everything a SELECT can read from. Rails' `data_sources`.
+   *
+   * Tables and views together, which is the question a model actually asks:
+   * it does not care which one it was told to read, only that reading works.
+   */
+  async dataSources(): Promise<string[]> {
+    return [...(await this.tables()), ...(await this.views())];
+  }
+
+  /** Rails' `data_source_exists?`. */
+  async dataSourceExists(name: string): Promise<boolean> {
+    return (await this.dataSources()).includes(name);
+  }
+
+  /** Every schema. Rails' `schema_names`. */
+  async schemaNames(): Promise<string[]> {
+    if (this.connection.adapter !== "postgres") return [];
+
+    const rows = await this.connection.query<Row>(
+      `SELECT nspname AS name FROM pg_namespace
+       WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'`,
+    );
+
+    return rows.map((row) => String(row.name));
+  }
+
+  /** Rails' `schema_exists?`. */
+  async schemaExists(name: string): Promise<boolean> {
+    return (await this.schemaNames()).includes(name);
+  }
+
+  /** Rails' `create_schema`. */
+  async createSchema(name: string, options: { ifNotExists?: boolean } = {}): Promise<void> {
+    this.#require("extensions", "createSchema");
+
+    await this.connection.execute(
+      `CREATE SCHEMA ${options.ifNotExists ? "IF NOT EXISTS " : ""}${this.connection.quote(name)}`,
+    );
+  }
+
+  /** Rails' `drop_schema`. */
+  async dropSchema(name: string, options: { ifExists?: boolean } = {}): Promise<void> {
+    this.#require("extensions", "dropSchema");
+
+    await this.connection.execute(
+      `DROP SCHEMA ${options.ifExists ? "IF EXISTS " : ""}${this.connection.quote(name)} CASCADE`,
+    );
+  }
+
+  /**
+   * Refuses a statement this adapter cannot run.
+   *
+   * Named rather than emitted and left to fail, because the database's own
+   * error for unsupported syntax points at a token — a stray parenthesis, a
+   * column that does not exist — and reads like a typo in the migration rather
+   * than a feature the server does not have.
+   */
+  #require(capability: keyof Capabilities, method: string): void {
+    if (this.connection.capabilities[capability]) return;
+
+    throw new UnsupportedSchemaChange(
+      method,
+      `${this.connection.adapterName} has no ${capability}, so ${method} cannot run there.`,
+    );
   }
 }
 
