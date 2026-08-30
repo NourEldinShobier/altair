@@ -400,6 +400,50 @@ export class Cable {
     ws.send(confirmationFrame(identifier));
   }
 
+  /**
+   * Drops one subscription on an open socket. Rails' `remove_subscription`.
+   *
+   * The public form of what an `unsubscribe` command does, for the times the
+   * server decides rather than the client: a channel the user no longer has
+   * access to after their role changed, a stream that was deleted. Without it
+   * the only way to stop delivering is to close the socket, which takes every
+   * other subscription with it and makes the client reconnect for no reason it
+   * can see.
+   */
+  async removeSubscription(
+    ws: CableSocket & { data: SocketData },
+    identifier: string,
+  ): Promise<void> {
+    await this.#unsubscribe(ws, identifier);
+  }
+
+  /**
+   * Drops every subscription on a socket, leaving it open. Rails'
+   * `unsubscribe_from_all`.
+   *
+   * What a permissions change calls for: the connection is still valid — the
+   * person is still signed in — and only what they may listen to has changed.
+   * Closing the socket instead would log them out of a chat to tell them they
+   * had left a room.
+   *
+   * Over a copy of the identifiers. A Map tolerates deletion during its own
+   * iteration, so this is not what makes it correct — it is so the count
+   * returned is what was there when the caller asked, rather than whatever
+   * survived.
+   */
+  async unsubscribeFromAll(ws: CableSocket & { data: SocketData }): Promise<number> {
+    const identifiers = Array.from(ws.data.subscriptions.keys());
+
+    for (const identifier of identifiers) await this.#unsubscribe(ws, identifier);
+
+    return identifiers.length;
+  }
+
+  /** The channels a socket is currently subscribed to, by identifier. */
+  subscriptionsOn(ws: CableSocket & { data: SocketData }): string[] {
+    return Array.from(ws.data.subscriptions.keys());
+  }
+
   async #unsubscribe(ws: CableSocket & { data: SocketData }, identifier: string): Promise<void> {
     const channel = ws.data.subscriptions.get(identifier);
     if (!channel) return;

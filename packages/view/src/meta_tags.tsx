@@ -195,6 +195,25 @@ export function cspMetaTag(nonce: string | undefined): Node {
 }
 
 /**
+ * Where the cable is, for the client script. Rails'
+ * `action_cable_meta_tag`.
+ *
+ * The browser client has to be told the URL and cannot work it out: the cable
+ * may be on another host, behind another scheme, or under a path the page's
+ * own URL says nothing about. Hard-coding it into the script instead means an
+ * application whose staging and production builds differ by one string, which
+ * is the kind of difference that is discovered in production.
+ *
+ * A relative path is left as it is rather than made absolute here. The client
+ * resolves it against the page, which is what makes one build work behind any
+ * host — and an absolute URL baked in at render time is the very thing this
+ * exists to avoid.
+ */
+export function actionCableMetaTag(url = "/cable"): Node {
+  return new RawHtml(`<meta name="action-cable-url" content="${escape(url)}" />`);
+}
+
+/**
  * A hidden field that makes a browser post UTF-8. Rails' `utf8_enforcer_tag`.
  *
  * Internet Explorer decided a form's encoding from its content, so a form of
