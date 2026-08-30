@@ -218,10 +218,38 @@ export class CookieJar {
   readonly #incoming: Record<string, string>;
   readonly #outgoing = new Map<string, CookieRecord>();
   readonly #secrets: Secrets | undefined;
+  /** Older secrets a cookie may still have been written with. */
+  readonly #rotations: Secrets[] = [];
 
-  constructor(request: Request, secrets?: Secrets) {
+  constructor(request: Request, secrets?: Secrets, rotations: readonly Secrets[] = []) {
     this.#incoming = parseCookieHeader(request.headers.get("cookie"));
     this.#secrets = secrets;
+    this.#rotations = [...rotations];
+  }
+
+  /**
+   * Accepts cookies written with an older secret. Rails' `cookies_rotations`.
+   *
+   * What makes changing `secret_key_base` possible at all. Every signed and
+   * encrypted cookie in every browser was written with the old one, so a
+   * deploy that only knows the new secret signs every session out at once —
+   * which looks to a user like the application logging them out for no reason,
+   * and to an operator like a login storm.
+   *
+   * Reading only. Anything written goes out under the current secret, so a
+   * rotation empties itself as people come back: every cookie read under an
+   * old secret is rewritten under the new one, and the old secret can be
+   * dropped once the longest cookie lifetime has passed.
+   */
+  rotate(secrets: Secrets): this {
+    this.#rotations.push(secrets);
+
+    return this;
+  }
+
+  /** The older secrets currently accepted. */
+  get rotations(): readonly Secrets[] {
+    return this.#rotations;
   }
 
   /** The value a client sent, or one set during this request. */
@@ -255,21 +283,53 @@ export class CookieJar {
 
   /** Readable by the client, but not forgeable. */
   get signed(): SecureJar {
-    const verifier = this.#requireSecrets().verifier("cookie");
+    const verifier = this.#requireSecrets().verifier("cookie") as MessageVerifier;
+    const older = this.#rotations.map((one) => one.verifier("cookie") as MessageVerifier);
+
     return new SecureJar(
       this,
-      (value, purpose) => (verifier as MessageVerifier).verified(value, purpose),
-      (value, purpose) => (verifier as MessageVerifier).generate(value, purpose),
+      (value, purpose) => {
+        const current = verifier.verified(value, purpose);
+
+        if (current !== null) return current;
+
+        // Only after the current secret has failed, so the common path costs
+        // nothing and a rotation is not a way to make every request slower.
+        for (const one of older) {
+          const value_ = one.verified(value, purpose);
+
+          if (value_ !== null) return value_;
+        }
+
+        return null;
+      },
+      // Written under the current secret whatever it was read with, so a
+      // rotation drains itself rather than needing a second deploy to finish.
+      (value, purpose) => verifier.generate(value, purpose),
     );
   }
 
   /** Opaque to the client and not forgeable. */
   get encrypted(): SecureJar {
-    const encryptor = this.#requireSecrets().encryptor("cookie");
+    const encryptor = this.#requireSecrets().encryptor("cookie") as MessageEncryptor;
+    const older = this.#rotations.map((one) => one.encryptor("cookie") as MessageEncryptor);
+
     return new SecureJar(
       this,
-      (value, purpose) => (encryptor as MessageEncryptor).decrypt(value, purpose),
-      (value, purpose) => (encryptor as MessageEncryptor).encrypt(value, purpose),
+      (value, purpose) => {
+        const current = encryptor.decrypt(value, purpose);
+
+        if (current !== null) return current;
+
+        for (const one of older) {
+          const value_ = one.decrypt(value, purpose);
+
+          if (value_ !== null) return value_;
+        }
+
+        return null;
+      },
+      (value, purpose) => encryptor.encrypt(value, purpose),
     );
   }
 
