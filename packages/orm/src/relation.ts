@@ -12,6 +12,7 @@
  * against the model's known columns.
  */
 
+import { createHash } from "node:crypto";
 import type { Connection, Row } from "./connection.js";
 import { checkWritable } from "./databases.js";
 // Used inside a method, long after both modules have finished loading.
@@ -1186,6 +1187,60 @@ export class Relation<T> implements PromiseLike<T[]> {
   #firstOrdered(): Relation<T> {
     if (this.#orders.length > 0) return this;
     return this.order(this.#source.primaryKey);
+  }
+
+  /**
+   * A key for this whole collection. Rails' `cache_key`.
+   *
+   *     const key = await Post.published().collectionCacheKey()
+   *
+   * How a list page gets one cache entry rather than none. The alternatives
+   * are both bad: no cache at all, or a cache per record that has to be
+   * reassembled on every request — which costs a read per row and gives back
+   * most of what caching was for.
+   *
+   * The key is the count and the newest timestamp, digested. Together those
+   * change whenever a member is added, removed, or edited, which is exactly
+   * when the rendered list stops being right. Count alone misses an edit;
+   * timestamp alone misses a deletion — the row that changed is gone, so the
+   * maximum can go *down* and a key built on it would repeat a key it had
+   * already used, serving a list with a record still in it.
+   */
+  async collectionCacheKey(timestampColumn = "updated_at"): Promise<string> {
+    const table = this.#source.tableName;
+    // One statement, and the maximum read raw. `maximum` returns a number, so
+    // a datetime column comes back NaN through it — which made the timestamp
+    // half of this key contribute nothing at all, and the key change only when
+    // the count did. Counting and taking the maximum together also costs one
+    // round trip rather than two.
+    const { sql, bindings } = this.toSql();
+    const quoted = this.connection.quote(timestampColumn);
+
+    let size = 0;
+    let newest: unknown = null;
+
+    try {
+      const rows = await this.connection.query<Row>(
+        `SELECT COUNT(*) AS collection_size, MAX(${quoted}) AS collection_newest FROM (${sql}) AS collection_source`,
+        bindings,
+      );
+
+      size = Number(rows[0]?.collection_size ?? 0);
+      newest = rows[0]?.collection_newest ?? null;
+    } catch {
+      // A table with no such column still deserves a key. Count alone is a
+      // weaker key, not a wrong one: it misses an edit, so a caller relying on
+      // it should name a column the table has.
+      size = await this.count();
+    }
+
+    const stamp = newest === null || newest === undefined ? "" : String(newest);
+    const digest = createHash("sha256")
+      .update(`${table}/${String(size)}-${stamp}`)
+      .digest("hex")
+      .slice(0, 16);
+
+    return `${table}/query-${digest}`;
   }
 
   async count(): Promise<number> {
