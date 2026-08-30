@@ -85,6 +85,7 @@ import {
   defaultForeignKey,
   preloadAssociation,
   relationFor,
+  type AssociationKind,
   type AssociationDefinition,
   type AssociationOptions,
   type InstanceLike,
@@ -2019,6 +2020,44 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           return relationFor(this, definition).first();
         },
       });
+    }
+
+    /**
+     * What this model's associations are, without knowing their names first.
+     * Rails' `reflect_on_all_associations`.
+     *
+     *     for (const one of Post.reflectOnAllAssociations("hasMany")) { ... }
+     *
+     * The question anything generic asks: a serializer deciding what to
+     * include, a fixture loader working out what to build first, a generator
+     * writing a form. Without it each of those has to be handed a list that
+     * then drifts from the model.
+     *
+     * Inherited associations are included, because a subclass has them.
+     */
+    static reflectOnAllAssociations(kind?: AssociationKind): AssociationDefinition[] {
+      const all = Object.values(this.associations);
+
+      return kind ? all.filter((one) => one.kind === kind) : all;
+    }
+
+    /**
+     * One association's definition, or undefined. Rails'
+     * `reflect_on_association`.
+     *
+     * Undefined rather than thrown, unlike `associationFor`. The two answer
+     * different questions: this one asks whether there is an association, and
+     * a caller asking that is prepared for no. `associationFor` is used where
+     * the association is required and a missing one is a mistake worth
+     * stopping on.
+     */
+    static reflectOnAssociation(name: string): AssociationDefinition | undefined {
+      return this.associations[name];
+    }
+
+    /** Every association name, in declaration order. */
+    static associationNames(): string[] {
+      return Object.keys(this.associations);
     }
 
     static associationFor(name: string): AssociationDefinition {
@@ -4222,6 +4261,9 @@ export interface ModelClass<A extends object> {
   destroyBy(conditions: Conditions): Promise<number>;
   deleteBy(conditions: Conditions): Promise<number>;
   strictLoadingByDefault: boolean;
+  reflectOnAllAssociations(kind?: AssociationKind): AssociationDefinition[];
+  reflectOnAssociation(name: string): AssociationDefinition | undefined;
+  associationNames(): string[];
   attributeAliases: Record<string, string>;
   aliasAttribute(alias: string, column: string): void;
   resolveAttributeName(name: string): string;
