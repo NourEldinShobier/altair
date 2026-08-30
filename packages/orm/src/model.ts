@@ -497,6 +497,8 @@ const PERSISTED = Symbol("altair.model.persisted");
  * question and nothing else could answer it.
  */
 const SAVED_CHANGES = Symbol("altair.model.savedChanges");
+/** What was assigned, before any cast, for a form that has to show it back. */
+const BEFORE_TYPE_CAST = Symbol("altair.model.beforeTypeCast");
 const STRICT_LOADING = Symbol("altair.model.strictLoading");
 /** Whether `destroy` has run, which "not persisted" alone cannot say. */
 const DESTROYED = Symbol("altair.model.destroyed");
@@ -516,6 +518,19 @@ export interface BaseModelInstance<A> {
   readonly isPersisted: boolean;
   readonly errors: ValidationErrors;
   attributes(): A;
+  /** Rails' `read_attribute`: a column's value, past any accessor. */
+  readAttribute(name: string): unknown;
+  /** Rails' `write_attribute`: sets it, past any accessor. */
+  writeAttribute(name: string, value: unknown): void;
+  /** Rails' `read_attribute_before_type_cast`: what was assigned. */
+  readAttributeBeforeTypeCast(name: string): unknown;
+  attributesBeforeTypeCast(): Record<string, unknown>;
+  /** Rails' `read_attribute_for_database`: the value as it would be written. */
+  readAttributeForDatabase(name: string): unknown;
+  attributesForDatabase(): Record<string, unknown>;
+  /** Rails' `attributes_for_inspect`: a short view, for a log line. */
+  attributesForInspect(limit?: number): Record<string, unknown>;
+  allAttributesForInspect(): Record<string, unknown>;
   changedAttributes(): Partial<A>;
   savedChanges(): Record<string, [unknown, unknown]>;
   hasAttribute(name: string): boolean;
@@ -696,6 +711,29 @@ export interface DeclaredAttribute {
   default?: unknown;
 }
 
+/**
+ * Records what a caller assigned, before the model changed it.
+ *
+ * Only where the model actually transforms on assignment — an enum turning a
+ * word into an integer, a normaliser trimming a string. A plain column keeps
+ * what was assigned as it was, so recording it would be storing the same value
+ * twice under two names.
+ */
+function rememberBeforeCast(record: object, attribute: string, value: unknown): void {
+  const holder = record as { [BEFORE_TYPE_CAST]?: Record<string, unknown> };
+  const held = holder[BEFORE_TYPE_CAST];
+
+  if (held) held[attribute] = value;
+  else holder[BEFORE_TYPE_CAST] = { [attribute]: value };
+}
+
+/** Cuts a value down to something a log line can carry. */
+function truncateForInspect(value: unknown, limit: number): unknown {
+  if (typeof value !== "string" || value.length <= limit) return value;
+
+  return `${value.slice(0, limit)}...`;
+}
+
 export function Model<A extends object>(tableName?: string, options: ModelOptions = {}) {
   class BaseModel extends Callbacks {
     static tableName = tableName ?? "";
@@ -809,6 +847,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           return labelFor(definition, this[ATTRIBUTES][attribute]);
         },
         set(this: BaseModel, value: unknown) {
+          rememberBeforeCast(this, attribute, value);
           this[ATTRIBUTES][attribute] = storedValueFor(definition, value);
         },
       });
@@ -870,6 +909,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           return this[ATTRIBUTES][attribute];
         },
         set(this: BaseModel, value: unknown) {
+          rememberBeforeCast(this, attribute, value);
           this[ATTRIBUTES][attribute] = normalizeValue(definition, value);
         },
       });
@@ -1314,6 +1354,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     declare [ATTRIBUTES]: Record<string, unknown>;
     declare [ORIGINAL]: Record<string, unknown>;
     declare [SAVED_CHANGES]: Record<string, [unknown, unknown]> | undefined;
+    /**
+     * What was assigned before any cast, keyed by column.
+     *
+     * Only populated for values a caller assigned: what came out of the
+     * database has no earlier form, and recording one would be recording the
+     * cast value twice under two names.
+     */
+    declare [BEFORE_TYPE_CAST]: Record<string, unknown> | undefined;
     declare [STRICT_LOADING]: boolean | undefined;
     declare [DESTROYED]: boolean | undefined;
 
@@ -3338,6 +3386,127 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       return this[PERSISTED];
     }
 
+    /**
+     * Reads a column's value directly. Rails' `read_attribute`.
+     *
+     * The way past an accessor the class defined. A model that overrides a
+     * column — `get name() { return super.name.trim() }` — has no `super` to
+     * reach through here, because the value lives in the attribute store
+     * rather than on a prototype. Without this, such an accessor calls itself
+     * and the process stops with a stack overflow rather than a message about
+     * the model.
+     *
+     * Follows an alias, so it reads the same column the accessor would.
+     */
+    readAttribute(name: string): unknown {
+      const klass = this.constructor as typeof BaseModel;
+
+      return this[ATTRIBUTES][klass.resolveAttributeName(name)];
+    }
+
+    /**
+     * Writes a column's value directly. Rails' `write_attribute`.
+     *
+     * The counterpart, and the one a custom setter needs for the same reason.
+     * Bypasses the accessor, so a normaliser or a cast declared on the class
+     * does not run — which is the point when the caller has already done that
+     * work and would otherwise do it twice.
+     */
+    writeAttribute(name: string, value: unknown): void {
+      const klass = this.constructor as typeof BaseModel;
+
+      this[ATTRIBUTES][klass.resolveAttributeName(name)] = value;
+    }
+
+    /**
+     * The value as it was assigned. Rails'
+     * `read_attribute_before_type_cast`.
+     *
+     * What a form re-render needs. Somebody picks a status the model stores as
+     * an integer, or types a name a normaliser trims; the validation fails,
+     * the field is rendered from the record, and it comes back holding the
+     * transformed value rather than what they entered — so they are told
+     * something is wrong about a box that now looks different from what they
+     * typed.
+     *
+     * Captures the transforms the model performs on assignment — an enum, a
+     * normaliser. A plain column keeps what was assigned as it was, so there
+     * is nothing earlier to remember, and this answers with the stored value.
+     * What came out of the database likewise has no earlier form.
+     */
+    readAttributeBeforeTypeCast(name: string): unknown {
+      const klass = this.constructor as typeof BaseModel;
+      const resolved = klass.resolveAttributeName(name);
+      const raw = this[BEFORE_TYPE_CAST];
+
+      return raw && resolved in raw ? raw[resolved] : this[ATTRIBUTES][resolved];
+    }
+
+    /** Everything as it was assigned, before casting. Rails' `attributes_before_type_cast`. */
+    attributesBeforeTypeCast(): Record<string, unknown> {
+      return { ...this[ATTRIBUTES], ...this[BEFORE_TYPE_CAST] };
+    }
+
+    /**
+     * One value as it would be written. Rails' `read_attribute_for_database`.
+     *
+     * Different from the cast value wherever the model stores something other
+     * than what it hands out — an enum kept as an integer, a serialized column
+     * kept as JSON. What a caller building its own statement needs, and what
+     * makes a hand-written query agree with what the ORM writes.
+     */
+    readAttributeForDatabase(name: string): unknown {
+      const klass = this.constructor as typeof BaseModel;
+
+      return this[ATTRIBUTES][klass.resolveAttributeName(name)];
+    }
+
+    /** Everything as it would be written. Rails' `attributes_for_database`. */
+    attributesForDatabase(): Record<string, unknown> {
+      return { ...this[ATTRIBUTES] };
+    }
+
+    /**
+     * A short view of the record, for a log line. Rails'
+     * `attributes_for_inspect`.
+     *
+     * Rails added this because logging a record with a large text column or a
+     * blob puts kilobytes into the log for every line that mentions it, and a
+     * log nobody can scroll is a log nobody reads. The default is the primary
+     * key alone; a model says what else is worth seeing.
+     */
+    static attributesForInspect: string[] | "all" = [];
+
+    /** Everything, for a console where the whole record is the point. */
+    allAttributesForInspect(): Record<string, unknown> {
+      return { ...this[ATTRIBUTES] };
+    }
+
+    /**
+     * What `inspect` shows, honouring the class's choice.
+     *
+     * A value longer than the limit is cut with an ellipsis rather than left
+     * whole: the point is a line somebody can read, and one very long value
+     * defeats that as thoroughly as ten short ones.
+     */
+    attributesForInspect(limit = 50): Record<string, unknown> {
+      const klass = this.constructor as typeof BaseModel;
+      const wanted =
+        klass.attributesForInspect === "all"
+          ? Object.keys(this[ATTRIBUTES])
+          : [klass.primaryKey, ...klass.attributesForInspect];
+
+      const shown: Record<string, unknown> = {};
+
+      for (const name of wanted) {
+        if (!(name in this[ATTRIBUTES])) continue;
+
+        shown[name] = truncateForInspect(this[ATTRIBUTES][name], limit);
+      }
+
+      return shown;
+    }
+
     attributes(): A {
       const klass = this.constructor as typeof BaseModel;
       const enums = Object.keys(klass.enums);
@@ -5236,6 +5405,8 @@ export interface ModelClass<A extends object> {
   associationNames(): string[];
   attributeAliases: Record<string, string>;
   declaredAttributes: Record<string, DeclaredAttribute>;
+  /** What `inspect` shows beyond the primary key. Rails' `attributes_for_inspect`. */
+  attributesForInspect: string[] | "all";
   /** Rails' `attribute`: a type, and optionally a default, for one attribute. */
   attribute(name: string, type: string, options?: ModelAttributeOptions): void;
   declaredTypeFor(name: string): Type | undefined;
