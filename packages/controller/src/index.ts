@@ -37,3 +37,4 @@ export * from "./request_body.js";
 export * from "./session_lifecycle.js";
 export * from "./redirect_safety.js";
 export * from "./query_parsing.js";
+export * from "./instrumentation.js";
