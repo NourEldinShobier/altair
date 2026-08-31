@@ -21,3 +21,4 @@ export * from "./deprecation_assertions.js";
 export * from "./mail_assertions.js";
 export * from "./fixture_set.js";
 export * from "./email_assertions.js";
+export * from "./parallelize.js";
