@@ -62,3 +62,4 @@ export * from "./predicate_builder.js";
 export * from "./schema_options.js";
 export * from "./connection_switching.js";
 export * from "./query_analysis.js";
+export * from "./schema_creation.js";

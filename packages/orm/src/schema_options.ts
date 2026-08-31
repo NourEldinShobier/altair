@@ -21,6 +21,8 @@
  * from long column names silently exceeds the identifier limit on MySQL.
  */
 
+import { singularize } from "@altair/support";
+
 /** Rails' `valid_column_definition_options`. */
 export const VALID_COLUMN_OPTIONS: readonly string[] = [
   "limit",
@@ -323,7 +325,7 @@ export function foreignKeyOptions(
   toTable: string,
   options: { name?: string; column?: string; primaryKey?: string; onDelete?: string } = {},
 ): { name: string; column: string; primaryKey: string; onDelete?: string } {
-  const column = options.column ?? `${singular(toTable)}_id`;
+  const column = options.column ?? `${singularize(toTable)}_id`;
 
   return {
     name: options.name ?? `fk_rails_${digest(`${fromTable}_${column}`)}`,
@@ -331,10 +333,6 @@ export function foreignKeyOptions(
     primaryKey: options.primaryKey ?? "id",
     ...(options.onDelete === undefined ? {} : { onDelete: options.onDelete }),
   };
-}
-
-function singular(table: string): string {
-  return table.endsWith("s") ? table.slice(0, -1) : table;
 }
 
 /**
