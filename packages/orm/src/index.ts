@@ -58,3 +58,4 @@ export * from "./schema_tasks.js";
 export * from "./association_target.js";
 export * from "./insert_all.js";
 export * from "./batch_loader.js";
+export * from "./predicate_builder.js";
