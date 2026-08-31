@@ -54,3 +54,4 @@ export * from "./log_subscriber.js";
 export * from "./class_attributes.js";
 export * from "./duration_arithmetic.js";
 export * from "./i18n_fallbacks.js";
+export * from "./autoloading.js";

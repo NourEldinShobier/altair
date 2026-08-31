@@ -241,14 +241,26 @@ export function clearConstants(): void {
   registry.clear();
 }
 
+/**
+ * Rails' `NameError`.
+ *
+ * Carries the constant separately from the message, the way Ruby's
+ * `NameError#name` does, because a rescue that has to match a *message* to
+ * find out which constant was missing matches loosely — and `Post` is a
+ * substring of `PostsController`.
+ */
 export class NameError extends Error {
-  constructor(name: string, known: readonly string[]) {
+  readonly constantName: string;
+
+  constructor(name: string, known: readonly string[], detail?: string) {
     super(
-      `No constant called ${JSON.stringify(name)}. Registered: ${known.join(", ") || "none"}. ` +
-        `Resolving a name against everything the process has loaded is how a string from a ` +
-        `request becomes a class.`,
+      detail ??
+        `No constant called ${JSON.stringify(name)}. Registered: ${known.join(", ") || "none"}. ` +
+          `Resolving a name against everything the process has loaded is how a string from a ` +
+          `request becomes a class.`,
     );
     this.name = "NameError";
+    this.constantName = name;
   }
 }
 
