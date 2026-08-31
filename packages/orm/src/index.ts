@@ -60,3 +60,4 @@ export * from "./insert_all.js";
 export * from "./batch_loader.js";
 export * from "./predicate_builder.js";
 export * from "./schema_options.js";
+export * from "./connection_switching.js";
