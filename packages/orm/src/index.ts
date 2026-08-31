@@ -50,3 +50,4 @@ export * from "./binds.js";
 export * from "./inheritance.js";
 export * from "./composite_key.js";
 export * from "./statement_cache.js";
+export * from "./type_map.js";
