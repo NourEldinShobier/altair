@@ -46,3 +46,4 @@ export * from "./scoping.js";
 export * from "./attribute_methods.js";
 export * from "./attribute_value.js";
 export * from "./rich_text_rendering.js";
+export * from "./binds.js";
