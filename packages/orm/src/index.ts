@@ -49,3 +49,4 @@ export * from "./rich_text_rendering.js";
 export * from "./binds.js";
 export * from "./inheritance.js";
 export * from "./composite_key.js";
+export * from "./statement_cache.js";
