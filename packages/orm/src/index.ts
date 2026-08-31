@@ -39,3 +39,4 @@ export * from "./schema_cache.js";
 export * from "./encryption_keys.js";
 export * from "./connection_handler.js";
 export * from "./reflection.js";
+export * from "./transaction_manager.js";
