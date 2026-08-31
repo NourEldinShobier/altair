@@ -10,3 +10,6 @@ export * from "./callbacks.js";
 export * from "./origin.js";
 export * from "./connection_lifecycle.js";
 export * from "./worker_pool.js";
+export * from "./postgresql_adapter.js";
+export * from "./server_socket.js";
+export * from "./test_defaults.js";
