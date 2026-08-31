@@ -52,3 +52,4 @@ export * from "./composite_key.js";
 export * from "./statement_cache.js";
 export * from "./type_map.js";
 export * from "./join_dependency.js";
+export * from "./pool_lifecycle.js";
