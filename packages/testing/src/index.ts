@@ -24,3 +24,4 @@ export * from "./email_assertions.js";
 export * from "./parallelize.js";
 export * from "./fixture_loading.js";
 export * from "./stubs.js";
+export * from "./controller_harness.js";
