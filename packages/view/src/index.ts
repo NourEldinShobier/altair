@@ -34,3 +34,4 @@ export * from "./digestor.js";
 export * from "./output_buffer.js";
 export * from "./lookup_context.js";
 export * from "./renderer.js";
+export * from "./view_context.js";
