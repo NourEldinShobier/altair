@@ -38,3 +38,4 @@ export * from "./session_lifecycle.js";
 export * from "./redirect_safety.js";
 export * from "./query_parsing.js";
 export * from "./instrumentation.js";
+export * from "./csrf_strategies.js";
