@@ -40,3 +40,4 @@ export * from "./encryption_keys.js";
 export * from "./connection_handler.js";
 export * from "./reflection.js";
 export * from "./transaction_manager.js";
+export * from "./migration_context.js";
