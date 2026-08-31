@@ -54,3 +54,4 @@ export * from "./type_map.js";
 export * from "./join_dependency.js";
 export * from "./pool_lifecycle.js";
 export * from "./database_configurations.js";
+export * from "./schema_tasks.js";
