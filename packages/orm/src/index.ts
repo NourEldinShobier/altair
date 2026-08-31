@@ -43,3 +43,4 @@ export * from "./transaction_manager.js";
 export * from "./migration_context.js";
 export * from "./future_result.js";
 export * from "./scoping.js";
+export * from "./attribute_methods.js";
