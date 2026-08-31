@@ -5,3 +5,4 @@ export * from "./polymorphic.js";
 export * from "./urls.js";
 export * from "./pattern.js";
 export * from "./automaton.js";
+export * from "./url_generation.js";
