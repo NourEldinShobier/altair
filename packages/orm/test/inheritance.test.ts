@@ -1,212 +1,378 @@
 /**
- * Single-table inheritance.
+ * Which class a row belongs to and what happens to its children, ported from
+ * `activerecord/test/cases/inheritance_test.rb` and the `dependent` cases in
+ * `activerecord/test/cases/associations/`.
  *
- * Mirrors activerecord/test/cases/inheritance_test.rb. The behaviour worth
- * having is that a query on the root hands back subclass instances — without
- * that, `type` is just a column people remember to check.
+ * Both features turn a value in a row into a decision about code, and both are
+ * places where trusting the row is the bug.
  */
 
-import { beforeEach, describe, expect, it } from "bun:test";
-import { Connection, setConnection } from "../src/connection.js";
-import { testConnection } from "./support/database.js";
-import { SchemaStatements } from "../src/schema.js";
-import { Model } from "../src/model.js";
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+  DEPENDENT_OPTIONS,
+  InvalidDependentOption,
+  UnknownStiClass,
+  abstractClass,
+  addDestroyCallbacks,
+  addTouchCallbacks,
+  applicationRecordClass,
+  checkDependentOptions,
+  clearPendingTouches,
+  computeType,
+  createSubclass,
+  descendsFromActiveRecord,
+  destroyAssociationAsyncJob,
+  destroyAssociations,
+  finderNeedsTypeCondition,
+  handleDependency,
+  pendingTouches,
+  primaryAbstractClass,
+  realInheritanceColumn,
+  registerStiClass,
+  resetInheritance,
+  setPrimaryAbstractClass,
+  stiClassFor,
+  stiClassNames,
+  stiName,
+  touchAttributesWithTime,
+  touchLater,
+  touchModelTimestampsUnless,
+  touchRecord,
+} from "../src/inheritance.js";
 
-interface VehicleAttributes {
-  id: number;
-  type: string;
-  name: string;
-  wheels: number;
-}
+class User {}
+class Admin extends User {}
 
-class Vehicle extends Model<VehicleAttributes>("vehicles") {
-  describe(): string {
-    return `a vehicle called ${String(this.name)}`;
-  }
-}
+afterEach(() => {
+  resetInheritance();
+  clearPendingTouches();
+});
 
-class Car extends Vehicle {
-  static {
-    this.inherit();
-  }
+describe("resolving a stored class name", () => {
+  it("finds one that was declared", () => {
+    registerStiClass("Admin", Admin);
 
-  override describe(): string {
-    return `a car called ${String(this.name)}`;
-  }
-}
+    expect(stiClassFor("Admin")).toBe(Admin);
+  });
 
-class Truck extends Vehicle {
-  static {
-    this.inherit();
-  }
-}
+  /**
+   * The column's contents came from the database — a backup restore, a
+   * migration, another service. Resolving an arbitrary string to a class is how
+   * a writable column becomes a way to instantiate anything loaded.
+   */
+  it("refuses one that was not", () => {
+    expect(() => stiClassFor("Whatever")).toThrow(UnknownStiClass);
+  });
 
-/** Two levels deep, because Rails' hierarchies are. */
-class PickupTruck extends Truck {
-  static {
-    this.inherit();
-  }
-}
+  it("says what it will accept", () => {
+    registerStiClass("Admin", Admin);
 
-let connection: Connection;
+    expect(() => stiClassFor("Whatever")).toThrow("Admin");
+  });
 
-beforeEach(async () => {
-  connection = await testConnection();
-  setConnection(connection);
+  it("says why", () => {
+    expect(() => stiClassFor("Whatever")).toThrow("must never resolve");
+  });
 
-  await new SchemaStatements(connection).createTable("vehicles", (t) => {
-    t.string("type");
-    t.string("name");
-    t.integer("wheels", { default: 4 });
+  it("lists what is declared", () => {
+    registerStiClass("Admin", Admin);
+    registerStiClass("User", User);
+
+    expect(stiClassNames()).toEqual(["Admin", "User"]);
+  });
+
+  it("writes a class's own name into the column", () => {
+    expect(stiName(Admin)).toBe("Admin");
+  });
+
+  it("falls back when the column holds nothing", () => {
+    expect(computeType(null, User)).toBe(User);
+    expect(computeType(undefined, User)).toBe(User);
+    expect(computeType("", User)).toBe(User);
+  });
+
+  it("resolves when it holds something", () => {
+    registerStiClass("Admin", Admin);
+
+    expect(computeType("Admin", User)).toBe(Admin);
+  });
+
+  it("still refuses an unknown name through computeType", () => {
+    expect(() => computeType("Whatever", User)).toThrow(UnknownStiClass);
+  });
+
+  it("makes a subclass for a name with no class of its own", () => {
+    const built = createSubclass(User, "Moderator");
+
+    expect(built.name).toBe("Moderator");
+    expect(stiClassFor("Moderator")).toBe(built);
   });
 });
 
-describe("declaring a subclass", () => {
-  it("shares the root's table", () => {
-    expect(Car.table).toBe("vehicles");
-    expect(PickupTruck.table).toBe("vehicles");
+describe("abstract classes", () => {
+  it("says which are abstract", () => {
+    expect(abstractClass({ abstract: true })).toBe(true);
+    expect(abstractClass({})).toBe(false);
   });
 
-  it("knows its root", () => {
-    expect(Car.stiRoot).toBe(Vehicle);
-    expect(PickupTruck.stiRoot).toBe(Vehicle);
+  it("remembers the one at the top", () => {
+    setPrimaryAbstractClass(User);
+
+    expect(primaryAbstractClass()).toBe(User);
+    expect(applicationRecordClass(User)).toBe(true);
+    expect(applicationRecordClass(Admin)).toBe(false);
   });
 
-  it("registers itself on the root", () => {
-    expect(Object.keys(Vehicle.descendants).sort()).toEqual(["Car", "PickupTruck", "Truck"]);
-  });
-});
-
-describe("writing", () => {
-  it("records the class name in the type column", async () => {
-    const car = await Car.create({ name: "Beetle" });
-    expect(car.type).toBe("Car");
-  });
-
-  it("records the root's own name too", async () => {
-    const vehicle = await Vehicle.create({ name: "Thing" });
-    expect(vehicle.type).toBe("Vehicle");
-  });
-
-  it("does not overwrite a type that was given", async () => {
-    const vehicle = await Vehicle.create({ name: "Odd", type: "Car" });
-    expect(vehicle.type).toBe("Car");
+  it("has none to start with", () => {
+    expect(primaryAbstractClass()).toBeUndefined();
   });
 });
 
-describe("reading", () => {
-  beforeEach(async () => {
-    await Car.create({ name: "Beetle" });
-    await Truck.create({ name: "Hauler", wheels: 6 });
-    await PickupTruck.create({ name: "Ranger" });
-    await Vehicle.create({ name: "Sled", wheels: 0 });
+describe("whether a query needs a type condition", () => {
+  it("says a model with its own table does not", () => {
+    expect(descendsFromActiveRecord({ superclassIsAbstract: true })).toBe(true);
   });
 
-  it("returns everything from the root", async () => {
-    expect(await Vehicle.count()).toBe(4);
+  it("says a subclass does not descend directly", () => {
+    expect(descendsFromActiveRecord({ superclassIsAbstract: false })).toBe(false);
   });
 
-  // The behaviour STI exists for.
-  it("builds each row as the class its type names", async () => {
-    const all = await Vehicle.all().order("id");
+  it("says an abstract class does not either", () => {
+    expect(descendsFromActiveRecord({ abstract: true, superclassIsAbstract: true })).toBe(false);
+  });
 
-    expect(all.map((vehicle) => vehicle.constructor.name)).toEqual([
-      "Car",
-      "Truck",
-      "PickupTruck",
-      "Vehicle",
+  /**
+   * Without one, `Admin.count` counts every user, and each row comes back as
+   * an Admin answering to admin methods.
+   */
+  it("makes a subclass narrow by type", () => {
+    expect(
+      finderNeedsTypeCondition({ superclassIsAbstract: false, hasInheritanceColumn: true }),
+    ).toBe(true);
+  });
+
+  it("does not make a base class narrow", () => {
+    expect(
+      finderNeedsTypeCondition({ superclassIsAbstract: true, hasInheritanceColumn: true }),
+    ).toBe(false);
+  });
+
+  it("does not narrow a table with no type column", () => {
+    expect(
+      finderNeedsTypeCondition({ superclassIsAbstract: false, hasInheritanceColumn: false }),
+    ).toBe(false);
+  });
+
+  it("names the column", () => {
+    expect(realInheritanceColumn({})).toBe("type");
+    expect(realInheritanceColumn({ inheritanceColumn: "kind" })).toBe("kind");
+  });
+
+  it("reports none where a model says it has none", () => {
+    expect(realInheritanceColumn({ inheritanceColumn: null })).toBeNull();
+  });
+});
+
+describe("what a dependent option may be", () => {
+  it("accepts the ones that exist", () => {
+    for (const option of DEPENDENT_OPTIONS) {
+      expect(checkDependentOptions(option, "hasMany")).toBe(option);
+    }
+  });
+
+  it("refuses one that does not", () => {
+    expect(() => checkDependentOptions("vaporise", "hasMany")).toThrow(InvalidDependentOption);
+  });
+
+  it("lists what it would accept", () => {
+    expect(() => checkDependentOptions("vaporise", "hasMany")).toThrow("nullify");
+  });
+
+  /**
+   * Rails accepts these on a belongs_to and does nothing, which reads as
+   * configured and is not.
+   */
+  it("refuses one a belongs_to cannot do", () => {
+    expect(() => checkDependentOptions("nullify", "belongsTo")).toThrow(InvalidDependentOption);
+    expect(() => checkDependentOptions("delete_all", "belongsTo")).toThrow(InvalidDependentOption);
+  });
+
+  it("still allows one a belongs_to can", () => {
+    expect(checkDependentOptions("destroy", "belongsTo")).toBe("destroy");
+  });
+});
+
+describe("what destroying a parent does", () => {
+  it("destroys children when told to", () => {
+    expect(handleDependency("destroy", "post_id")).toEqual({ action: "destroy" });
+  });
+
+  /**
+   * `delete_all` skips the children's own callbacks, which is its point and
+   * its hazard — a child that owns a file or children of its own leaves both
+   * behind. So it is a separate action rather than a speed setting.
+   */
+  it("deletes them without their callbacks when told that instead", () => {
+    expect(handleDependency("delete_all", "post_id")).toEqual({ action: "delete" });
+  });
+
+  it("clears the foreign key for a nullify", () => {
+    expect(handleDependency("nullify", "post_id")).toEqual({
+      action: "nullify",
+      foreignKey: "post_id",
+    });
+  });
+
+  it("refuses for a restriction", () => {
+    expect(handleDependency("restrict", "post_id")).toEqual({ action: "refuse" });
+  });
+
+  it("enqueues for an async destroy", () => {
+    expect(handleDependency("destroy_async", "post_id")).toEqual({ action: "enqueue" });
+  });
+
+  /**
+   * Checking restrictions after some children are already gone means a refused
+   * destroy has already deleted things — and the caller sees an exception and
+   * assumes nothing happened.
+   */
+  it("checks restrictions before it destroys anything", () => {
+    const actions = destroyAssociations([
+      { name: "comments", dependent: "destroy", foreignKey: "post_id" },
+      { name: "orders", dependent: "restrict", foreignKey: "post_id" },
     ]);
+
+    expect(actions.map((each) => each.name)).toEqual(["orders", "comments"]);
   });
 
-  it("calls the subclass's own methods", async () => {
-    const car = await Vehicle.find(1);
-    expect(car.describe()).toBe("a car called Beetle");
+  it("leaves out associations with no dependent option", () => {
+    const actions = destroyAssociations([
+      { name: "comments", dependent: "destroy", foreignKey: "post_id" },
+      { name: "views", foreignKey: "post_id" },
+    ]);
+
+    expect(actions.map((each) => each.name)).toEqual(["comments"]);
   });
 
-  it("limits a subclass to its own rows", async () => {
-    expect(await Car.count()).toBe(1);
-    expect((await Car.all()).map((car) => car.name)).toEqual(["Beetle"]);
+  it("does nothing for a record with no dependents", () => {
+    expect(destroyAssociations([])).toEqual([]);
   });
 
-  it("includes a subclass's own subclasses", async () => {
-    const trucks = await Truck.all().order("id");
-    expect(trucks.map((truck) => truck.name)).toEqual(["Hauler", "Ranger"]);
+  it("describes the job an async destroy enqueues", () => {
+    expect(destroyAssociationAsyncJob("Post", "comments", "post_id", 7)).toEqual({
+      owner: "Post",
+      association: "comments",
+      foreignKey: "post_id",
+      ownerId: 7,
+    });
   });
 
-  it("does not reach sideways across the hierarchy", async () => {
-    expect(await PickupTruck.count()).toBe(1);
-    expect((await PickupTruck.all())[0]!.name).toBe("Ranger");
-  });
-
-  it("filters within a subclass", async () => {
-    expect(await Truck.where({ wheels: 6 }).count()).toBe(1);
-    expect(await Car.where({ wheels: 6 }).count()).toBe(0);
-  });
-
-  it("finds by id within a subclass", async () => {
-    expect((await Car.find(1)).name).toBe("Beetle");
-    await expect(Car.find(2)).rejects.toThrow();
-  });
-
-  // The escape hatch for a query that has to see the whole table.
-  it("ignores the type column when unscoped", async () => {
-    expect(await Car.unscoped().count()).toBe(4);
+  /** A restriction that ran after the destroy would refuse what already happened. */
+  it("runs a restriction before and everything else after", () => {
+    expect(addDestroyCallbacks("restrict")).toEqual({ before: true, after: false });
+    expect(addDestroyCallbacks("destroy")).toEqual({ before: false, after: true });
   });
 });
 
-describe("a model with no hierarchy", () => {
-  interface WidgetAttributes {
-    id: number;
-    name: string;
-  }
+describe("touching", () => {
+  it("moves updated_at", () => {
+    const at = new Date("2026-06-15T12:00:00Z");
 
-  class Widget extends Model<WidgetAttributes>("widgets") {}
+    expect(touchAttributesWithTime([], at)).toEqual({ updated_at: at });
+  });
 
-  // A plain model must not grow a type column just because the feature exists.
-  it("writes no type column", async () => {
-    await new SchemaStatements(connection).createTable("widgets", (t) => t.string("name"));
+  /**
+   * One timestamp for all of them, or a record touched across two columns ends
+   * up with two times a millisecond apart — which reads as two edits.
+   */
+  it("gives every column the same time", () => {
+    const at = new Date("2026-06-15T12:00:00Z");
 
-    const widget = await Widget.create({ name: "Sprocket" });
-    expect((widget as unknown as Record<string, unknown>).type).toBeUndefined();
+    expect(touchAttributesWithTime(["last_seen_at"], at)).toEqual({
+      updated_at: at,
+      last_seen_at: at,
+    });
+  });
+
+  it("takes a different timestamp column", () => {
+    const at = new Date(0);
+
+    expect(touchAttributesWithTime([], at, ["modified_at"])).toEqual({ modified_at: at });
+  });
+
+  it("moves them on a save by default", () => {
+    expect(touchModelTimestampsUnless(true, ["title"])).toBe(true);
+  });
+
+  it("does not when the model turned them off", () => {
+    expect(touchModelTimestampsUnless(false, ["title"])).toBe(false);
+  });
+
+  /**
+   * An import that sets `updated_at` deliberately means it, and overwriting it
+   * throws away the only thing that said when the data was actually true.
+   */
+  it("does not when the record set the column itself", () => {
+    expect(touchModelTimestampsUnless(true, ["title", "updated_at"])).toBe(false);
   });
 });
 
-/**
- * The subclass that forgot to say it was one.
- *
- * Rails works out a hierarchy from the class definition; JavaScript gives no
- * hook for that, so a subclass has to call `inherit()`. Forgetting was silent
- * and looked entirely fine — `Car.create()` wrote no type, `Car.all()` handed
- * back every vehicle, and each row came back as the base class.
- *
- * Found by writing a probe that forgot the call, then noticing the results
- * were wrong rather than the probe.
- */
-describe("a subclass that never declared itself", () => {
-  class Bicycle extends Vehicle {}
+describe("queuing a touch", () => {
+  /**
+   * A hundred children touching one parent would otherwise write it a hundred
+   * times inside a transaction — a hundred row versions, a hundred index
+   * updates, and a lock held for all of it.
+   */
+  it("collapses several touches of one record into one", () => {
+    touchLater("Post/1", ["updated_at"]);
+    touchLater("Post/1", ["updated_at"]);
+    touchLater("Post/1", ["updated_at"]);
 
-  it("is refused rather than quietly behaving like the base class", () => {
-    expect(() => Bicycle.build({ name: "b" })).toThrow(/never called/);
+    expect(pendingTouches()).toBe(1);
   });
 
-  it("names the call that is missing", () => {
-    expect(() => Bicycle.build({ name: "b" })).toThrow(/inherit\(\)/);
+  it("keeps two records apart", () => {
+    touchLater("Post/1", ["updated_at"]);
+    touchLater("Post/2", ["updated_at"]);
+
+    expect(pendingTouches()).toBe(2);
   });
 
-  it("says what goes wrong without it", () => {
-    expect(() => Bicycle.build({ name: "b" })).toThrow(/returns every Vehicle/);
+  it("merges the columns of several touches", () => {
+    touchLater("Post/1", ["updated_at"]);
+    touchLater("Post/1", ["last_commented_at"]);
+
+    expect(touchRecord()[0]?.columns.sort()).toEqual(["last_commented_at", "updated_at"]);
   });
 
-  it("does not complain about the root itself", () => {
-    expect(() => Vehicle.build({ name: "v" })).not.toThrow();
+  /** The last change is the one a cache key should reflect. */
+  it("keeps the latest time", () => {
+    touchLater("Post/1", ["updated_at"], new Date(1000));
+    touchLater("Post/1", ["updated_at"], new Date(5000));
+
+    expect(touchRecord()[0]?.at).toEqual(new Date(5000));
   });
 
-  it("does not complain about one that did declare itself", () => {
-    expect(() => Car.build({ name: "c" })).not.toThrow();
+  it("empties as it hands them over", () => {
+    touchLater("Post/1", ["updated_at"]);
+
+    touchRecord();
+
+    expect(pendingTouches()).toBe(0);
   });
 
-  // Two levels down, where the declaration is on the class above.
-  it("does not complain about a grandchild that declared itself", () => {
-    expect(() => PickupTruck.build({ name: "p" })).not.toThrow();
+  it("hands back nothing when nothing was queued", () => {
+    expect(touchRecord()).toEqual([]);
+  });
+
+  it("describes the callbacks a touch association adds", () => {
+    expect(addTouchCallbacks("last_commented_at")).toEqual({
+      afterSave: ["last_commented_at"],
+      afterDestroy: ["last_commented_at"],
+    });
+  });
+
+  it("adds none for a bare touch", () => {
+    expect(addTouchCallbacks()).toEqual({ afterSave: [], afterDestroy: [] });
   });
 });

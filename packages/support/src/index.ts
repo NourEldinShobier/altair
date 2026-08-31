@@ -48,3 +48,6 @@ export * from "./sanitize_css.js";
 export * from "./typed_serializer.js";
 export * from "./xml_mini.js";
 export * from "./execution.js";
+export * from "./zoned_arithmetic.js";
+export * from "./cache_lookup.js";
+export * from "./log_subscriber.js";

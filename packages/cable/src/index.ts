@@ -8,3 +8,5 @@ export * from "./channel_testing.js";
 export * from "./identity.js";
 export * from "./callbacks.js";
 export * from "./origin.js";
+export * from "./connection_lifecycle.js";
+export * from "./worker_pool.js";
