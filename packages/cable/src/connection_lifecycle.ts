@@ -58,6 +58,44 @@ export interface CommandHandlers {
 
 export type CommandHook = (command: IncomingFrame) => Promise<void> | void;
 
+/** An around hook decides whether the rest of the command runs at all. */
+export type AroundCommandHook = (
+  command: IncomingFrame,
+  next: () => Promise<void>,
+) => Promise<void> | void;
+
+export interface CommandCallbacks {
+  before: CommandHook[];
+  after: CommandHook[];
+  around: AroundCommandHook[];
+}
+
+export function newCommandCallbacks(): CommandCallbacks {
+  return { before: [], after: [], around: [] };
+}
+
+/**
+ * Rails' `before_command`.
+ *
+ * Around each command rather than around the connection, because a connection
+ * lasts for hours and what these hooks exist for — a database connection, a
+ * logging tag, a current-attributes scope — is per unit of work. Set up once
+ * per connection instead, a database connection would be held for the whole
+ * session and a logging tag would describe the command that opened it rather
+ * than the one running.
+ */
+export function beforeCommand(callbacks: CommandCallbacks, hook: CommandHook): void {
+  callbacks.before.push(hook);
+}
+
+export function afterCommand(callbacks: CommandCallbacks, hook: CommandHook): void {
+  callbacks.after.push(hook);
+}
+
+export function aroundCommand(callbacks: CommandCallbacks, hook: AroundCommandHook): void {
+  callbacks.around.push(hook);
+}
+
 /**
  * Runs a command with anything registered around it. Rails'
  * `execute_command` with its callbacks.
@@ -65,18 +103,44 @@ export type CommandHook = (command: IncomingFrame) => Promise<void> | void;
  * A `before` hook that throws stops the command. That is what makes it a place
  * to put an authorisation check: a hook that could not stop anything would be
  * a log line.
+ *
+ * `after` runs in a `finally`, because a connection is long-lived — a database
+ * connection or a lock taken by `before` and released by `after` would
+ * otherwise leak for the rest of the session on the first command that
+ * raised, so the tenth failure exhausts the pool rather than the first.
+ *
+ * An around hook genuinely wraps: it is handed the rest of the command and
+ * decides whether to run it. Running them in sequence before the body instead
+ * would make "around" mean "before", and a hook that wanted to time the
+ * command, retry it, or refuse it could do none of those.
  */
 export async function executeCommand(
   command: IncomingFrame,
   handlers: CommandHandlers,
-  hooks: { before?: CommandHook[]; after?: CommandHook[]; around?: CommandHook[] } = {},
+  hooks: Partial<CommandCallbacks> = {},
 ): Promise<void> {
-  for (const hook of hooks.before ?? []) await hook(command);
-  for (const hook of hooks.around ?? []) await hook(command);
+  const run = async (): Promise<void> => {
+    for (const hook of hooks.before ?? []) await hook(command);
 
-  await handleChannelCommand(command, handlers);
+    try {
+      await handleChannelCommand(command, handlers);
+    } finally {
+      for (const hook of hooks.after ?? []) await hook(command);
+    }
+  };
 
-  for (const hook of hooks.after ?? []) await hook(command);
+  // Applied outermost-first, so the hook declared first wraps the rest — the
+  // order somebody reading the class top to bottom would expect.
+  let next = run;
+
+  for (const around of [...(hooks.around ?? [])].reverse()) {
+    const inner = next;
+    next = async () => {
+      await around(command, inner);
+    };
+  }
+
+  await next();
 }
 
 /** Routes one command to the right handler. Rails' `handle_channel_command`. */

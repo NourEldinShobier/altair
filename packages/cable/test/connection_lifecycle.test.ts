@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import type { CommandCallbacks } from "../src/connection_lifecycle.js";
 import {
   BEAT_INTERVAL_MS,
   Halted,
@@ -19,8 +20,12 @@ import {
   STALE_AFTER_MS,
   WriteBuffer,
   dispatchWebsocketMessage,
+  afterCommand,
+  aroundCommand,
+  beforeCommand,
   executeCommand,
   halt,
+  newCommandCallbacks,
   handleChannelCommand,
   handleClose,
   handleOpen,
@@ -428,5 +433,166 @@ describe("whether the socket came over TLS", () => {
     });
 
     expect(secureRequest(request)).toBe(false);
+  });
+});
+
+const frame: IncomingFrame = { command: "subscribe", identifier: "ch" };
+
+function handlers(body: () => void): CommandHandlers {
+  return {
+    subscribe: body,
+    unsubscribe: () => undefined,
+    message: () => undefined,
+  };
+}
+
+describe("the callbacks around one command", () => {
+  function record(order: string[]): CommandCallbacks {
+    const callbacks = newCommandCallbacks();
+    beforeCommand(callbacks, () => {
+      order.push("before");
+    });
+    afterCommand(callbacks, () => {
+      order.push("after");
+    });
+
+    return callbacks;
+  }
+
+  it("runs before and after around the body", async () => {
+    const order: string[] = [];
+
+    await executeCommand(
+      frame,
+      handlers(() => order.push("body")),
+      record(order),
+    );
+
+    expect(order).toEqual(["before", "body", "after"]);
+  });
+
+  /**
+   * A connection lasts for hours, so a database connection leaked by one
+   * failing command is leaked for the rest of the session — the tenth failure
+   * exhausts the pool rather than the first.
+   */
+  it("runs after even when the body throws", async () => {
+    const order: string[] = [];
+
+    await expect(
+      executeCommand(
+        frame,
+        handlers(() => {
+          throw new Error("boom");
+        }),
+        record(order),
+      ),
+    ).rejects.toThrow("boom");
+
+    expect(order).toEqual(["before", "after"]);
+  });
+
+  it("hands each hook the payload", async () => {
+    const seen: unknown[] = [];
+    const callbacks = newCommandCallbacks();
+    beforeCommand(callbacks, (command) => {
+      seen.push(command);
+    });
+
+    await executeCommand(
+      frame,
+      handlers(() => undefined),
+      callbacks,
+    );
+
+    expect(seen).toEqual([frame]);
+  });
+
+  it("waits for an async hook", async () => {
+    const order: string[] = [];
+    const callbacks = newCommandCallbacks();
+    beforeCommand(callbacks, async () => {
+      await Promise.resolve();
+      order.push("before");
+    });
+
+    await executeCommand(
+      frame,
+      handlers(() => order.push("body")),
+      callbacks,
+    );
+
+    expect(order).toEqual(["before", "body"]);
+  });
+
+  it("wraps with an around hook", async () => {
+    const order: string[] = [];
+    const callbacks = newCommandCallbacks();
+    aroundCommand(callbacks, async (_command: IncomingFrame, next: () => Promise<void>) => {
+      order.push("in");
+      await next();
+      order.push("out");
+    });
+
+    await executeCommand(
+      frame,
+      handlers(() => order.push("body")),
+      callbacks,
+    );
+
+    expect(order).toEqual(["in", "body", "out"]);
+  });
+
+  /** The order somebody reading the class top to bottom would expect. */
+  it("lets the first-declared around hook wrap the rest", async () => {
+    const order: string[] = [];
+    const callbacks = newCommandCallbacks();
+    aroundCommand(callbacks, async (_command: IncomingFrame, next: () => Promise<void>) => {
+      order.push("outer in");
+      await next();
+      order.push("outer out");
+    });
+    aroundCommand(callbacks, async (_command: IncomingFrame, next: () => Promise<void>) => {
+      order.push("inner in");
+      await next();
+      order.push("inner out");
+    });
+
+    await executeCommand(
+      frame,
+      handlers(() => order.push("body")),
+      callbacks,
+    );
+
+    expect(order).toEqual(["outer in", "inner in", "body", "inner out", "outer out"]);
+  });
+
+  /** An around hook that does not call next stops the command. */
+  it("lets an around hook refuse to continue", async () => {
+    const order: string[] = [];
+    const callbacks = newCommandCallbacks();
+    aroundCommand(callbacks, () => {
+      order.push("refused");
+    });
+
+    await executeCommand(
+      frame,
+      handlers(() => order.push("body")),
+      callbacks,
+    );
+
+    expect(order).toEqual(["refused"]);
+  });
+
+  it("runs the body with no callbacks at all", async () => {
+    const order: string[] = [];
+
+    await executeCommand(
+      frame,
+      handlers(() => order.push("body")),
+      newCommandCallbacks(),
+    );
+
+    expect(order).toEqual(["body"]);
   });
 });
