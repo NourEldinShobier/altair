@@ -30,3 +30,4 @@ export * from "./meta_tags.js";
 export * from "./record_fields.js";
 export * from "./collection.js";
 export * from "./sanitize_vendor.js";
+export * from "./digestor.js";
