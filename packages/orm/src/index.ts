@@ -56,3 +56,4 @@ export * from "./pool_lifecycle.js";
 export * from "./database_configurations.js";
 export * from "./schema_tasks.js";
 export * from "./association_target.js";
+export * from "./insert_all.js";
