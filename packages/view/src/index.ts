@@ -31,3 +31,4 @@ export * from "./record_fields.js";
 export * from "./collection.js";
 export * from "./sanitize_vendor.js";
 export * from "./digestor.js";
+export * from "./output_buffer.js";
