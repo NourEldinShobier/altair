@@ -22,6 +22,7 @@ import {
   setCallback,
   skipCallback,
 } from "@altair/support";
+import { UnsafeRedirect, sameHost } from "./redirect_safety.js";
 import { Parameters } from "./parameters.js";
 import { parseNestedParams } from "./nested_params.js";
 import { CookieJar } from "./cookies.js";
@@ -128,44 +129,16 @@ export interface RescueHandler {
   handler: (this: Controller, error: Error) => unknown | Promise<unknown>;
 }
 
-/** Raised when a redirect would leave the host, and nobody said it could. */
-export class UnsafeRedirect extends Error {
-  constructor(
-    readonly location: string,
-    readonly host: string,
-  ) {
-    super(
-      `Refusing to redirect to ${JSON.stringify(location)}: it leaves ${host}. Pass { allowOtherHost: true } if that is what you meant.`,
-    );
-    this.name = "UnsafeRedirect";
-  }
-}
-
 /**
  * Whether a redirect stays on this host.
  *
- * Relative is always fine — it cannot name a host. Absolute is fine when the
- * host matches. Everything else is somebody else's site.
+ * Delegates to `redirect_safety.ts`, which owns the parsing. The bypasses this
+ * has to survive — a backslash the browser reads as a slash, a
+ * protocol-relative `//host`, a userinfo `@` — are subtle enough that having
+ * two implementations means having one that is subtly wrong.
  */
 export function redirectAllowed(location: string, request: Request): boolean {
-  // A browser reads a backslash in a URL as a slash, so `/\evil.example` is
-  // `//evil.example` by the time it matters. Deciding on the raw string would
-  // be deciding about a URL the browser is not going to follow.
-  const normalized = location.replaceAll("\\", "/");
-
-  // Protocol-relative: no scheme, but a host all the same, and `new URL` with
-  // no base rejects it — so it would otherwise pass as "relative".
-  if (normalized.startsWith("//")) return false;
-
-  let target: URL;
-  try {
-    target = new URL(location);
-  } catch {
-    // No scheme, so it is relative and cannot leave the host.
-    return true;
-  }
-
-  return target.host === new URL(request.url).host;
+  return sameHost(location, new URL(request.url).host);
 }
 
 export class Controller extends Callbacks {
@@ -586,7 +559,7 @@ export class Controller extends Callbacks {
     // "back to where you were" is written everywhere — and how a link from
     // your own domain ends up delivering someone to a copy of your login page.
     if (!init.allowOtherHost && !redirectAllowed(location, this.request)) {
-      throw new UnsafeRedirect(location, new URL(this.request.url).host);
+      throw new UnsafeRedirect(location, [new URL(this.request.url).host]);
     }
 
     // Written only once the redirect is certain to happen.
