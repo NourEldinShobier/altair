@@ -180,12 +180,25 @@ export {
  * silently overwriting the other save, which is the entire point of the
  * `lock_version` column.
  */
+/**
+ * Rails' `StaleObjectError` — somebody else saved this row first.
+ *
+ * Says so explicitly, because zero rows updated has two readings and they need
+ * opposite responses: a stale record should be reloaded and the change
+ * reapplied, a missing one should stop. Reporting staleness as "not found"
+ * sends the reader looking for a deletion that never happened.
+ */
 export class StaleObjectError extends Error {
   constructor(
     readonly model: string,
     readonly id: unknown,
+    readonly action = "update",
   ) {
-    super(`Attempted to update a stale ${model} (id ${String(id)}).`);
+    super(
+      `Attempted to ${action} a stale ${model} (id ${String(id)}): the row's version is not the ` +
+        `one this record was loaded with, so somebody else saved it first. This is not a missing ` +
+        `record — reload and reapply the change.`,
+    );
     this.name = "StaleObjectError";
   }
 }

@@ -65,3 +65,4 @@ export * from "./query_analysis.js";
 export * from "./schema_creation.js";
 export * from "./query_intent.js";
 export * from "./preloader.js";
+export * from "./locking_and_timestamps.js";
