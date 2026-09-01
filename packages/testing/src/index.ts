@@ -26,3 +26,4 @@ export * from "./fixture_loading.js";
 export * from "./stubs.js";
 export * from "./controller_harness.js";
 export * from "./job_interruption.js";
+export * from "./system_testing.js";
