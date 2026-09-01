@@ -69,3 +69,4 @@ export * from "./locking_and_timestamps.js";
 export * from "./attribute_patterns.js";
 export * from "./model_conformance.js";
 export * from "./transaction_outcome.js";
+export * from "./database_tasks.js";
