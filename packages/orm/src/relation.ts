@@ -198,8 +198,15 @@ function joinClauses(clauses: WhereClause[]): { sql: string; bindings: unknown[]
   };
 }
 
-/** What a lock keeps out. Rails' `lock` and `lock("FOR SHARE")`. */
-export type LockMode = "update" | "share";
+/**
+ * What a lock keeps out. Rails' `lock` and `lock("FOR SHARE")`.
+ *
+ * The two weaker Postgres modes are here too: `no key update` blocks writes
+ * but lets another transaction take a foreign key against the row, which is
+ * what stops a `belongs_to` insert queueing behind an unrelated edit to its
+ * parent.
+ */
+export type LockMode = "update" | "share" | "no key update" | "key share";
 
 /**
  * The clause each adapter wants, or none at all.
@@ -218,6 +225,13 @@ function lockClause(adapter: string, mode: LockMode): string {
 
   if (mode === "share") {
     return adapter === "mysql" ? " LOCK IN SHARE MODE" : " FOR SHARE";
+  }
+
+  // The weaker modes are Postgres-only. MySQL is given the nearest thing it
+  // has rather than a syntax error: a lock that is stronger than asked for is
+  // correct and slower, which is the right way round to be wrong.
+  if (mode === "no key update" || mode === "key share") {
+    return adapter === "postgres" ? ` FOR ${mode.toUpperCase()}` : " FOR UPDATE";
   }
 
   return " FOR UPDATE";

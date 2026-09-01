@@ -6,3 +6,5 @@ export * from "./urls.js";
 export * from "./pattern.js";
 export * from "./automaton.js";
 export * from "./url_generation.js";
+export * from "./resource_scope.js";
+export * from "./pattern_visitors.js";

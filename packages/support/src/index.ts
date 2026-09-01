@@ -55,3 +55,8 @@ export * from "./class_attributes.js";
 export * from "./duration_arithmetic.js";
 export * from "./i18n_fallbacks.js";
 export * from "./autoloading.js";
+export * from "./isolation.js";
+export * from "./concern.js";
+export * from "./conversions.js";
+export * from "./extra_codecs.js";
+export * from "./json_encoding.js";
