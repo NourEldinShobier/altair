@@ -32,11 +32,11 @@ import {
   resetRotations,
   rotate,
   secretToken,
-  secureCompare,
   tokenAndOptions,
   tokenParamsFrom,
   userNameAndPassword,
 } from "../src/security_headers.js";
+import { secureCompare } from "@altair/support";
 
 afterEach(() => {
   resetRotations();
@@ -44,6 +44,11 @@ afterEach(() => {
 
 const basic = (name: string, password: string) => `Basic ${btoa(`${name}:${password}`)}`;
 
+/**
+ * `secureCompare` lives in `@altair/support` — these cases are here because
+ * this module is what depends on the property, and a change to it that broke
+ * authentication should fail beside authentication.
+ */
 describe("comparing a secret", () => {
   it("compares equal strings as equal", () => {
     expect(secureCompare("abc", "abc")).toBe(true);

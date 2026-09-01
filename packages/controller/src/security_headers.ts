@@ -21,41 +21,15 @@
  *   five-minute policy protects nobody who did not visit in the last five
  *   minutes.
  *
- * Comparisons here are constant-time where they touch a secret. A comparison
- * that returns early on the first differing byte leaks the position of that
- * byte, and a few thousand requests turn that into the value.
+ * Comparisons that touch a secret go through `@altair/support`'s
+ * `secureCompare` rather than a second implementation here. A comparison
+ * returning early on the first differing byte leaks the position of that byte,
+ * and a few thousand requests turn that into the value — and the version in
+ * `misc.ts` is the stronger one, hashing both sides when the lengths differ so
+ * the work is fixed even then.
  */
 
-// --- comparing secrets -----------------------------------------------------------
-
-/**
- * Rails' `secure_compare`.
- *
- * Fixed work regardless of where the strings differ, and the lengths are
- * folded in rather than checked first: an early length check tells an attacker
- * the length of the secret, which is most of the search space for a short one.
- * The fold also does real work on the bytes — the padding past the end of the
- * shorter string is a zero byte, so without it a secret and that same secret
- * plus a trailing NUL would compare equal.
- *
- * The loop runs to the *longer* length rather than the shorter one. That is a
- * timing property rather than a correctness one and no assertion here can see
- * it: stopping at the shorter length would return the same answers while
- * making the loop count reveal the shorter of the two lengths.
- */
-export function secureCompare(given: string, expected: string): boolean {
-  const a = new TextEncoder().encode(given);
-  const b = new TextEncoder().encode(expected);
-  const length = Math.max(a.length, b.length);
-
-  let difference = a.length ^ b.length;
-
-  for (let index = 0; index < length; index += 1) {
-    difference |= (a[index] ?? 0) ^ (b[index] ?? 0);
-  }
-
-  return difference === 0;
-}
+import { secureCompare } from "@altair/support";
 
 // --- basic authentication -----------------------------------------------------------
 
