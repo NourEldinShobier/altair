@@ -72,3 +72,4 @@ export * from "./transaction_outcome.js";
 export * from "./database_tasks.js";
 export * from "./connection_leasing.js";
 export * from "./model_naming.js";
+export * from "./signed_ids.js";
