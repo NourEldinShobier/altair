@@ -13,6 +13,7 @@
  */
 
 /** How the browser should treat it. */
+import { asciiFilename, utf8Filename } from "./multipart.js";
 import { ACCEPT_RANGES, partialResponse } from "./ranges.js";
 
 export type Disposition = "attachment" | "inline";
@@ -57,20 +58,25 @@ export function safeFilename(filename: string): string {
 /**
  * Builds the `Content-Disposition` value.
  *
- * A non-ASCII name gets both spellings: `filename=` with the unrepresentable
- * characters dropped, for anything old, and RFC 5987's `filename*=UTF-8''…`
- * for everything else. Sending only the second loses the name on old clients;
- * sending only the first turns every name that is not English into mojibake.
+ * A non-ASCII name gets both spellings: `filename=` transliterated, for
+ * anything old, and RFC 5987's `filename*=UTF-8''…` for everything else.
+ * Sending only the second loses the name on old clients; sending only the
+ * first turns every name that is not English into mojibake.
+ *
+ * The two halves are `multipart.ts`'s `asciiFilename` and `utf8Filename` —
+ * Rails names them separately because they are separately useful, and building
+ * them inline here would be a second implementation to keep in step.
  */
 export function contentDisposition(disposition: Disposition, filename: string | undefined): string {
   if (!filename) return disposition;
 
-  const safe = safeFilename(filename);
-  const ascii = safe.replaceAll(/[^\u0020-\u007e]/gu, "");
-  const fallback = ascii.trim() === "" ? "download" : ascii;
+  const ascii = asciiFilename(filename);
+  const parameters = [`filename="${ascii}"`];
 
-  const parameters = [`filename="${fallback}"`];
-  if (safe !== fallback) parameters.push(`filename*=UTF-8''${encodeURIComponent(safe)}`);
+  // Only when they differ: a client that understands `filename*` ignores
+  // `filename`, so sending both for a plain ASCII name is a longer header
+  // saying the same thing twice.
+  if (safeFilename(filename) !== ascii) parameters.push(`filename*=${utf8Filename(filename)}`);
 
   return `${disposition}; ${parameters.join("; ")}`;
 }
