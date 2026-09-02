@@ -16,7 +16,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 > > > > > > > 4ce9ed1 (feat(controller): reordering a middleware that is already in the stack)
 > > > > > > > \=======
-> > > > > > > | **Total** | **11,608** | 26,775 | 43.4% |
+> > > > > > > | **Total** | **11,624** | 26,775 | 43.4% |
 > > > > > > > 4ff04b9 (feat(controller): telling the browser what to fetch before the page exists)
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
@@ -43,7 +43,7 @@ one that needs no server.
 | `@altair/jobs`       | 268   | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 495   | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 244   | Config, boot lifecycle, request handler, credentials, logging              |
-| `@altair/mailer`     | 324   | Messages, TSX bodies, delivery methods                                     |
+| `@altair/mailer`     | 340   | Messages, TSX bodies, delivery methods                                     |
 
 ---
 
