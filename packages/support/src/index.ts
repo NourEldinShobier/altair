@@ -60,3 +60,4 @@ export * from "./concern.js";
 export * from "./conversions.js";
 export * from "./extra_codecs.js";
 export * from "./json_encoding.js";
+export * from "./event_reporter.js";
