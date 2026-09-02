@@ -218,6 +218,95 @@ export function caseSensitiveComparison(
   return `${quote(column)} = ${placeholder}`;
 }
 
+/** How a uniqueness check compares one condition. */
+export interface UniquenessComparisonOptions {
+  /** Whether two values differing only in case collide. */
+  caseSensitive?: boolean;
+  /** Which database this is for; MySQL needs help either way. */
+  adapter?: string;
+  quote?: (name: string) => string;
+  placeholder?: string;
+}
+
+/**
+ * The comparison a uniqueness check uses for the attribute it validates.
+ *
+ * Both directions need help, on opposite databases, and getting either wrong
+ * makes the option a lie:
+ *
+ * - **Case-insensitively**, `=` is exact on SQLite and PostgreSQL, so the
+ *   values have to be folded with `LOWER`.
+ * - **Case-sensitively**, `=` on MySQL is *not* exact: its default collation
+ *   (`utf8mb4_0900_ai_ci`) ignores case, so `bob@example.com` already matches
+ *   `Bob@example.com` there. `BINARY` forces the byte comparison the caller
+ *   asked for. Without it a model declaring `caseSensitive: true` behaves one
+ *   way in a SQLite test suite and the other way in MySQL production.
+ *
+ * Neither applies to a value that is not a string, and that guard is not
+ * tidiness: `LOWER` on a numeric column is a hard error on PostgreSQL
+ * (`function lower(integer) does not exist`). The column's own type is not to
+ * hand where the validator runs — it has the record, not the schema — but the
+ * value's is, and a value that is not a string has no case.
+ */
+export function uniquenessComparison(
+  column: string,
+  value: unknown,
+  {
+    caseSensitive = true,
+    adapter = "sqlite",
+    quote = (name) => `"${name}"`,
+    placeholder = "?",
+  }: UniquenessComparisonOptions = {},
+): string {
+  if (typeof value !== "string") return caseSensitiveComparison(column, quote, placeholder);
+
+  if (!caseSensitive) {
+    return caseInsensitiveComparison(column, "string", quote, placeholder);
+  }
+
+  if (adapter === "mysql") return `${quote(column)} = BINARY ${placeholder}`;
+
+  return caseSensitiveComparison(column, quote, placeholder);
+}
+
+/**
+ * Splits a uniqueness check's conditions into the ones compared as given and
+ * the one compared with case in mind.
+ *
+ * Here rather than inline in the probe so the split is testable on its own:
+ * whether the adapter reaches the comparison is exactly the kind of thing that
+ * is invisible on SQLite and wrong on MySQL, which is to say invisible until
+ * production.
+ */
+export function uniquenessConditions(
+  conditions: Record<string, unknown>,
+  comparison: { attribute: string; caseSensitive: boolean } | undefined,
+  { adapter, quote }: { adapter: string; quote: (name: string) => string },
+): { plain: Record<string, unknown>; fragments: { sql: string; value: unknown }[] } {
+  const plain: Record<string, unknown> = {};
+  const fragments: { sql: string; value: unknown }[] = [];
+
+  for (const [column, value] of Object.entries(conditions)) {
+    // The scope columns narrow the search and are compared as given. Only the
+    // validated attribute is compared with case in mind.
+    if (column !== comparison?.attribute) {
+      plain[column] = value;
+      continue;
+    }
+
+    fragments.push({
+      sql: uniquenessComparison(column, value, {
+        caseSensitive: comparison.caseSensitive,
+        adapter,
+        quote,
+      }),
+      value,
+    });
+  }
+
+  return { plain, fragments };
+}
+
 /**
  * Rails' `case_insensitive_comparison`.
  *

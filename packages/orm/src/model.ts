@@ -91,7 +91,9 @@ import {
   type NumericalityOptions,
   type ValidationOptions,
   type ValidationTarget,
+  type UniquenessComparison,
 } from "./validations.js";
+import { uniquenessConditions } from "./predicate_builder.js";
 import { fingerprintMatches, generateToken, readToken, type TokenDefinition } from "./token_for.js";
 import {
   PRELOAD_PREFIX,
@@ -4331,8 +4333,22 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const probe = {
         isPersisted: this.isPersisted,
         id: this[ATTRIBUTES][klass.primaryKey],
-        exists: async (conditions: Conditions, excludeId?: unknown) => {
-          let relation = klass.all().where(conditions);
+        exists: async (
+          conditions: Conditions,
+          excludeId?: unknown,
+          comparison?: UniquenessComparison,
+        ) => {
+          const { plain, fragments } = uniquenessConditions(conditions, comparison, {
+            adapter: klass.connection.adapter,
+            quote: (name) => klass.connection.quote(name),
+          });
+
+          let relation = klass.all();
+
+          for (const fragment of fragments) relation = relation.where(fragment.sql, fragment.value);
+
+          relation = relation.where(plain as Conditions);
+
           if (excludeId !== undefined)
             relation = relation.whereNot({ [klass.primaryKey]: excludeId });
           return await relation.exists();

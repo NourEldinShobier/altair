@@ -78,6 +78,7 @@ export * from "./rich_text_attachments.js";
 export * from "./password_algorithms.js";
 export * from "./arel.js";
 export * from "./connection_scoping.js";
+export * from "./generated_columns.js";
 export * from "./generated_methods.js";
 export * from "./association_builder.js";
 export * from "./pg_type_registry.js";
