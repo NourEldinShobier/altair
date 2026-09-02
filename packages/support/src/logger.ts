@@ -87,14 +87,58 @@ export const LEVEL_COLOURS: Record<Level, string> = {
 const RESET = "[0m";
 
 /**
+ * The SGR codes for the ways text can be set apart other than by colour.
+ * Rails' `ColorizeLogging::MODES`.
+ */
+export const SGR_MODES = {
+  bold: 1,
+  italic: 3,
+  underline: 4,
+} as const;
+
+export type SgrMode = keyof typeof SGR_MODES;
+
+/**
+ * One escape sequence for a set of modes. Rails' `mode_from`.
+ *
+ * One sequence rather than one per mode, because a single `[0m` is what
+ * reverses it — emitting `[1m[4m` needs the reader to know that
+ * one reset undoes both, and a line built by concatenating them is one edit
+ * away from resetting in the middle.
+ *
+ * The modes come out in a fixed order rather than whatever order the object
+ * happened to have, so the same request always produces the same bytes. A
+ * formatter whose output varies by key order is one no test can compare and
+ * no log can be diffed.
+ *
+ * Nothing at all when no mode is asked for: an empty `[m` is a sequence
+ * that means "reset", so emitting it for "no modes" would clear the colour
+ * that follows it.
+ */
+export function modeFrom(options: Partial<Record<SgrMode, boolean>> = {}): string {
+  const codes = (Object.keys(SGR_MODES) as SgrMode[])
+    .filter((mode) => options[mode] === true)
+    .map((mode) => SGR_MODES[mode]);
+
+  return codes.length === 0 ? "" : `[${codes.join(";")}m`;
+}
+
+/**
  * Wraps text in a colour. Rails' `colorize`.
  *
  * The reset is unconditional and comes last, so a line that ends mid-escape
  * cannot leave the terminal coloured for everything after it — which is what
  * makes a crashed process turn the rest of somebody's shell green.
+ *
+ * Modes go before the colour, because the reset that ends the run clears
+ * both and there is no way to end one without the other.
  */
-export function colorize(text: string, colour: string): string {
-  return `${colour}${text}${RESET}`;
+export function colorize(
+  text: string,
+  colour: string,
+  modes: Partial<Record<SgrMode, boolean>> = {},
+): string {
+  return `${modeFrom(modes)}${colour}${text}${RESET}`;
 }
 
 /**
