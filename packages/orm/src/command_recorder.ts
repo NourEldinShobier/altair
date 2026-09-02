@@ -209,6 +209,58 @@ export class CommandRecorder {
   dropJoinTable(first: string, second: string, options?: unknown): void {
     this.record("dropJoinTable", first, second, options);
   }
+
+  /** Rails' `change_column_comment`. */
+  changeColumnComment(table: string, column: string, options: CommentChange): void {
+    this.record("changeColumnComment", table, column, options);
+  }
+
+  /** Rails' `change_table_comment`. */
+  changeTableComment(table: string, options: CommentChange): void {
+    this.record("changeTableComment", table, options);
+  }
+}
+
+/**
+ * What a comment was and what it is becoming.
+ *
+ * Both halves, not just the new one, because a rollback has to put the old
+ * comment back and cannot read it from anywhere: the recorder is not connected
+ * to a database, and by the time the rollback runs the old comment is gone.
+ */
+export interface CommentChange {
+  from?: string | null;
+  to?: string | null;
+}
+
+/**
+ * A comment change, the other way round. Rails' `invert_change_column_comment`
+ * and `invert_change_table_comment`.
+ *
+ * Refused when either half is missing rather than inverted to "no comment".
+ * A rollback that blanked a comment nobody asked it to blank is a silent edit
+ * to the schema, and comments are exactly where the reason for a column lives.
+ */
+function invertComment(name: string, args: readonly unknown[], at: number): RecordedCommand {
+  const options = args[at] as CommentChange | undefined;
+
+  if (options?.from === undefined || options.to === undefined) {
+    throw new IrreversibleMigration(`${name} without from: and to:`);
+  }
+
+  const swapped: CommentChange = { from: options.to, to: options.from };
+
+  return { name, args: [...args.slice(0, at), swapped] };
+}
+
+/** Rails' `invert_change_column_comment`. */
+export function invertChangeColumnComment(args: readonly unknown[]): RecordedCommand {
+  return invertComment("changeColumnComment", args, 2);
+}
+
+/** Rails' `invert_change_table_comment`. */
+export function invertChangeTableComment(args: readonly unknown[]): RecordedCommand {
+  return invertComment("changeTableComment", args, 1);
 }
 
 /**
@@ -238,6 +290,11 @@ export function invert(command: RecordedCommand): RecordedCommand {
   if (name === "dropTable" && typeof args[1] !== "function") {
     throw new IrreversibleMigration("dropTable without a table definition");
   }
+
+  // A comment change carries its own inverse, but only if it said what the
+  // comment was before.
+  if (name === "changeColumnComment") return invertChangeColumnComment(args);
+  if (name === "changeTableComment") return invertChangeTableComment(args);
 
   if (IRREVERSIBLE.has(name)) throw new IrreversibleMigration(name);
 
