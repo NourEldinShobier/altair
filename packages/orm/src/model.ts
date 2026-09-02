@@ -93,7 +93,7 @@ import {
   type ValidationTarget,
   type UniquenessComparison,
 } from "./validations.js";
-import { uniquenessComparison } from "./predicate_builder.js";
+import { uniquenessConditions } from "./predicate_builder.js";
 import { fingerprintMatches, generateToken, readToken, type TokenDefinition } from "./token_for.js";
 import {
   PRELOAD_PREFIX,
@@ -4338,23 +4338,16 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
           excludeId?: unknown,
           comparison?: UniquenessComparison,
         ) => {
-          const folded = new Set(comparison?.caseInsensitive ?? []);
-          const plain: Conditions = {};
+          const { plain, fragments } = uniquenessConditions(conditions, comparison, {
+            adapter: klass.connection.adapter,
+            quote: (name) => klass.connection.quote(name),
+          });
+
           let relation = klass.all();
 
-          for (const [column, value] of Object.entries(conditions)) {
-            if (!folded.has(column)) {
-              plain[column] = value as Conditions[string];
-              continue;
-            }
+          for (const fragment of fragments) relation = relation.where(fragment.sql, fragment.value);
 
-            relation = relation.where(
-              uniquenessComparison(column, value, (name) => klass.connection.quote(name)),
-              value,
-            );
-          }
-
-          relation = relation.where(plain);
+          relation = relation.where(plain as Conditions);
 
           if (excludeId !== undefined)
             relation = relation.whereNot({ [klass.primaryKey]: excludeId });

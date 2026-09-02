@@ -240,9 +240,11 @@ export interface ValidationTarget {
   [key: string]: unknown;
 }
 
-/** Which columns a uniqueness check compares without regard to case. */
+/** How a uniqueness check compares the attribute it validates. */
 export interface UniquenessComparison {
-  caseInsensitive?: readonly string[];
+  /** The attribute being validated. The scope columns are compared plainly. */
+  attribute: string;
+  caseSensitive: boolean;
 }
 
 /** What a uniqueness check needs to reach the database. */
@@ -399,8 +401,7 @@ export async function runValidation(
     // the search, and folding its case would widen it instead. Rails draws the
     // same line, and it matters for a scope like a tenant slug that is
     // deliberately case-sensitive.
-    const comparison =
-      settings.caseSensitive === false ? { caseInsensitive: [attribute] } : undefined;
+    const comparison = { attribute, caseSensitive: settings.caseSensitive !== false };
 
     // A persisted record must not collide with itself, so it is excluded by id.
     const taken = await probe.exists(
