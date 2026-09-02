@@ -157,6 +157,57 @@ export function applyColumnAliases(
     .join(", ");
 }
 
+/**
+ * One model's attributes, taken back out of a row of aliased join columns.
+ * Rails' `extract_record`.
+ *
+ * The other half of `columnAliases`. A join selects `t0_r0`, `t0_r1`, … so
+ * that three tables' `id` columns do not collide; this turns those back into
+ * one record's own column names. Without it a joined row is a flat object
+ * nobody can build a record from.
+ *
+ * `primaryKey` is what makes a LEFT OUTER JOIN work. A row with no match on
+ * the outer side still has every one of that side's aliases — all null — and
+ * a record built from it is a ghost: an object with an id of null that
+ * `instanceof` says is a Post, that renders as a blank row in a list, and that
+ * raises on save. So when the primary key came back null there was no record,
+ * and nothing is returned.
+ */
+export function extractRecord(
+  row: Record<string, unknown>,
+  aliases: readonly { expression: string; as: string }[],
+  { primaryKey }: { primaryKey?: string } = {},
+): Record<string, unknown> | undefined {
+  const record: Record<string, unknown> = {};
+
+  for (const { expression, as } of aliases) {
+    // The name the model knows, not the alias the driver returned.
+    record[columnOf(expression)] = row[as];
+  }
+
+  if (
+    primaryKey !== undefined &&
+    (record[primaryKey] === null || record[primaryKey] === undefined)
+  ) {
+    return undefined;
+  }
+
+  return record;
+}
+
+/**
+ * The column half of a `table.column` expression.
+ *
+ * The last dot, not the first: a schema-qualified expression is
+ * `public.posts.id`, and taking the first would leave `posts.id` as the
+ * attribute name. No special case for an expression with no dot at all —
+ * `lastIndexOf` answers -1 and the slice starts at 0, which is the whole
+ * string, which is the right answer.
+ */
+function columnOf(expression: string): string {
+  return expression.slice(expression.lastIndexOf(".") + 1);
+}
+
 // --- the tree --------------------------------------------------------------
 
 /**
