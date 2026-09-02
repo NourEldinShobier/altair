@@ -37,6 +37,20 @@ const HTML_ESCAPE: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The two characters that are legal in JSON and illegal in JavaScript.
+ *
+ * U+2028 and U+2029 are line separators. JSON allows them unescaped inside a
+ * string; a JavaScript string literal does not, so JSON inlined into a
+ * `<script>` stops being parseable the moment a value contains one — a syntax
+ * error on the whole page, from a character somebody pasted out of a word
+ * processor.
+ */
+const JS_SEPARATOR_ESCAPE: Readonly<Record<string, string>> = {
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+/**
  * Rails' `escape_html_entities_in_json`.
  *
  * Applied to the *encoded* string rather than to the values, because the
@@ -46,6 +60,41 @@ const HTML_ESCAPE: Readonly<Record<string, string>> = {
  */
 export function htmlEscape(json: string): string {
   return json.replaceAll(/[<>&]/g, (character) => HTML_ESCAPE[character] ?? character);
+}
+
+/**
+ * Rails' `escape_js_separators_in_json`.
+ *
+ * Separate from the HTML escaping because the two answer different questions.
+ * `<` has to be escaped so a value cannot close the script tag it is sitting
+ * in; U+2028 has to be escaped so the script *parses at all*. An application
+ * that decided it does not need the first still needs the second.
+ */
+export function escapeJsSeparators(json: string): string {
+  return json.replaceAll(
+    /[\u2028\u2029]/g,
+    (character) => JS_SEPARATOR_ESCAPE[character] ?? character,
+  );
+}
+
+/**
+ * JSON on its way into a page. Rails' `json_escape` / `escape_json_responses`.
+ *
+ * Both escapes, always, because this is the one place where the answer is
+ * known: the string is about to be written into a document. Everywhere else it
+ * is a choice, and here it is not.
+ *
+ * Applied to the *encoded* string rather than to the values, and that is what
+ * makes it safe to apply twice: `\u003c` contains no `<`, so escaping an
+ * already-escaped document changes nothing. A caller unsure whether the
+ * encoder escaped can apply it anyway, which is the case this exists for.
+ *
+ * The result is not marked HTML-safe. The quotation marks are still quotation
+ * marks, so it is safe inside a script block and *not* safe inside an
+ * attribute — and marking it safe is how it ends up in one.
+ */
+export function encodeForTemplate(json: string): string {
+  return escapeJsSeparators(htmlEscape(json));
 }
 
 /**
