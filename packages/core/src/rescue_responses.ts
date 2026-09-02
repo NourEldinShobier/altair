@@ -41,6 +41,80 @@ export const RESCUE_RESPONSES: Readonly<Record<string, number>> = {
 };
 
 /**
+ * The error underneath a wrapper. Rails' `unwrapped_exception`.
+ *
+ * A template that raises wraps what was raised, so the outer error names the
+ * template and the inner one names the mistake. Classified by the wrapper,
+ * every one of them is a 500 — including the `RecordNotFound` that a partial
+ * raised, which is a 404 and was answered as a fault.
+ *
+ * The chain is walked to the first error that has a status, rather than to the
+ * innermost: an application that deliberately wraps something in a
+ * `BadRequest` means the `BadRequest`, and the driver error underneath is not
+ * the answer.
+ */
+export function unwrappedException(
+  error: unknown,
+  overrides: Readonly<Record<string, number>> = {},
+): unknown {
+  let at = error;
+
+  // Bounded rather than walked to the end. `cause` can be a cycle — an error
+  // caught and rethrown with itself, or with something that already names it —
+  // and a chain that long is a mistake either way: eight wrappers deep, the
+  // exception at the bottom is not what the request should answer with.
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (!(at instanceof Error)) return error;
+    if (overrides[at.name] !== undefined || RESCUE_RESPONSES[at.name] !== undefined) return at;
+    if (!(at.cause instanceof Error)) return error;
+
+    at = at.cause;
+  }
+
+  return error;
+}
+
+/**
+ * Whether an exception is one the framework has a status for. Rails'
+ * `rescue_response?`.
+ *
+ * The question a development error page asks before deciding how much to show:
+ * a classified exception is an expected outcome and gets its status, while an
+ * unclassified one is a bug and gets the trace.
+ */
+export function rescueResponse(
+  error: unknown,
+  overrides: Readonly<Record<string, number>> = {},
+): boolean {
+  const unwrapped = unwrappedException(error, overrides);
+
+  if (!(unwrapped instanceof Error)) return false;
+
+  return overrides[unwrapped.name] !== undefined || RESCUE_RESPONSES[unwrapped.name] !== undefined;
+}
+
+/**
+ * The message of the error itself, rather than of whatever wrapped it. Rails'
+ * `original_message`.
+ *
+ * A wrapper's message names the template and the line; the useful half is
+ * underneath it. Shown without unwrapping, an error page says a partial failed
+ * and never says why.
+ */
+export function originalMessage(error: unknown): string {
+  let at = error;
+
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (!(at instanceof Error)) return String(at);
+    if (!(at.cause instanceof Error)) return at.message;
+
+    at = at.cause;
+  }
+
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * The status an error should answer with, or 500.
  *
  * 500 is the default on purpose: an exception nobody has classified is a bug
@@ -51,9 +125,11 @@ export function statusForError(
   error: unknown,
   overrides: Readonly<Record<string, number>> = {},
 ): number {
-  if (!(error instanceof Error)) return 500;
+  const unwrapped = unwrappedException(error, overrides);
 
-  return overrides[error.name] ?? RESCUE_RESPONSES[error.name] ?? 500;
+  if (!(unwrapped instanceof Error)) return 500;
+
+  return overrides[unwrapped.name] ?? RESCUE_RESPONSES[unwrapped.name] ?? 500;
 }
 
 /** The short name of a status, for an error body that has nothing else to say. */
