@@ -74,6 +74,7 @@ export * from "./database_tasks.js";
 export * from "./connection_leasing.js";
 export * from "./database_errors.js";
 export * from "./model_naming.js";
+export * from "./model_packing.js";
 export * from "./signed_ids.js";
 export * from "./rich_text_attachments.js";
 export * from "./password_algorithms.js";
