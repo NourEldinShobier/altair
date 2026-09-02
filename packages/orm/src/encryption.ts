@@ -38,6 +38,33 @@ export interface EncryptedAttributeOptions {
    * old rows keep working while they are migrated.
    */
   supportUnencrypted?: boolean;
+  /**
+   * Folds the value to lower case before encrypting. Rails' `downcase:`.
+   *
+   * This exists because a deterministic column is looked up by encrypting the
+   * search value and comparing ciphertext, and the database can do nothing
+   * else: it has no plaintext to apply `LOWER` to. So `where({ email:
+   * "Bob@example.com" })` finds nothing at all when the row was stored as
+   * `bob@example.com` — not an error, not a warning, an empty result. Folding
+   * on the way in and on the way to a query is the only place the two can be
+   * made to agree.
+   *
+   * The cost is that the original case is gone. Rails offers `ignore_case:` to
+   * keep it in a second column; that is not here yet.
+   */
+  downcase?: boolean;
+}
+
+/** Raised when downcasing a column would lose information and buy nothing. */
+export class PointlessDowncase extends Error {
+  constructor() {
+    super(
+      "downcase only helps a deterministic column, where a lookup has to encrypt the search " +
+        "value and compare ciphertext. On a non-deterministic one it throws the original case " +
+        "away and enables nothing — use `normalizes` if the value should be stored folded.",
+    );
+    this.name = "PointlessDowncase";
+  }
 }
 
 /** Raised when a column cannot be decrypted and is not allowed to be plaintext. */
@@ -141,8 +168,13 @@ export function encryptValue(value: unknown, options: EncryptedAttributeOptions 
   // like it held something, and would break `where({ ssn: null })`.
   if (value === null || value === undefined) return value;
 
+  if (options.downcase && !options.deterministic) throw new PointlessDowncase();
+
   const material = requireKeys();
-  const plaintext = typeof value === "string" ? value : JSON.stringify(value);
+  const raw = typeof value === "string" ? value : JSON.stringify(value);
+  // A non-string was serialised to JSON above, and folding that would change
+  // the keys as well as the values — so only an actual string is folded.
+  const plaintext = options.downcase && typeof value === "string" ? value.toLowerCase() : raw;
 
   if (options.deterministic) return encryptDeterministic(plaintext, material.deterministic);
 
