@@ -80,3 +80,4 @@ export * from "./connection_scoping.js";
 export * from "./generated_methods.js";
 export * from "./association_builder.js";
 export * from "./pg_type_registry.js";
+export * from "./connection_url.js";
