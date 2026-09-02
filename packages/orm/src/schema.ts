@@ -11,6 +11,7 @@ import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
 import { ADAPTERS, maxIdentifierLength, type Capabilities } from "./capabilities.js";
 import { columnTypeFor } from "./dump.js";
+import { checkGeneratedColumn, generatedClause } from "./generated_columns.js";
 import { columnSchemas, indexSchemas, type ColumnSchema } from "./introspect.js";
 
 export type ColumnType =
@@ -32,6 +33,10 @@ export interface ColumnOptions {
   limit?: number;
   primaryKey?: boolean;
   unique?: boolean;
+  /** An expression the database computes instead. Rails' `as:`. */
+  as?: string;
+  /** Keeps a computed value on disk rather than recomputing it on read. */
+  stored?: boolean;
 }
 
 /** What the database does to a child row when its parent is deleted. */
@@ -216,6 +221,20 @@ export class TableDefinition {
   column(name: string, type: ColumnType, options: ColumnOptions = {}): this {
     this.columns.push({ name, type, ...options });
     return this;
+  }
+
+  /**
+   * A column the database computes. Rails' `t.virtual`.
+   *
+   * The type still has to be given, because the database does not infer what
+   * the expression produces — and a generated column with the wrong type
+   * compares and indexes as that wrong type, which is a bug that only shows up
+   * in the query plan.
+   */
+  virtual(name: string, options: ColumnOptions & { type?: ColumnType; as: string }): this {
+    const { type = "string", ...rest } = options;
+
+    return this.column(name, type, rest);
   }
 
   string(name: string, options?: ColumnOptions): this {
@@ -422,7 +441,15 @@ export class SchemaStatements {
     if (options.id !== false) parts.push(primaryKeyClause(this.connection));
 
     for (const column of table.columns) {
+      checkGeneratedColumn(column.name, column);
+
       let clause = `${this.connection.quote(column.name)} ${sqlType(this.connection, column)}`;
+      if (column.as !== undefined) {
+        clause += generatedClause(this.connection.adapter, column.name, {
+          as: column.as,
+          stored: column.stored,
+        });
+      }
       if (column.null === false) clause += " NOT NULL";
       if (column.unique) clause += " UNIQUE";
       if (column.default !== undefined)
@@ -461,7 +488,15 @@ export class SchemaStatements {
     options: ColumnOptions = {},
   ): Promise<void> {
     const column: Column = { name, type, ...options };
+    checkGeneratedColumn(name, options);
+
     let clause = `${this.connection.quote(name)} ${sqlType(this.connection, column)}`;
+    if (options.as !== undefined) {
+      clause += generatedClause(this.connection.adapter, name, {
+        as: options.as,
+        stored: options.stored,
+      });
+    }
     if (column.null === false) clause += " NOT NULL";
     if (column.default !== undefined)
       clause += ` DEFAULT ${literal(this.connection, column.default)}`;

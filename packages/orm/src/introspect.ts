@@ -18,7 +18,19 @@ export interface ColumnSchema {
   nullable: boolean;
   default: string | null;
   primaryKey: boolean;
+  /** Computed by the database rather than written. */
+  generated?: boolean;
 }
+
+/**
+ * `PRAGMA table_xinfo`'s `hidden` values, for a table we would dump.
+ *
+ * `0` is an ordinary column; `2` and `3` are generated ones, virtual and
+ * stored. `1` is a hidden column of a virtual table — an `fts5` index's
+ * internals — and belongs in nobody's schema dump.
+ */
+const SQLITE_VISIBLE = new Set([0, 2, 3]);
+const SQLITE_GENERATED = new Set([2, 3]);
 
 export interface IndexSchema {
   name: string;
@@ -106,17 +118,24 @@ export async function columnSchemas(
   table: string,
 ): Promise<ColumnSchema[]> {
   if (connection.adapter === "sqlite") {
-    const rows = await connection.query<Row>(`PRAGMA table_info(${connection.quote(table)})`);
+    // `table_xinfo` rather than `table_info`: the plain one omits generated
+    // columns entirely, so a table with one would dump without it and a
+    // `schema:load` would rebuild the table missing a column — with no error
+    // anywhere, because nothing ever said the column was there.
+    const rows = await connection.query<Row>(`PRAGMA table_xinfo(${connection.quote(table)})`);
 
-    return rows.map((row) => ({
-      name: String(row.name),
-      type: String(row.type),
-      // PRAGMA reports notnull as 0/1, and a primary key is implicitly not null.
-      nullable: Number(row.notnull) === 0 && Number(row.pk) === 0,
-      default:
-        row.dflt_value === null || row.dflt_value === undefined ? null : String(row.dflt_value),
-      primaryKey: Number(row.pk) > 0,
-    }));
+    return rows
+      .filter((row) => SQLITE_VISIBLE.has(Number(row.hidden ?? 0)))
+      .map((row) => ({
+        name: String(row.name),
+        type: String(row.type),
+        // PRAGMA reports notnull as 0/1, and a primary key is implicitly not null.
+        nullable: Number(row.notnull) === 0 && Number(row.pk) === 0,
+        default:
+          row.dflt_value === null || row.dflt_value === undefined ? null : String(row.dflt_value),
+        primaryKey: Number(row.pk) > 0,
+        generated: SQLITE_GENERATED.has(Number(row.hidden ?? 0)),
+      }));
   }
 
   const rows = await connection.query<Row>(
