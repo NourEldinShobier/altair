@@ -35,6 +35,26 @@ export interface Subscription {
   unsubscribe(): void;
 }
 
+/** Work whose start and finish are in different places. Rails' `Fanout::Handle`. */
+export interface EventHandle {
+  start: () => void;
+  finish: () => void;
+  finishWithValues: (name: string, payload: Record<string, unknown>) => void;
+}
+
+/**
+ * The handle for an event nobody is listening for. Rails' `NullHandle`.
+ *
+ * An object rather than `undefined`, so a caller never writes `handle?.finish()`
+ * — and the one place that forgets the `?` is a crash in production on the path
+ * that was supposed to be free.
+ */
+const nullHandle: EventHandle = {
+  start: () => undefined,
+  finish: () => undefined,
+  finishWithValues: () => undefined,
+};
+
 interface Registration {
   pattern: Pattern;
   subscriber: Subscriber<never>;
@@ -113,6 +133,78 @@ export class Notifications {
     }
   }
 
+  /**
+   * A started event, to be finished later. Rails' `build_handle`.
+   *
+   * `instrument` covers work that fits in a block, which is most of it. The
+   * cases it cannot cover are the ones worth measuring: a request that begins
+   * in one middleware and ends in another, a streaming response whose end is a
+   * callback, a job that suspends. Timed with a block, those either measure the
+   * wrong span — everything up to the first `await` — or are not measured at
+   * all, which is why the slow part of a request is so often the part with no
+   * instrumentation around it.
+   *
+   * A handle rather than a pair of loose calls, because the pair has to agree
+   * on the name, the payload and the clock, and two call sites that each hold
+   * half of that eventually disagree.
+   */
+  buildHandle<P extends Record<string, unknown>>(
+    name: string,
+    payload: P,
+    // The clock is a parameter so a test can measure a span it chose rather
+    // than one it hopes will be long enough, which is how a timing test comes
+    // to pass on a laptop and fail in CI.
+    now: () => number = () => performance.now(),
+  ): EventHandle {
+    // Nothing is listening: the handle still exists, so a caller never has to
+    // branch, and it does no work and allocates no timestamps.
+    if (!this.isSubscribed(name)) return nullHandle;
+
+    let startedAt: number | undefined;
+    const publish = this.#publish.bind(this);
+
+    return {
+      start() {
+        if (startedAt !== undefined) {
+          throw new Error(`This ${name} handle was already started.`);
+        }
+
+        startedAt = now();
+      },
+
+      finish() {
+        this.finishWithValues(name, payload);
+      },
+
+      /**
+       * Rails' `finish_with_values` — finish under a different name or payload.
+       *
+       * What the payload holds is usually only known at the end: the row count,
+       * the status, the error. Requiring it up front means either guessing or
+       * mutating the object the handle is holding, and a mutated payload is one
+       * a subscriber may already have read.
+       */
+      finishWithValues(finishedName: string, finishedPayload: Record<string, unknown>) {
+        if (startedAt === undefined) {
+          throw new Error(`This ${name} handle was not started.`);
+        }
+
+        const began = startedAt;
+        // Cleared first, so a double finish is refused rather than publishing
+        // the same event twice — which double-counts in every metric built on
+        // it.
+        startedAt = undefined;
+
+        publish({
+          name: finishedName,
+          payload: finishedPayload,
+          startedAt: began,
+          finishedAt: now(),
+        });
+      },
+    };
+  }
+
   /** Publishes an event that was timed elsewhere. */
   publish<P extends Record<string, unknown>>(name: string, payload: P, duration = 0): void {
     const finishedAt = performance.now();
@@ -141,6 +233,28 @@ function matches(pattern: Pattern, name: string): boolean {
 
 /** The bus the framework reports through. */
 export const notifications = new Notifications();
+
+/**
+ * Rails' `Notifications.notifier` — the bus, as a function.
+ *
+ * A function rather than the constant alone so a test can substitute one: a
+ * suite that subscribed to the shared bus and forgot to unsubscribe reports
+ * one test's queries against another's assertions, and the failure names the
+ * wrong test.
+ */
+let current = notifications;
+
+export function notifier(): Notifications {
+  return current;
+}
+
+export function setNotifier(replacement: Notifications): void {
+  current = replacement;
+}
+
+export function resetNotifier(): void {
+  current = notifications;
+}
 
 /**
  * Collects every event a block emits. Rails' `capture_notifications`.
