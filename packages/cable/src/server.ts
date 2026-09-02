@@ -13,6 +13,7 @@
  */
 
 import { connectionIdentifier, trackConnection } from "./identity.js";
+import { performWork } from "./worker_pool.js";
 import { UnauthorizedConnection, allowRequestOrigin, type OriginPolicy } from "./origin.js";
 import type { Broadcaster, CableSocket, ChannelContext, ConnectionContext } from "./channel.js";
 import { Channel, topicFor } from "./channel.js";
@@ -350,10 +351,10 @@ export class Cable {
 
         this.streams.removeEverywhere(ws);
 
-        for (const channel of ws.data.subscriptions.values()) {
+        for (const [identifier, channel] of ws.data.subscriptions) {
           channel.clearTimers();
           channel.stopAllStreams();
-          await channel.unsubscribed();
+          await this.#asWork(ws, identifier, () => channel.unsubscribed());
         }
         ws.data.subscriptions.clear();
       },
@@ -385,7 +386,7 @@ export class Cable {
     };
 
     const channel = new ChannelClass(context);
-    await channel.subscribed();
+    await this.#asWork(ws, identifier, () => channel.subscribed());
 
     if (channel.isRejected) {
       channel.clearTimers();
@@ -452,7 +453,7 @@ export class Cable {
 
     channel.clearTimers();
     channel.stopAllStreams();
-    await channel.unsubscribed();
+    await this.#asWork(ws, identifier, () => channel.unsubscribed());
     ws.data.subscriptions.delete(identifier);
   }
 
@@ -466,7 +467,39 @@ export class Cable {
     // than opening a path into a channel the client does not hold.
     if (!channel) return;
 
-    await channel.dispatch(data);
+    await this.#asWork(ws, identifier, () => channel.dispatch(data));
+  }
+
+  /**
+   * Runs channel code with the work hooks around it. Rails' `Worker#work`.
+   *
+   * Every path that ends up in an application's channel goes through here,
+   * because the hooks are where a database connection is checked out and
+   * returned. A dispatch that skipped them would run the action with no
+   * connection management at all — and `withDatabaseConnections` is registered
+   * as an `around` hook precisely so the connection goes back when the action
+   * throws.
+   *
+   * It is also what makes `currentWork()` answer, which is how a log line and
+   * an error report say whose connection they came from. Without it every one
+   * of them is anonymous, and a cable server's logs are a wall of lines with
+   * no way to tell one client from another.
+   *
+   * With no hooks registered this is the body and nothing else, so an
+   * application that never registers one is unaffected.
+   */
+  async #asWork(
+    ws: CableSocket & { data: SocketData },
+    identifier: string,
+    body: () => Promise<void>,
+  ): Promise<void> {
+    await performWork(
+      {
+        connectionId: connectionIdentifier(ws.data.connection) ?? "anonymous",
+        tags: [identifier],
+      },
+      body,
+    );
   }
 
   /** Closes a connection with a protocol disconnect frame. */

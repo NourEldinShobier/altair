@@ -26,17 +26,29 @@
  * channel must not stop the pool draining, and must not reach the socket loop.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /** What a worker is holding while it runs. Rails' `thread_mattr_accessor :connection`. */
 export interface WorkContext {
   connectionId: string;
   tags: string[];
 }
 
-let current: WorkContext | undefined;
+const workStore = new AsyncLocalStorage<WorkContext>();
 
-/** The connection whose work is running, for a logger or an error report. */
+/**
+ * The connection whose work is running, for a logger or an error report.
+ *
+ * Scoped to the async call chain rather than held in a variable. A cable
+ * server runs work for many sockets at once, and a module-level variable
+ * cannot survive that: two dispatches interleave, the first one to finish puts
+ * back what it found before the second one started, and from then on every
+ * line is tagged with somebody else's connection — or with nothing at all.
+ * That is not hypothetical; it is what happened the moment the server started
+ * calling this.
+ */
 export function currentWork(): WorkContext | undefined {
-  return current;
+  return workStore.getStore();
 }
 
 /** A logger that stamps every line with whose connection it came from. */
@@ -64,10 +76,10 @@ export function newTaggedLogger(
   return {
     tags: [...tags],
     info(message) {
-      write(`${prefix(current?.tags ?? [])} ${message}`.trim());
+      write(`${prefix(currentWork()?.tags ?? [])} ${message}`.trim());
     },
     error(message) {
-      write(`${prefix([...(current?.tags ?? []), "ERROR"])} ${message}`.trim());
+      write(`${prefix([...(currentWork()?.tags ?? []), "ERROR"])} ${message}`.trim());
     },
   };
 }
@@ -124,30 +136,29 @@ export function clearWorkHooks(): void {
  * resource that the failing action was using.
  */
 export async function performWork(context: WorkContext, body: () => Promise<void>): Promise<void> {
-  const held = current;
-  current = context;
-
-  try {
-    for (const hook of before) await hook(context);
-
-    let run = body;
-
-    // Applied outermost-first, so the first hook registered is the outermost
-    // — which is what lets a connection-management hook wrap everything a
-    // later hook does.
-    for (const hook of [...around].reverse()) {
-      const inner = run;
-      run = () => hook(context, inner);
-    }
-
-    await run();
-  } finally {
+  await workStore.run(context, async () => {
     try {
-      for (const hook of after) await hook(context);
+      for (const hook of before) await hook(context);
+
+      let run = body;
+
+      // Applied outermost-first, so the first hook registered is the outermost
+      // — which is what lets a connection-management hook wrap everything a
+      // later hook does.
+      for (const hook of [...around].reverse()) {
+        const inner = run;
+        run = () => hook(context, inner);
+      }
+
+      await run();
     } finally {
-      current = held;
+      // Outside the try that holds the body *and* the before hooks: a before
+      // hook that throws has still taken whatever the matching after hook
+      // returns, and skipping it there leaks exactly the resource the failure
+      // was about.
+      for (const hook of after) await hook(context);
     }
-  }
+  });
 }
 
 /**
