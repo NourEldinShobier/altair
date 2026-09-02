@@ -20,39 +20,14 @@
  * group closed in the wrong place.
  */
 
-import { type PatternNode, type NodeType, childrenOf, eachNode, toPath } from "./pattern.js";
+import { type PatternNode, childrenOf, eachNode, toPath } from "./pattern.js";
 
-export type VisitorMethods<T> = {
-  [K in NodeType as `visit_${K}`]?: (node: PatternNode, visit: (child: PatternNode) => T) => T;
-};
-
-export class UnhandledNodeType extends Error {
-  constructor(type: NodeType, visitor: string) {
-    super(
-      `${visitor} has no visit_${type}. Every traversal has to handle all eight node types: one ` +
-        `that quietly skipped a type would produce output that is almost right — a regexp ` +
-        `missing an optional group, a path missing a separator — which is harder to notice than ` +
-        `a crash.`,
-    );
-    this.name = "UnhandledNodeType";
-  }
-}
-
-/**
- * Rails' `Visitor#accept` — dispatch one node to its method.
- *
- * Refuses an unhandled type by name rather than falling through to a default.
- * A default is what turns a missing case into output that is nearly correct.
- */
-export function accept<T>(node: PatternNode, methods: VisitorMethods<T>, name = "This visitor"): T {
-  const method = methods[`visit_${node.type}` as keyof VisitorMethods<T>] as
-    | ((node: PatternNode, visit: (child: PatternNode) => T) => T)
-    | undefined;
-
-  if (method === undefined) throw new UnhandledNodeType(node.type, name);
-
-  return method(node, (child) => accept(child, methods, name));
-}
+// `accept` and its errors live in `pattern.ts`, with the node type they
+// dispatch on and the traversals that use them. Re-exported here because this
+// is where the reason for them is written down, and a second definition would
+// let two visitors disagree about what an unhandled node type does.
+export { UnhandledNodeType, accept } from "./pattern.js";
+export type { VisitorMethods } from "./pattern.js";
 
 // --- the shapes a node can have -----------------------------------------------------------
 

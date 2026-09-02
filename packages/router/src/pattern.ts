@@ -212,22 +212,59 @@ export function childrenOf(node: PatternNode): PatternNode[] {
   return [];
 }
 
-/** The pattern a tree came from. Rails' `Node#to_s`. */
-export function toPath(node: PatternNode): string {
-  switch (node.type) {
-    case "CAT":
-      return toPath(node.left as PatternNode) + toPath(node.right as PatternNode);
-    case "OR":
-      return (node.children ?? []).map(toPath).join("|");
-    case "GROUP":
-      return `(${toPath(node.left as PatternNode)})`;
-    case "STAR":
-      return `*${nodeName(node)}`;
-    case "SYMBOL":
-      return `:${nodeName(node)}`;
-    default:
-      return String(node.left ?? "");
+export type VisitorMethods<T> = {
+  [K in NodeType as `visit_${K}`]?: (node: PatternNode, visit: (child: PatternNode) => T) => T;
+};
+
+export class UnhandledNodeType extends Error {
+  constructor(type: NodeType, visitor: string) {
+    super(
+      `${visitor} has no visit_${type}. Every traversal has to handle all eight node types: one ` +
+        `that quietly skipped a type would produce output that is almost right — a regexp ` +
+        `missing an optional group, a path missing a separator — which is harder to notice than ` +
+        `a crash.`,
+    );
+    this.name = "UnhandledNodeType";
   }
+}
+
+/**
+ * Rails' `Visitor#accept` — dispatch one node to its method.
+ *
+ * Refuses an unhandled type by name rather than falling through to a default.
+ * A default is what turns a missing case into output that is nearly correct.
+ */
+export function accept<T>(node: PatternNode, methods: VisitorMethods<T>, name = "This visitor"): T {
+  const method = methods[`visit_${node.type}` as keyof VisitorMethods<T>] as
+    | ((node: PatternNode, visit: (child: PatternNode) => T) => T)
+    | undefined;
+
+  if (method === undefined) throw new UnhandledNodeType(node.type, name);
+
+  return method(node, (child) => accept(child, methods, name));
+}
+
+/**
+ * The pattern a tree came from. Rails' `Visitors::String`.
+ *
+ * Written as a visitor rather than a switch so that adding a node type breaks
+ * every traversal that has not been taught about it. A `default:` branch here
+ * would render an unknown node as its left child — a path that is *almost*
+ * right, which is the failure this whole layer exists to make impossible.
+ */
+export const pathVisitor: VisitorMethods<string> = {
+  visit_CAT: (node, visit) => visit(node.left as PatternNode) + visit(node.right as PatternNode),
+  visit_OR: (node, visit) => (node.children ?? []).map((child) => visit(child)).join("|"),
+  visit_GROUP: (node, visit) => `(${visit(node.left as PatternNode)})`,
+  visit_STAR: (node) => `*${nodeName(node)}`,
+  visit_SYMBOL: (node) => `:${nodeName(node)}`,
+  visit_SLASH: (node) => String(node.left ?? "/"),
+  visit_DOT: (node) => String(node.left ?? "."),
+  visit_LITERAL: (node) => String(node.left ?? ""),
+};
+
+export function toPath(node: PatternNode): string {
+  return accept(node, pathVisitor, "The path visitor");
 }
 
 /** The tree as Graphviz source, for `rails routes --expanded`. Rails' `to_dot`. */
@@ -445,26 +482,23 @@ function sourceOf(constraint: RegExp): string {
  * attacker, a literal segment containing a `+` or `(` becomes a quantifier or
  * a capture group and quietly changes what the route accepts.
  */
+export const regexpVisitor: VisitorMethods<string> = {
+  visit_CAT: (node, visit) => visit(node.left as PatternNode) + visit(node.right as PatternNode),
+  visit_OR: (node, visit) => `(?:${(node.children ?? []).map((child) => visit(child)).join("|")})`,
+  visit_GROUP: (node, visit) => `(?:${visit(node.left as PatternNode)})?`,
+  visit_STAR: (node) => `(${node.regexp ? sourceOf(node.regexp) : ".+"})`,
+
+  // `[^./?]+` rather than "anything but a separator": a segment that could
+  // contain a dot swallows the `.json` that an optional `(.:format)` group was
+  // there to catch, and every such request then renders HTML.
+  visit_SYMBOL: (node) => `(${sourceOf(node.regexp ?? DEFAULT_SEGMENT)})`,
+  visit_SLASH: () => "/",
+  visit_DOT: (node) => escapeLiteral(String(node.left ?? ".")),
+  visit_LITERAL: (node) => escapeLiteral(String(node.left ?? "")),
+};
+
 export function toRegexpSource(node: PatternNode): string {
-  switch (node.type) {
-    case "CAT":
-      return toRegexpSource(node.left as PatternNode) + toRegexpSource(node.right as PatternNode);
-    case "OR":
-      return `(?:${(node.children ?? []).map(toRegexpSource).join("|")})`;
-    case "GROUP":
-      return `(?:${toRegexpSource(node.left as PatternNode)})?`;
-    case "STAR":
-      return `(${node.regexp ? sourceOf(node.regexp) : ".+"})`;
-    case "SYMBOL":
-      // `[^./?]+` rather than "anything but a separator": a segment that could
-      // contain a dot swallows the `.json` that an optional `(.:format)` group
-      // was there to catch, and every such request then renders HTML.
-      return `(${sourceOf(node.regexp ?? DEFAULT_SEGMENT)})`;
-    case "SLASH":
-      return "/";
-    default:
-      return escapeLiteral(String(node.left ?? ""));
-  }
+  return accept(node, regexpVisitor, "The regexp visitor");
 }
 
 export interface CompiledPattern {
