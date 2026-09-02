@@ -82,3 +82,4 @@ export * from "./association_builder.js";
 export * from "./pg_type_registry.js";
 export * from "./connection_url.js";
 export * from "./encryption_properties.js";
+export * from "./reflection_chain.js";
