@@ -40,9 +40,54 @@ const SYNONYMS: Record<string, string> = {
   "application/json; charset=utf-8": "json",
 };
 
+/** What happens when the registry changes. Rails' `on_change`. */
+export type MimeChange = (format: string, registered: boolean) => void;
+
+const changeCallbacks: MimeChange[] = [];
+
+/**
+ * Rails' `on_change` — told when a format is registered or removed.
+ *
+ * A hook because the registry is read into other structures: a router's format
+ * constraint, a renderer's table, a cached Accept parse. Those are built once
+ * and would otherwise never learn about a format an initializer added, so the
+ * new format negotiates correctly in one place and 406s in another.
+ */
+export function onChange(callback: MimeChange): void {
+  changeCallbacks.push(callback);
+}
+
+/** Rails' `register_callback` — told only about registrations. */
+export function registerCallback(callback: (format: string) => void): void {
+  onChange((format, registered) => {
+    if (registered) callback(format);
+  });
+}
+
+export function resetMimeCallbacks(): void {
+  changeCallbacks.length = 0;
+}
+
 /** Registers a format, so an application can serve one Rails does not list. */
 export function registerMimeType(format: string, contentType: string): void {
   MIME_TYPES[format] = contentType;
+
+  for (const callback of changeCallbacks) callback(format, true);
+}
+
+/**
+ * Rails' `unregister` — takes a format back out.
+ *
+ * Mostly a test's concern, and it has to tell the callbacks too: a renderer
+ * that kept a format the registry no longer has answers with a content type
+ * nothing will now parse.
+ */
+export function unregisterMimeType(format: string): void {
+  if (!(format in MIME_TYPES)) return;
+
+  delete MIME_TYPES[format];
+
+  for (const callback of changeCallbacks) callback(format, false);
 }
 
 /** The format a content type names, or undefined. */
@@ -69,25 +114,130 @@ export interface AcceptEntry {
 export function parseAccept(header: string | null): AcceptEntry[] {
   if (!header) return [];
 
-  return (
-    header
-      .split(",")
-      .map((part) => {
-        const [type, ...parameters] = part.trim().split(";");
-        const quality = parameters
-          .map((parameter) => /^\s*q=([\d.]+)\s*$/.exec(parameter)?.[1])
-          .find(Boolean);
+  const entries = header
+    .split(",")
+    .map((part) => {
+      const [type, ...parameters] = part.trim().split(";");
+      const quality = parameters
+        .map((parameter) => /^\s*q=([\d.]+)\s*$/.exec(parameter)?.[1])
+        .find(Boolean);
 
-        return {
-          type: (type ?? "").trim().toLowerCase(),
-          quality: quality === undefined ? 1 : Number(quality),
-        };
-      })
-      .filter((entry) => entry.type && !Number.isNaN(entry.quality) && entry.quality > 0)
-      // Stable, so equal qualities keep the order they were written in — which
-      // is the order the client meant.
-      .sort((a, b) => b.quality - a.quality)
-  );
+      return {
+        type: (type ?? "").trim().toLowerCase(),
+        quality: quality === undefined ? 1 : Number(quality),
+      };
+    })
+    .filter((entry) => entry.type && !Number.isNaN(entry.quality) && entry.quality > 0)
+    // A family is expanded here rather than at negotiation, so everything
+    // downstream sees a list of concrete types and nothing has to know that
+    // `text/*` was ever written.
+    .flatMap((entry) => {
+      const family = parseTrailingStar(entry.type);
+
+      if (family === undefined) return [entry];
+
+      return family.map((format) => ({
+        type: MIME_TYPES[format] as string,
+        quality: entry.quality,
+      }));
+    })
+    // Stable, so equal qualities keep the order they were written in — which
+    // is the order the client meant.
+    .sort((a, b) => b.quality - a.quality);
+
+  return sortAcceptEntries(entries);
+}
+
+/**
+ * Rails' `parse_data_with_trailing_star` — every format in a media family.
+ *
+ * `text` gives every `text/*` format the application can produce. Which ones
+ * those are is a question about the *registry*, not about the header, which is
+ * why an application that registered a format gets it here for free.
+ */
+export function parseDataWithTrailingStar(mediaType: string): string[] {
+  const prefix = `${mediaType.toLowerCase()}/`;
+
+  return Object.entries(MIME_TYPES)
+    .filter(([, contentType]) => contentType.toLowerCase().startsWith(prefix))
+    .map(([format]) => format);
+}
+
+/**
+ * Rails' `parse_trailing_star` — a family in an Accept header, expanded.
+ *
+ * `Accept: text/*` is a client saying "any text format you have". Matched
+ * literally it matches nothing the application declares, and the request gets a
+ * 406 for a header that was in fact satisfiable — which is how a `curl` with a
+ * broad Accept, or a proxy that rewrote one, fails against an API that would
+ * have answered.
+ *
+ * Only `text` and `application` expand. `image/*` is a family this framework
+ * negotiates nothing in, and a bare wildcard is not a family at
+ * all — it is "anything", which the negotiation already handles as a last
+ * resort.
+ */
+export function parseTrailingStar(entry: string): string[] | undefined {
+  const family = /^(text|application)\/\*/.exec(entry.trim().toLowerCase())?.[1];
+
+  return family === undefined ? undefined : parseDataWithTrailingStar(family);
+}
+
+/**
+ * Rails' `find_item_by_name` — where a type sits in a parsed Accept list.
+ *
+ * By index rather than by value, because the fix-ups that use it *reorder* the
+ * list, and a reorder needs to know where both entries are.
+ */
+export function findItemByName(entries: readonly AcceptEntry[], type: string): number {
+  return entries.findIndex((entry) => entry.type === type);
+}
+
+/**
+ * Rails' `AcceptList.sort!` — the two orderings a raw quality sort gets wrong.
+ *
+ * `text/xml` and `application/xml` are the same thing, and a client that sends
+ * both means one preference, not two. Left as two entries the weaker spelling
+ * can outrank a genuinely different format sitting between them.
+ *
+ * A more specific XML type — `application/atom+xml`, `application/rss+xml` —
+ * sorts ahead of plain `application/xml` at the same quality. A feed reader
+ * sends both and means the specific one; answering generic XML gives it a
+ * document it cannot read, with a 200.
+ */
+export function sortAcceptEntries(entries: readonly AcceptEntry[]): AcceptEntry[] {
+  const sorted = [...entries];
+  const textXml = findItemByName(sorted, "text/xml");
+  const appXml = findItemByName(sorted, "application/xml");
+
+  if (textXml !== -1 && appXml !== -1) {
+    // One preference, at the higher of the two qualities: a client that spelled
+    // it both ways did not ask for it twice, and did not ask for it more weakly
+    // than its strongest spelling.
+    sorted[appXml] = {
+      type: "application/xml",
+      quality: Math.max(sorted[appXml]?.quality ?? 0, sorted[textXml]?.quality ?? 0),
+    };
+    sorted.splice(textXml, 1);
+  } else if (textXml !== -1) {
+    sorted[textXml] = { type: "application/xml", quality: sorted[textXml]?.quality ?? 1 };
+  }
+
+  const xmlAt = findItemByName(sorted, "application/xml");
+
+  if (xmlAt !== -1) {
+    const xml = sorted[xmlAt] as AcceptEntry;
+    const specific = sorted.findIndex(
+      (entry, at) => at > xmlAt && entry.quality >= xml.quality && entry.type.endsWith("+xml"),
+    );
+
+    if (specific !== -1) {
+      sorted[xmlAt] = sorted[specific] as AcceptEntry;
+      sorted[specific] = xml;
+    }
+  }
+
+  return sorted;
 }
 
 /** The extension on a path, when it names a format. Rails' `/posts/1.json`. */

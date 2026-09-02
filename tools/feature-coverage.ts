@@ -151,7 +151,7 @@ function key(name: string): string {
  * config-shaped features for no reason but a spelling.
  */
 const DECLARATION =
-  /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?\*?\s*([a-zA-Z][a-zA-Z0-9]*)\s*\??\s*[(<:=]/g;
+  /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?\*?\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\??\s*[(<:=]/g;
 
 /**
  * A method installed at runtime: `Object.defineProperty(model, "authenticateBy", …)`.

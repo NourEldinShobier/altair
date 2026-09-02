@@ -17,6 +17,7 @@ import {
   addTouchCallbacks,
   applicationRecordClass,
   checkDependentOptions,
+  validDependentOptions,
   clearPendingTouches,
   computeType,
   createSubclass,
@@ -174,10 +175,44 @@ describe("whether a query needs a type condition", () => {
 });
 
 describe("what a dependent option may be", () => {
-  it("accepts the ones that exist", () => {
-    for (const option of DEPENDENT_OPTIONS) {
-      expect(checkDependentOptions(option, "hasMany")).toBe(option);
+  it("accepts the ones its macro allows", () => {
+    for (const macro of ["hasMany", "hasOne", "belongsTo"] as const) {
+      for (const option of validDependentOptions(macro)) {
+        expect(checkDependentOptions(option, macro)).toBe(option);
+      }
     }
+  });
+
+  /**
+   * Every option belongs to some macro, so a list nobody accepts would mean an
+   * option that can never be written.
+   */
+  it("leaves no option that no macro accepts", () => {
+    const accepted = new Set([
+      ...validDependentOptions("hasMany"),
+      ...validDependentOptions("hasOne"),
+      ...validDependentOptions("belongsTo"),
+    ]);
+
+    expect([...accepted].sort()).toEqual([...DEPENDENT_OPTIONS].sort());
+  });
+
+  /**
+   * `delete` names one row and `delete_all` a collection, so each is refused by
+   * the macro that has the other.
+   */
+  it("keeps delete and delete_all to their own macros", () => {
+    expect(checkDependentOptions("delete", "hasOne")).toBe("delete");
+    expect(() => checkDependentOptions("delete", "hasMany")).toThrow(InvalidDependentOption);
+    expect(() => checkDependentOptions("delete_all", "hasOne")).toThrow(InvalidDependentOption);
+  });
+
+  /**
+   * Listing every option there is would send the reader to try one that this
+   * macro refuses too.
+   */
+  it("lists only what this macro would accept", () => {
+    expect(() => checkDependentOptions("vaporise", "belongsTo")).not.toThrow("nullify");
   });
 
   it("refuses one that does not", () => {
@@ -214,6 +249,10 @@ describe("what destroying a parent does", () => {
    */
   it("deletes them without their callbacks when told that instead", () => {
     expect(handleDependency("delete_all", "post_id")).toEqual({ action: "delete" });
+    // `delete` is the same action on one row rather than many: turning it into
+    // a destroy would run the child's callbacks, which is the thing the caller
+    // asked to skip.
+    expect(handleDependency("delete", "post_id")).toEqual({ action: "delete" });
   });
 
   it("clears the foreign key for a nullify", () => {

@@ -54,7 +54,20 @@ export type MethodName<T> = {
  */
 export type Filter<T> =
   | MethodName<T>
-  | ((this: T, target: T, block: () => Promise<unknown>) => unknown);
+  | ((this: T, target: T, block: () => Promise<unknown>) => unknown)
+  | CallbackObject;
+
+/**
+ * An object that handles a callback with a method named after it — Rails'
+ * `before_save Auditor.new`, which calls `Auditor#before_save`.
+ *
+ * Worth having because it is the only filter that can hold state: a method name
+ * reaches the record's own methods and a closure is written at the declaration,
+ * while an object can be configured once and reused by several models. Nothing
+ * else in the shape distinguishes it, so the method it must have is named after
+ * the callback it was registered for.
+ */
+export type CallbackObject = Record<string, unknown>;
 
 /** An `if`/`unless` guard: the name of a method on the target, or a predicate. */
 export type Condition<T> = MethodName<T> | ((this: T, target: T) => unknown);
@@ -210,30 +223,129 @@ function toArray<T>(value: T | T[] | undefined): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/**
+ * The method an object filter must have, for a callback of this kind and name.
+ *
+ * `before` + `save` is `beforeSave`. Derived rather than configured, because
+ * the point of an object filter is that one object can be registered for
+ * several callbacks and answer each with its own method.
+ */
+export function callbackMethodName(kind: CallbackKind, name: string): string {
+  return `${kind}${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+}
+
+/**
+ * One uniform way to call any filter. Rails' `CallTemplate`.
+ *
+ * A method name, a function and an object each have to be called differently,
+ * and doing that at the call site means every place that runs a filter — the
+ * chain, a condition, an inverted condition — repeats the same three-way
+ * decision and eventually one of them gets it wrong. Resolved once, here.
+ */
+export function callTemplate<T>(
+  filter: Filter<T>,
+  kind: CallbackKind = "before",
+  name = "",
+): (target: T, block?: () => Promise<unknown>) => unknown {
+  if (typeof filter === "function") {
+    return (target, block) =>
+      (filter as (target: T, block?: () => Promise<unknown>) => unknown).call(
+        target,
+        target,
+        block,
+      );
+  }
+
+  if (typeof filter === "string") {
+    return (target, block) => {
+      const method = (target as Record<string, unknown>)[filter];
+
+      if (typeof method !== "function") {
+        throw new TypeError(`Callback ${filter} is not a method on the target`);
+      }
+
+      // Same arguments as a function filter, so a method and a lambda declaring
+      // the same parameters behave identically.
+      return (method as (...args: unknown[]) => unknown).call(target, target, block);
+    };
+  }
+
+  const methodName = callbackMethodName(kind, name);
+
+  return (target, block) => {
+    const method = (filter as CallbackObject)[methodName];
+
+    if (typeof method !== "function") {
+      throw new TypeError(
+        `A callback object registered for ${kind} ${name} must have a ${methodName} method.`,
+      );
+    }
+
+    return (method as (...args: unknown[]) => unknown).call(filter, target, block);
+  };
+}
+
+/**
+ * Rails' `expand_call_template` — the call, bound, but not yet made.
+ *
+ * Returned rather than invoked so the caller decides when it runs and what
+ * happens around it. That is what lets one place resolve the filter and another
+ * decide whether a throw is a halt.
+ */
+export function expandCallTemplate<T>(
+  filter: Filter<T>,
+  target: T,
+  block?: () => Promise<unknown>,
+  kind: CallbackKind = "before",
+  name = "",
+): () => unknown {
+  const template = callTemplate(filter, kind, name);
+
+  return () => template(target, block);
+}
+
+/** Rails' `make_lambda` — the filter as something awaitable. */
+export function makeLambda<T>(
+  filter: Filter<T>,
+  kind: CallbackKind = "before",
+  name = "",
+): (target: T, block?: () => Promise<unknown>) => Promise<unknown> {
+  const template = callTemplate(filter, kind, name);
+
+  return async (target, block) => await template(target, block);
+}
+
+/**
+ * Rails' `inverted_lambda` — the filter, negated.
+ *
+ * Its own function rather than `!await makeLambda(...)` at the call site,
+ * because `unless` and a conditional skip both need it and both would otherwise
+ * negate separately — and a condition negated in one place and not the other is
+ * a callback that runs exactly when it should not.
+ */
+export function invertedLambda<T>(
+  filter: Filter<T>,
+  kind: CallbackKind = "before",
+  name = "",
+): (target: T) => Promise<boolean> {
+  const lambda = makeLambda(filter, kind, name);
+
+  return async (target) => !(await lambda(target));
+}
+
 /** Resolves a method name against the target, or calls the function. */
 async function invokeFilter<T>(
   target: T,
   filter: Filter<T>,
   block?: () => Promise<unknown>,
+  kind: CallbackKind = "before",
+  name = "",
 ): Promise<unknown> {
-  if (typeof filter === "string") {
-    const method = (target as Record<string, unknown>)[filter];
-    if (typeof method !== "function") {
-      throw new TypeError(`Callback ${filter} is not a method on the target`);
-    }
-    // Same arguments as a function filter, so a method and a lambda declaring
-    // the same parameters behave identically.
-    return await (method as (...args: unknown[]) => unknown).call(target, target, block);
-  }
-  return await (filter as (target: T, block?: () => Promise<unknown>) => unknown).call(
-    target,
-    target,
-    block!,
-  );
+  return await callTemplate(filter, kind, name)(target, block);
 }
 
 async function conditionHolds<T>(target: T, condition: Condition<T>): Promise<boolean> {
-  const result = await invokeFilter(target, condition as Filter<T>);
+  const result = await makeLambda(condition as Filter<T>)(target);
   return Boolean(result);
 }
 
@@ -242,9 +354,55 @@ async function matches<T>(env: Env<T>, callback: Callback<T>): Promise<boolean> 
     if (!(await conditionHolds(env.target, condition))) return false;
   }
   for (const condition of callback.conditions.unless) {
-    if (await conditionHolds(env.target, condition)) return false;
+    if (!(await invertedLambda(condition as Filter<T>)(env.target))) return false;
   }
   return true;
+}
+
+/**
+ * Rails' `normalize_callback_params` — the filters and the options, separated.
+ *
+ * A declaration reads `setCallback("save", "before", filterA, filterB, { if })`
+ * and the options are the last argument only when they are not a filter. The
+ * ambiguity is real — a plain object is a legitimate filter — so an object is
+ * treated as options only when it has no callback method for this chain and
+ * carries at least one of the keys options have.
+ */
+export function normalizeCallbackParams<T>(
+  args: readonly unknown[],
+  kind: CallbackKind = "before",
+  name = "",
+): { filters: Filter<T>[]; options: SetCallbackOptions<T> } {
+  const last = args.at(-1);
+  const isOptions =
+    typeof last === "object" &&
+    last !== null &&
+    typeof (last as CallbackObject)[callbackMethodName(kind, name)] !== "function" &&
+    ["if", "unless", "prepend"].some((key) => key in (last as object));
+
+  return {
+    filters: (isOptions ? args.slice(0, -1) : [...args]) as Filter<T>[],
+    options: (isOptions ? last : {}) as SetCallbackOptions<T>,
+  };
+}
+
+/**
+ * Rails' `merge_conditional_options` — the conditions of a conditional skip.
+ *
+ * The conditions swap sides. `skipCallback(..., { if: draft })` means "do not
+ * run this when it is a draft", which is the same callback with `unless:
+ * draft` added — so the skip's `if` becomes the callback's `unless` and the
+ * skip's `unless` becomes its `if`. Copying them across unchanged would skip
+ * the callback exactly when it was meant to keep running.
+ */
+export function mergeConditionalOptions<T>(
+  existing: { if: Condition<T>[]; unless: Condition<T>[] },
+  skip: { if?: Condition<T> | Condition<T>[]; unless?: Condition<T> | Condition<T>[] },
+): { if: Condition<T>[]; unless: Condition<T>[] } {
+  return {
+    if: [...existing.if, ...toArray(skip.unless)],
+    unless: [...existing.unless, ...toArray(skip.if)],
+  };
 }
 
 /**
@@ -309,13 +467,28 @@ export function setCallback<T>(
   else chain.callbacks.push(callback);
 }
 
-/** Removes a previously registered callback. */
+/**
+ * Removes a previously registered callback, or narrows it.
+ *
+ * With `if` or `unless`, the callback is *kept* and made conditional rather
+ * than removed — `skipCallback(Post, "save", "before", "audit", { if: draft })`
+ * means "do not audit drafts", not "never audit". Removing it outright would
+ * turn a narrowing into a deletion, and the auditing would stop in production
+ * because a test wanted it off.
+ */
 export function skipCallback<T>(
   klass: object,
   name: string,
   kind: CallbackKind,
   filter: Filter<T>,
-  { raise = true }: { raise?: boolean } = {},
+  {
+    raise = true,
+    ...conditions
+  }: {
+    raise?: boolean;
+    if?: Condition<T> | Condition<T>[];
+    unless?: Condition<T> | Condition<T>[];
+  } = {},
 ): void {
   drainDecorated(klass);
   const chains = ownChains(klass);
@@ -329,6 +502,21 @@ export function skipCallback<T>(
     }
     return;
   }
+
+  const callback = chain!.callbacks[index]!;
+
+  if (conditions.if !== undefined || conditions.unless !== undefined) {
+    chain!.callbacks[index] = {
+      ...callback,
+      conditions: mergeConditionalOptions(callback.conditions, conditions) as {
+        if: Condition<unknown>[];
+        unless: Condition<unknown>[];
+      },
+    };
+
+    return;
+  }
+
   chain!.callbacks.splice(index, 1);
 }
 
@@ -382,7 +570,9 @@ export async function runCallbacks<T, R>(
 
     if (callback.kind === "before") {
       if (!env.halted && (await matches(env, callback))) {
-        env.halted = await terminator(target, () => invokeFilter(target, callback.filter));
+        env.halted = await terminator(target, () =>
+          invokeFilter(target, callback.filter, undefined, callback.kind, name),
+        );
       }
       await invoke(index + 1);
       return;
@@ -394,11 +584,18 @@ export async function runCallbacks<T, R>(
         return;
       }
       let inner = false;
-      await invokeFilter(target, callback.filter, async () => {
-        inner = true;
-        await invoke(index + 1);
-        return env.value;
-      });
+      await invokeFilter(
+        target,
+        callback.filter,
+        async () => {
+          inner = true;
+          await invoke(index + 1);
+
+          return env.value;
+        },
+        callback.kind,
+        name,
+      );
       // An around callback that never yields still has to let the chain unwind,
       // but the block and everything nested stay unrun — the same shape Rails
       // gets from a filter that does not call `yield`.
@@ -409,7 +606,7 @@ export async function runCallbacks<T, R>(
     await invoke(index + 1);
     if (!env.halted || !skipAfterCallbacksIfTerminated) {
       if (await matches(env, callback)) {
-        await invokeFilter(target, callback.filter);
+        await invokeFilter(target, callback.filter, undefined, callback.kind, name);
       }
     }
   };

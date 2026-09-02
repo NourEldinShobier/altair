@@ -30,6 +30,8 @@ export class NoCurrentScope extends Error {
   }
 }
 
+export type CurrentHook = () => void;
+
 export interface CurrentClass<T extends object> {
   /** Runs a block with a fresh store. Everything awaited inside sees it. */
   run<R>(attributes: Partial<T>, body: () => R | Promise<R>): Promise<R>;
@@ -40,6 +42,40 @@ export interface CurrentClass<T extends object> {
   set(values: Partial<T>): void;
   reset(): void;
   get<K extends keyof T>(key: K): T[K] | undefined;
+  /** Rails' `before_reset` — run while the values are still readable. */
+  beforeReset(hook: CurrentHook): void;
+  /** Rails' `resets` — run once the values are gone. */
+  resets(hook: CurrentHook): void;
+  /** Rails' `ExecutionContext.after_change` — run when an attribute is written. */
+  afterChange(hook: CurrentHook): void;
+}
+
+/**
+ * Every Current class that has been built. Rails'
+ * `ExecutionContext.current_attributes_instances`.
+ *
+ * A registry, because the thing that ends a request does not know what an
+ * application declared: an application with three of these must have all three
+ * reset, and a server that resets only the ones the framework knows about
+ * leaks the other two into the next request.
+ */
+const instances = new Set<CurrentClass<never>>();
+
+export function currentAttributesInstances(): CurrentClass<never>[] {
+  return [...instances];
+}
+
+/**
+ * Resets every one of them. Rails' `CurrentAttributes.clear_all`.
+ *
+ * What an executor calls at the end of a unit of work. Outside a scope this
+ * does nothing rather than raising: a job that finished before it started a
+ * scope should not fail in its teardown.
+ */
+export function resetAllCurrentAttributes(): void {
+  for (const current of instances) {
+    if (current.isActive) current.reset();
+  }
 }
 
 /**
@@ -50,6 +86,13 @@ export interface CurrentClass<T extends object> {
  */
 export function currentAttributes<T extends object>(): CurrentClass<T> & Partial<T> {
   const storage = new AsyncLocalStorage<Partial<T>>();
+  const beforeResetHooks: CurrentHook[] = [];
+  const afterResetHooks: CurrentHook[] = [];
+  const afterChangeHooks: CurrentHook[] = [];
+
+  const changed = (): void => {
+    for (const hook of afterChangeHooks) hook();
+  };
 
   class Current {
     static async run<R>(attributes: Partial<T>, body: () => R | Promise<R>): Promise<R> {
@@ -68,12 +111,56 @@ export function currentAttributes<T extends object>(): CurrentClass<T> & Partial
 
     static set(values: Partial<T>): void {
       Object.assign(this.attributes, values);
+      changed();
+    }
+
+    /**
+     * Rails' `before_reset` — run while the values are still readable.
+     *
+     * The half that has to see them: "remember who this request was for" cannot
+     * be answered after the answer has been thrown away.
+     */
+    static beforeReset(hook: CurrentHook): void {
+      beforeResetHooks.push(hook);
+    }
+
+    /**
+     * Rails' `resets` — run once the values are gone.
+     *
+     * The half that must not see them, and the reason this is not simply
+     * "clear the object": setting `Current.user` often sets something outside
+     * it too — a time zone, a locale, a logger tag — and *that* is what has to
+     * be put back. Left set, the next request on the same worker renders in the
+     * previous user's time zone, which is a wrong answer with no error.
+     */
+    static resets(hook: CurrentHook): void {
+      afterResetHooks.push(hook);
+    }
+
+    /**
+     * Rails' `ExecutionContext.after_change` — run when an attribute is written.
+     *
+     * For something that mirrors the values rather than reading them on demand:
+     * a log formatter holding the request id, an error reporter's context. Those
+     * are copied once and would otherwise keep the value the attribute had when
+     * they were built.
+     */
+    static afterChange(hook: CurrentHook): void {
+      afterChangeHooks.push(hook);
     }
 
     /** Empties the store without leaving the scope. */
     static reset(): void {
+      for (const hook of beforeResetHooks) hook();
+
       const store = this.attributes;
       for (const key of Object.keys(store)) delete (store as Record<string, unknown>)[key];
+
+      // After the values are gone, and outside any `if`: a hook that puts back
+      // a time zone has to run whether or not this request ever set one, since
+      // the request before it may have.
+      for (const hook of afterResetHooks) hook();
+      changed();
     }
 
     static get<K extends keyof T>(key: K): T[K] | undefined {
@@ -81,7 +168,7 @@ export function currentAttributes<T extends object>(): CurrentClass<T> & Partial
     }
   }
 
-  return new Proxy(Current, {
+  const proxied = new Proxy(Current, {
     get(target, property, receiver) {
       if (typeof property === "string" && !Reflect.has(target, property)) {
         // Reading an attribute with no scope is undefined rather than a throw:
@@ -97,11 +184,17 @@ export function currentAttributes<T extends object>(): CurrentClass<T> & Partial
         if (!store) throw new NoCurrentScope(target.name);
 
         (store as Record<string, unknown>)[property] = value;
+        changed();
+
         return true;
       }
       return Reflect.set(target, property, value, receiver);
     },
   }) as unknown as CurrentClass<T> & Partial<T>;
+
+  instances.add(proxied as unknown as CurrentClass<never>);
+
+  return proxied;
 }
 
 /**
