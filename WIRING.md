@@ -7,7 +7,7 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 112 of
+does anything else in `src` name any of its exports? As of this writing, 111 of
 336 modules do not.
 
 That number is not a defect count. Three different things land in the list.
@@ -29,7 +29,6 @@ what runs and the other is what gets maintained.
 | ----------------------------------------------------------- | --------------------------------------------- |
 | `orm/preloader.ts`, `orm/preload_batching.ts`               | `preloadAssociation` in `orm/associations.ts` |
 | `orm/binds.ts`, `orm/select_statements.ts`, `orm/arel.ts`\* | `relation.ts` builds SQL strings directly     |
-| `orm/schema_cache.ts`                                       | each model's own `columnCache`                |
 | `orm/generated_methods.ts`                                  | nothing generates methods through it          |
 | `orm/attribute_patterns.ts`, `orm/attribute_methods.ts`     | attribute handling inside `model.ts`          |
 
@@ -47,6 +46,12 @@ that is a decision rather than a bug.
 - **`orm/record_pack.ts`** knew the shape of a payload and nothing about
   `Model`, which is what makes it testable without a database — and also what
   stopped it packing an actual record. `model_packing.ts` is the adapter.
+- **`orm/schema_cache.ts`** could dump the schema to a file and load it back,
+  and no model looked at it. `schemaReflection()` is the process-wide one a
+  model now consults — but only once something has loaded a dump into it, so
+  an application that never does behaves exactly as before. The per-model
+  `columnCache` is still there and still what runs by default; which of the two
+  should survive is the open question, not something this decided.
 
 ## A feature ported ahead of the thing it serves
 

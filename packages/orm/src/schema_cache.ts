@@ -324,3 +324,30 @@ export class SchemaReflection {
     return this.#cache.schemaLoaded;
   }
 }
+
+let ambient = new SchemaReflection();
+
+/**
+ * The schema cache this process reads from. Rails' `schema_reflection`.
+ *
+ * One per process rather than one per model, because a dump covers the whole
+ * schema and a model asking its own question would read the file once per
+ * class — which is the boot cost the dump exists to remove.
+ *
+ * Empty until something loads a dump into it, and a model that finds it empty
+ * asks the database exactly as it always did. That is deliberate: a schema
+ * cache that changed behaviour by existing would be one nobody could add to a
+ * running application without a deploy to think about.
+ */
+export function schemaReflection(): SchemaReflection {
+  return ambient;
+}
+
+export function setSchemaReflection(reflection: SchemaReflection): void {
+  ambient = reflection;
+}
+
+/** Back to asking the database. For a test, and for a migration that changed everything. */
+export function resetSchemaReflection(): void {
+  ambient = new SchemaReflection();
+}
