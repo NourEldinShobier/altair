@@ -229,10 +229,10 @@ export interface DatabaseSelectorOptions {
  * Sends read requests to a replica. Rails'
  * `ActiveRecord::Middleware::DatabaseSelector`.
  *
- * ponytail: routes by HTTP method alone. Rails also keeps a visitor on the
- * primary for a couple of seconds after their own write, because a replica
- * lags — without that, the redirect after a create can render the page as it
- * was before. Pass `role` to decide per request when that matters.
+ * Routes by HTTP method alone, which is enough when reads may be stale. A
+ * replica lags, so the redirect after a create can render the page as it was
+ * before — `selectDatabase` in `connection_scoping.ts` keeps a visitor on the
+ * primary for a delay after their own write, which is what that costs.
  */
 export function databaseSelector(options: DatabaseSelectorOptions = {}) {
   const chooseRole =

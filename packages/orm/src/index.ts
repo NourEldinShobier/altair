@@ -76,3 +76,4 @@ export * from "./signed_ids.js";
 export * from "./rich_text_attachments.js";
 export * from "./password_algorithms.js";
 export * from "./arel.js";
+export * from "./connection_scoping.js";
