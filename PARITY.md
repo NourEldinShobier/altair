@@ -16,7 +16,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 > > > > > > > 4ce9ed1 (feat(controller): reordering a middleware that is already in the stack)
 > > > > > > > \=======
-> > > > > > > | **Total** | **11,534** | 26,775 | 43.1% |
+> > > > > > > | **Total** | **11,548** | 26,775 | 43.1% |
 > > > > > > > 4ff04b9 (feat(controller): telling the browser what to fetch before the page exists)
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
@@ -33,7 +33,7 @@ one that needs no server.
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 2414  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 4224  | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/orm`        | 4238  | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 1352  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 191   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 449   | Resourceful routing, typed path helpers                                    |
