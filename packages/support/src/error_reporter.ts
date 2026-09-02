@@ -45,8 +45,22 @@ export interface ReportOptions {
 
 const contextStore = new AsyncLocalStorage<Record<string, unknown>>();
 
+/**
+ * Builds up the context every subscriber sees. Rails' context middleware.
+ *
+ * Returns the context to carry on with. A middleware that returns nothing is
+ * taken to have changed nothing rather than to have emptied it — forgetting
+ * the return is the obvious mistake, and its punishment would be every
+ * subscriber losing every piece of context anybody attached.
+ */
+export type ErrorContextMiddleware = (
+  error: unknown,
+  details: ErrorContext,
+) => Record<string, unknown> | undefined | void;
+
 export class ErrorReporter {
   #subscribers: ErrorSubscriber[] = [];
+  #middlewares: ErrorContextMiddleware[] = [];
 
   subscribe(subscriber: ErrorSubscriber): { unsubscribe(): void } {
     this.#subscribers.push(subscriber);
@@ -55,6 +69,31 @@ export class ErrorReporter {
       unsubscribe: () => {
         const index = this.#subscribers.indexOf(subscriber);
         if (index !== -1) this.#subscribers.splice(index, 1);
+      },
+    };
+  }
+
+  /**
+   * Adds something to the context of every error, before it is reported.
+   * Rails' `add_middleware`.
+   *
+   * The case this is for is the one where a per-call `context:` cannot help:
+   * "every report should carry the deploy SHA and the tenant". Attaching that
+   * at each call site means the reports that matter most — the ones from
+   * places nobody thought about — are the ones without it.
+   *
+   * Run before any subscriber, so all of them see the same context. A
+   * middleware that built the context per-subscriber would give the two error
+   * trackers a team runs different pictures of the same failure, which is how
+   * an hour goes into reconciling them.
+   */
+  addMiddleware(middleware: ErrorContextMiddleware): { remove(): void } {
+    this.#middlewares.push(middleware);
+
+    return {
+      remove: () => {
+        const index = this.#middlewares.indexOf(middleware);
+        if (index !== -1) this.#middlewares.splice(index, 1);
       },
     };
   }
@@ -83,6 +122,19 @@ export class ErrorReporter {
       source: options.source ?? "application",
       context: { ...this.context, ...options.context },
     };
+
+    for (const middleware of this.#middlewares) {
+      try {
+        // Each one sees what the last one produced, so a middleware can build
+        // on another's work rather than each starting from the call's own
+        // context and the last writer winning.
+        context.context = middleware(error, context) ?? context.context;
+      } catch {
+        // Same rule as a subscriber that throws: this runs while something has
+        // already gone wrong, and a context builder that took the original
+        // error down with it would be the worst failure this class could have.
+      }
+    }
 
     for (const subscriber of this.#subscribers) {
       try {
@@ -133,9 +185,10 @@ export class ErrorReporter {
     }
   }
 
-  /** Forgets every subscriber. For tests. */
+  /** Forgets every subscriber and every middleware. For tests. */
   reset(): void {
     this.#subscribers = [];
+    this.#middlewares = [];
   }
 }
 
