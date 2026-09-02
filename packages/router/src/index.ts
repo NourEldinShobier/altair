@@ -9,3 +9,4 @@ export * from "./url_generation.js";
 export * from "./resource_scope.js";
 export * from "./pattern_visitors.js";
 export * from "./polymorphic_arguments.js";
+export * from "./inspector.js";
