@@ -44,7 +44,12 @@ import {
 } from "./relation.js";
 import { columnTypeFor } from "./dump.js";
 import { columnSchemas, type ColumnSchema } from "./introspect.js";
-import { decryptValue, encryptValue, type EncryptedAttributeOptions } from "./encryption.js";
+import {
+  decryptValue,
+  encryptValue,
+  originalAttributeName,
+  type EncryptedAttributeOptions,
+} from "./encryption.js";
 import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
 import {
   defineEnum,
@@ -860,6 +865,18 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     /** Columns held as ciphertext. Rails' `encrypts`. */
     static encryptedAttributes: Record<string, EncryptedAttributeOptions> = {};
+    /**
+     * Attributes whose setter writes a second column from the first.
+     *
+     * A row already holds both, so hydrating through the setter would derive
+     * the second one again from a value that is already derived.
+     */
+    static derivedAttributes: Record<string, boolean> = {};
+
+    /** Whether this attribute's setter derives another column. */
+    static derivedOnWrite(name: string): boolean {
+      return this.derivedAttributes[name] === true;
+    }
     static enums: Record<string, EnumDefinition> = {};
     static normalizers: Record<string, NormalizeDefinition> = {};
 
@@ -1066,6 +1083,41 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         this.encryptedAttributes = { ...this.encryptedAttributes };
       }
       this.encryptedAttributes[name] = options;
+
+      if (options.ignoreCase !== true) return;
+
+      // Named so the constructor can leave a hydrated row alone; see there.
+      this.derivedAttributes = { ...this.derivedAttributes, [name]: true };
+
+      const original = originalAttributeName(name);
+
+      // Encrypted too, and not deterministically: it is the same secret, and
+      // storing the original in the clear beside the ciphertext would hand
+      // back everything the encryption was for.
+      this.encryptedAttributes[original] = {};
+
+      // An accessor on the prototype, so both halves are kept wherever the
+      // assignment came from — the constructor, `assign`, or a bare
+      // `record.email = …`. Doing it at persist time instead would mean three
+      // write paths to change and one of them forgotten.
+      Object.defineProperty(this.prototype, name, {
+        configurable: true,
+        get(this: BaseModel) {
+          const kept = this[ATTRIBUTES][original];
+
+          // The folded column is the fallback, not the answer: a row written
+          // before the option was added has no original to show.
+          return kept === undefined || kept === null ? this[ATTRIBUTES][name] : kept;
+        },
+        set(this: BaseModel, value: unknown) {
+          // Both hold the value as it was typed. The folding happens once, in
+          // `encryptValue`, on the column whose scheme asks for it — doing it
+          // here as well would be a second place to get it wrong, and would
+          // make the in-memory record disagree with what it reads back.
+          this[ATTRIBUTES][original] = value;
+          this[ATTRIBUTES][name] = value;
+        },
+      });
     }
 
     /** Encrypts the values in a condition that name a deterministic column. */
@@ -1454,7 +1506,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         // Through the alias here too: the constructor writes columns directly
         // rather than through the proxy, so an alias resolved only there would
         // work for `record.email = x` and not for `new User({ email: x })`.
-        if (hasSetter(this, key)) declared[key] = value;
+        //
+        // A row is the exception. A hydrated record already carries every
+        // column the setter would have derived, and running it would derive
+        // them again from a value that is itself already derived — for an
+        // `ignoreCase` attribute that means overwriting the original spelling
+        // with the folded one it was stored beside precisely to preserve.
+        if (hasSetter(this, key) && !(persisted && klass.derivedOnWrite(key)))
+          declared[key] = value;
         else columns[klass.resolveAttributeName(key)] = value;
       }
 

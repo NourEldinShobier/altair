@@ -53,18 +53,43 @@ export interface EncryptedAttributeOptions {
    * keep it in a second column; that is not here yet.
    */
   downcase?: boolean;
+  /**
+   * Folds the value for the ciphertext but keeps the original. Rails'
+   * `ignore_case:`.
+   *
+   * `downcase` makes a deterministic column findable and loses how the value
+   * was typed, which is fine for a lookup key and not fine for anything shown
+   * back to the person who typed it. This keeps both: the column holds the
+   * folded value so a lookup works, and a companion column holds the original
+   * so the application can display it.
+   *
+   * The companion is encrypted too, and not deterministically — it is the same
+   * secret, and storing it in the clear next to the ciphertext would hand back
+   * everything the encryption was for.
+   */
+  ignoreCase?: boolean;
 }
 
-/** Raised when downcasing a column would lose information and buy nothing. */
+/** Where the original spelling of an `ignoreCase` attribute is kept. */
+export function originalAttributeName(attribute: string): string {
+  return `original_${attribute}`;
+}
+
+/** Raised when folding a column would lose information and buy nothing. */
 export class PointlessDowncase extends Error {
-  constructor() {
+  constructor(option = "downcase") {
     super(
-      "downcase only helps a deterministic column, where a lookup has to encrypt the search " +
-        "value and compare ciphertext. On a non-deterministic one it throws the original case " +
-        "away and enables nothing — use `normalizes` if the value should be stored folded.",
+      `${option} only helps a deterministic column, where a lookup has to encrypt the search ` +
+        `value and compare ciphertext. On a non-deterministic one it throws the original case ` +
+        `away and enables nothing — use \`normalizes\` if the value should be stored folded.`,
     );
     this.name = "PointlessDowncase";
   }
+}
+
+/** Whether a scheme folds the value before encrypting it. */
+export function foldsCase(options: EncryptedAttributeOptions): boolean {
+  return options.downcase === true || options.ignoreCase === true;
 }
 
 /** Raised when a column cannot be decrypted and is not allowed to be plaintext. */
@@ -168,13 +193,15 @@ export function encryptValue(value: unknown, options: EncryptedAttributeOptions 
   // like it held something, and would break `where({ ssn: null })`.
   if (value === null || value === undefined) return value;
 
-  if (options.downcase && !options.deterministic) throw new PointlessDowncase();
+  if (foldsCase(options) && !options.deterministic) {
+    throw new PointlessDowncase(options.ignoreCase ? "ignoreCase" : "downcase");
+  }
 
   const material = requireKeys();
   const raw = typeof value === "string" ? value : JSON.stringify(value);
   // A non-string was serialised to JSON above, and folding that would change
   // the keys as well as the values — so only an actual string is folded.
-  const plaintext = options.downcase && typeof value === "string" ? value.toLowerCase() : raw;
+  const plaintext = foldsCase(options) && typeof value === "string" ? value.toLowerCase() : raw;
 
   if (options.deterministic) return encryptDeterministic(plaintext, material.deterministic);
 
