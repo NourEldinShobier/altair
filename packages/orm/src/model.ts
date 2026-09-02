@@ -43,6 +43,8 @@ import {
   type WithExpressions,
 } from "./relation.js";
 import { columnTypeFor } from "./dump.js";
+import { SQLITE_VISIBLE } from "./introspect.js";
+import { schemaReflection } from "./schema_cache.js";
 import { columnSchemas, type ColumnSchema } from "./introspect.js";
 import {
   decryptValue,
@@ -5078,9 +5080,33 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       if (this.columnTypeCache) return this.columnTypeCache;
 
       const connection = this.connection;
+      const reflection = schemaReflection();
+
+      // A loaded schema cache is the whole point of dumping one: a boot that
+      // asks the database for every model's columns pays a round trip per
+      // model before it can serve anything. Nothing changes for an application
+      // that never loaded one, which is why this is a check rather than a
+      // replacement for the query below.
+      if (reflection.schemaLoaded) {
+        const schemas = await reflection.schemaCache.columns(connection, this.table);
+
+        this.columnTypeCache = Object.fromEntries(
+          schemas.map((column) => [column.name, columnTypeFor(column.type)]),
+        );
+
+        return this.columnTypeCache;
+      }
+
       const rows =
         connection.adapter === "sqlite"
-          ? await connection.query<Row>(`PRAGMA table_info(${connection.quote(this.table)})`)
+          ? // `table_xinfo`, not `table_info`: the plain one omits generated
+            // columns, so a model would not know it has one — every read
+            // would leave it out and every write would think it could set it.
+            // `introspect.ts` reads them the same way, and the two agreeing is
+            // the point of sharing the rule rather than repeating it.
+            (
+              await connection.query<Row>(`PRAGMA table_xinfo(${connection.quote(this.table)})`)
+            ).filter((row) => SQLITE_VISIBLE.has(Number(row.hidden ?? 0)))
           : await connection.query<Row>(
               `SELECT column_name AS name, data_type AS type
                FROM information_schema.columns

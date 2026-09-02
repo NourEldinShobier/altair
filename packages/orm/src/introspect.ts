@@ -29,8 +29,8 @@ export interface ColumnSchema {
  * stored. `1` is a hidden column of a virtual table — an `fts5` index's
  * internals — and belongs in nobody's schema dump.
  */
-const SQLITE_VISIBLE = new Set([0, 2, 3]);
-const SQLITE_GENERATED = new Set([2, 3]);
+export const SQLITE_VISIBLE = new Set([0, 2, 3]);
+export const SQLITE_GENERATED = new Set([2, 3]);
 
 export interface IndexSchema {
   name: string;
