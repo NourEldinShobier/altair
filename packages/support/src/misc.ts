@@ -108,13 +108,39 @@ export function uuidV3(namespace: string, name: string): string {
   return derivedUuid(namespace, name, "md5", 3);
 }
 
-function derivedUuid(namespace: string, name: string, algorithm: string, version: number): string {
-  const bytes = new Uint8Array(16);
+/**
+ * Rails' `pack_uuid_namespace` — a namespace uuid as the sixteen bytes hashed.
+ *
+ * The *bytes*, not the text. Hashing the dashed string instead gives a uuid
+ * that is stable, plausible, and different from what every other RFC 4122
+ * implementation derives — so it agrees with itself and with nothing else,
+ * which is found out when something has to interoperate.
+ *
+ * A namespace that is not a uuid is refused rather than read as far as it
+ * parses. Parsed leniently, a typo produces zero bytes where the hex was
+ * unreadable, and the result is a uuid that is wrong in a way nothing can see:
+ * still stable, still the right shape, derived from a namespace nobody chose.
+ */
+export function packUuidNamespace(namespace: string): Uint8Array {
   const hex = namespace.replaceAll("-", "");
+
+  if (!/^[0-9a-f]{32}$/i.test(hex)) {
+    throw new TypeError(
+      `Only uuids are valid namespace identifiers, got ${JSON.stringify(namespace)}.`,
+    );
+  }
+
+  const bytes = new Uint8Array(16);
 
   for (let index = 0; index < 16; index += 1) {
     bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   }
+
+  return bytes;
+}
+
+function derivedUuid(namespace: string, name: string, algorithm: string, version: number): string {
+  const bytes = packUuidNamespace(namespace);
 
   const digest = new Uint8Array(
     new Bun.CryptoHasher(algorithm as "sha1")

@@ -245,6 +245,19 @@ export class Reflection {
     return new Reflection(found, middle);
   }
 
+  /**
+   * The kind of owner a polymorphic `through` is narrowed to. Rails'
+   * `source_type`.
+   */
+  sourceType(): string | undefined {
+    return this.definition.sourceType;
+  }
+
+  /** Whether the association was declared on its way out. Rails' `deprecated?`. */
+  isDeprecated(): boolean {
+    return this.definition.deprecated === true;
+  }
+
   /** Which name on the intermediate to follow. Rails' `source_reflection_name`. */
   sourceReflectionName(): string {
     return this.definition.source ?? this.name;

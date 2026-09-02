@@ -47,6 +47,24 @@ export interface AssociationOptions {
    */
   source?: string;
   /**
+   * Narrows a polymorphic `through` to one kind of owner. Rails'
+   * `source_type`.
+   *
+   * Without it the join matches on the foreign key alone, across every kind of
+   * thing the polymorphic association can point at — a wrong answer with the
+   * right shape.
+   */
+  sourceType?: string;
+  /**
+   * Marks the association as on its way out. Rails' `deprecated`.
+   *
+   * Named on the declaration rather than tracked elsewhere, because the case
+   * that matters is an association reached only *through* another one: nothing
+   * names it, so nothing warns, and it is removed on the strength of a search
+   * that found no callers.
+   */
+  deprecated?: boolean;
+  /**
    * Marks a belongsTo as polymorphic: the target class is named by a
    * companion `<name>_type` column rather than fixed at declaration.
    */

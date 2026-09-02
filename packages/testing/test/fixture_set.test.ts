@@ -4,6 +4,7 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
+import { UUID_NAMESPACES, uuidV5 } from "@altair/support";
 import {
   cacheFixtures,
   cachedFixtureNames,
@@ -61,6 +62,20 @@ describe("identify", () => {
 
   it("gives the same UUID for the same label", () => {
     expect(identify("ada", "uuid")).toBe(identify("ada", "uuid"));
+  });
+
+  /**
+   * Version 5 under the OID namespace, which is what Rails derives — and the
+   * only thing that makes a fixture id portable. Derived any other way it is
+   * still stable and still the right shape, so a suite passes and the ids
+   * simply are not the ones Rails would have written, which is found out when a
+   * fixture file is shared with a Rails application or a dump is loaded into
+   * one.
+   */
+  it("is the uuid Rails derives for the same label", () => {
+    expect(identify("ada", "uuid")).toBe(uuidV5(UUID_NAMESPACES.oid, "ada"));
+    expect(identify("ada", "uuid")).not.toBe(identify("mary", "uuid"));
+    expect(String(identify("ada", "uuid"))[14]).toBe("5");
   });
 
   /** Two labels in a realistic set must not collide. */

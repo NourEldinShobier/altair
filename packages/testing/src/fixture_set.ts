@@ -8,6 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { UUID_NAMESPACES, uuidV5 } from "@altair/support";
 
 /**
  * A stable id derived from a fixture's name. Rails' `identify`.
@@ -33,22 +34,17 @@ export function identify(label: string, keyType: "integer" | "uuid" = "integer")
   return digest.readUInt32BE(0) % 0x3fff_ffff;
 }
 
-/** The same, as a UUID, for a table whose key is one. */
+/**
+ * The same, as a UUID, for a table whose key is one.
+ *
+ * Version 5 under the OID namespace, which is what Rails derives — and the
+ * only thing that makes a fixture id portable. Derived any other way it is
+ * still stable and still the right shape, so a suite passes and the ids simply
+ * are not the ones Rails would have written, which is discovered when a
+ * fixture file is shared with a Rails application or a dump is loaded into one.
+ */
 function uuidFor(label: string): string {
-  const digest = createHash("md5").update(label).digest();
-
-  digest[6] = ((digest[6] as number) & 0x0f) | 0x30;
-  digest[8] = ((digest[8] as number) & 0x3f) | 0x80;
-
-  const hex = digest.subarray(0, 16).toString("hex");
-
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join("-");
+  return uuidV5(UUID_NAMESPACES.oid, label);
 }
 
 /** Where fixture files live. Rails' `fixture_paths`. */

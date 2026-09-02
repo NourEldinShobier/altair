@@ -16,6 +16,8 @@
  */
 
 /** What a handler is given, and what it may answer. */
+import { notifications } from "./notifications.js";
+
 export type RescueHandler<T = unknown> = (error: unknown) => T | Promise<T>;
 
 /** A class to match on, or the name of one. */
@@ -115,7 +117,29 @@ export async function rescueWithHandler<T>(
   const handler = handlers.handlerFor(error);
   if (!handler) throw error;
 
+  rescueFromCallback(error);
+
   return await handler(error);
+}
+
+/**
+ * Reports that a handler is about to run. Rails'
+ * `rescue_from_callback.action_controller`.
+ *
+ * A rescued exception is the one kind nothing else will report: it did not
+ * reach the error reporter, the response was a 2xx or a tidy 4xx, and the logs
+ * say the request succeeded. So an application that has started raising on
+ * every request looks healthy, and the rescue that was written for a rare case
+ * quietly becomes the normal path.
+ *
+ * Published rather than logged, so an application decides whether that is a
+ * counter, a log line or nothing.
+ */
+export function rescueFromCallback(error: unknown): void {
+  notifications.publish("rescue_from_callback.altair", {
+    exception: error instanceof Error ? error.name : typeof error,
+    message: error instanceof Error ? error.message : String(error),
+  });
 }
 
 /** The handler for an error, or undefined. Rails' `handler_for_rescue`. */
