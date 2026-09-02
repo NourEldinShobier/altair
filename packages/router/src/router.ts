@@ -23,6 +23,50 @@ const DEFAULT_SINGLETON_ACTIONS = ["show", "create", "update", "destroy", "new",
 
 export type ResourceAction = "index" | "create" | "new" | "edit" | "show" | "update" | "destroy";
 
+/**
+ * The actions a `resources` or `resource` declaration draws. Rails'
+ * `default_actions`.
+ *
+ * A singular resource has no `index`: there is one of it, so a collection
+ * route would answer a list of one thing at a path that promises many.
+ *
+ * An API-only application drops `new` and `edit`, because those exist to
+ * render a form and an API renders nothing. Drawn anyway they are two routes
+ * per resource that answer with a missing-template error, which reads as a
+ * broken application rather than a route that should not be there.
+ */
+export function defaultActions({
+  apiOnly = false,
+  singleton = false,
+}: { apiOnly?: boolean; singleton?: boolean } = {}): ResourceAction[] {
+  const all = (
+    singleton ? DEFAULT_SINGLETON_ACTIONS : DEFAULT_RESOURCE_ACTIONS
+  ) as ResourceAction[];
+
+  return apiOnly ? all.filter((action) => action !== "new" && action !== "edit") : all;
+}
+
+export class UnknownResourceAction extends Error {
+  constructor(given: readonly string[]) {
+    super(
+      `${given.join(", ")} ${given.length === 1 ? "is not an action" : "are not actions"} a ` +
+        `resource draws. One of: ${DEFAULT_RESOURCE_ACTIONS.join(", ")}. \`only\` is a ` +
+        `whitelist, so an unrecognised name there draws nothing at all rather than adding ` +
+        `something — the routes it was meant to keep are simply missing.`,
+    );
+    this.name = "UnknownResourceAction";
+  }
+}
+
+/** Refuses a name that is not an action, in either list. */
+export function checkResourceActions(only: readonly string[], except: readonly string[]): void {
+  const unknown = [...only, ...except].filter(
+    (action) => !DEFAULT_RESOURCE_ACTIONS.includes(action),
+  );
+
+  if (unknown.length > 0) throw new UnknownResourceAction(unknown);
+}
+
 /** Anything that can answer a request under a mount point. */
 export type MountedApp = (request: Request) => Response | Promise<Response>;
 
@@ -44,6 +88,15 @@ export interface ResourceOptions {
   controller?: string;
   /** Override the name used in route names and helpers. */
   as?: string;
+  /**
+   * Draws no `new` or `edit`. Rails' `config.api_only`.
+   *
+   * Those two exist to render a form, and an API renders nothing — drawn
+   * anyway they are two routes per resource that answer with a
+   * missing-template error, which reads as a broken application rather than a
+   * route that should not be there.
+   */
+  apiOnly?: boolean;
 }
 
 export interface ScopeOptions {
@@ -397,9 +450,12 @@ export class Mapper {
       param: options.param ?? "id",
     };
 
-    const defaults = singleton ? DEFAULT_SINGLETON_ACTIONS : DEFAULT_RESOURCE_ACTIONS;
     const only = toArray(options.only);
     const except = toArray(options.except);
+
+    checkResourceActions(only, except);
+
+    const defaults = defaultActions({ singleton, apiOnly: options.apiOnly ?? false });
     const available = only.length > 0 ? only : defaults;
     const actions = new Set(
       available.filter((action) => !except.includes(action as ResourceAction)),

@@ -10,3 +10,4 @@ export * from "./resource_scope.js";
 export * from "./pattern_visitors.js";
 export * from "./polymorphic_arguments.js";
 export * from "./inspector.js";
+export * from "./route_declaration.js";
