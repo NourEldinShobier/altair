@@ -51,7 +51,7 @@ export class NoRouteForRecord extends Error {
   }
 }
 
-function isSaved(record: Addressable): boolean {
+export function recordPersisted(record: Addressable): boolean {
   if (typeof record.persisted === "boolean") return record.persisted;
   if (typeof record.isPersisted === "boolean") return record.isPersisted;
 
@@ -60,7 +60,7 @@ function isSaved(record: Addressable): boolean {
   return record.id !== undefined && record.id !== null;
 }
 
-function keysFor(record: Addressable): { plural: string; singular: string } {
+export function routeKeysFor(record: Addressable): { plural: string; singular: string } {
   const name = record.modelName;
   if (name) return { plural: name.routeKey, singular: name.singularRouteKey };
 
@@ -70,7 +70,7 @@ function keysFor(record: Addressable): { plural: string; singular: string } {
   return { plural: `${klass}s`, singular: klass };
 }
 
-function paramOf(record: Addressable): string {
+export function paramForRecord(record: Addressable): string {
   if (typeof record.toParam === "function") return record.toParam();
   return String(record.id ?? "");
 }
@@ -85,12 +85,12 @@ export function routeForRecord(
   record: Addressable,
   options: PolymorphicOptions = {},
 ): { name: string; values: unknown[] } {
-  const { plural, singular } = keysFor(record);
-  const saved = isSaved(record);
+  const { plural, singular } = routeKeysFor(record);
+  const saved = recordPersisted(record);
 
   const owner = options.within;
-  const prefix = owner ? `${keysFor(owner).singular}_` : "";
-  const values: unknown[] = owner ? [paramOf(owner)] : [];
+  const prefix = owner ? `${routeKeysFor(owner).singular}_` : "";
+  const values: unknown[] = owner ? [paramForRecord(owner)] : [];
 
   // `new` is a collection action, so it never carries the record's own id even
   // when it was called with one.
@@ -98,7 +98,7 @@ export function routeForRecord(
 
   if (!saved) return { name: `${prefix}${plural}`, values };
 
-  values.push(paramOf(record));
+  values.push(paramForRecord(record));
 
   if (options.action === "edit") return { name: `edit_${prefix}${singular}`, values };
   if (options.action) return { name: `${options.action}_${prefix}${singular}`, values };
@@ -131,7 +131,7 @@ export function polymorphicPath(
   }
 
   for (const name of candidates) {
-    const helper = helpers[`${camelizeName(name)}Path`];
+    const helper = helpers[`${helperKey(name)}Path`];
     if (!helper) continue;
 
     const values =
@@ -142,10 +142,10 @@ export function polymorphicPath(
     return options.query ? helper(...values, options.query) : helper(...values);
   }
 
-  throw new NoRouteForRecord(keysFor(record).plural, candidates);
+  throw new NoRouteForRecord(routeKeysFor(record).plural, candidates);
 }
 
 /** `edit_blog_post` becomes `editBlogPost`, matching the helper table. */
-function camelizeName(name: string): string {
+export function helperKey(name: string): string {
   return name.replace(/_([a-z0-9])/g, (_match, letter: string) => letter.toUpperCase());
 }
