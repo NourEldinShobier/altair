@@ -11,6 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { UUID_NAMESPACES, uuidV5 } from "./misc.js";
 
 /** Which algorithm the digests use. Rails' `hash_digest_class`. */
 let algorithm = "sha256";
@@ -66,28 +67,14 @@ function stableJson(value: unknown): string {
 }
 
 /**
- * A UUID derived from a value rather than randomly. Rails'
- * `uuid_from_hash`.
+ * A uuid derived from a value rather than randomly. Rails' `uuid_from_hash`.
  *
- * The same input always gives the same UUID, which is what makes it usable as
- * an idempotency key: a retried request computes the id it already used
- * instead of creating a second record.
+ * The derivation lives in `misc.ts` as `uuidV5`, and this is the one-argument
+ * form of it: a name under the OID namespace, which is what Rails' fixtures
+ * use. Two derivations of one idea is how the fixture ids stopped matching
+ * Rails' — this one hashed the name alone and ignored the namespace entirely,
+ * so it agreed with nothing, including itself under another name.
  */
-export function uuidFromHash(value: string): string {
-  const digest = createHash("sha1").update(value).digest();
-
-  // Version 5 and the RFC variant bits, as the spec requires — without them
-  // the result is a string of the right shape that a strict parser rejects.
-  digest[6] = ((digest[6] as number) & 0x0f) | 0x50;
-  digest[8] = ((digest[8] as number) & 0x3f) | 0x80;
-
-  const hex = digest.subarray(0, 16).toString("hex");
-
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join("-");
+export function uuidFromHash(name: string, namespace: string = UUID_NAMESPACES.oid): string {
+  return uuidV5(namespace, name);
 }
