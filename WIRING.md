@@ -8,7 +8,7 @@ tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
 does anything else in `src` name any of its exports? As of this writing, 112 of
-335 modules do not.
+336 modules do not.
 
 That number is not a defect count. Three different things land in the list.
 
@@ -44,6 +44,9 @@ that is a decision rather than a bug.
   `watchForChanges` in `autoloading.ts` is the joint — and it also gave
   `directoriesToWatch` and `watchedDirsWithExtensions`, which existed for
   exactly this and had no caller, something to do.
+- **`orm/record_pack.ts`** knew the shape of a payload and nothing about
+  `Model`, which is what makes it testable without a database — and also what
+  stopped it packing an actual record. `model_packing.ts` is the adapter.
 
 ## A feature ported ahead of the thing it serves
 
@@ -51,9 +54,6 @@ that is a decision rather than a bug.
   load — `t0_r0`, `t0_r1`, and `extractRecord` to take them apart again.
   `includes` preloads with separate queries instead, which is Rails' default
   and correct. Nothing in the ORM issues the joined query these exist for.
-- **`orm/record_pack.ts`** turns a record into a cacheable payload and back,
-  through a `RecordReader`/`RecordWriter` pair. No adapter for `Model` exists,
-  so nothing can pack an actual record yet.
 
 ## What the tool can and cannot see
 
