@@ -72,6 +72,47 @@ function decode(value: string): Buffer {
 const SEPARATOR = ".";
 
 /**
+ * The cipher an encryptor uses. Rails' `MessageEncryptor.default_cipher`.
+ *
+ * Named rather than written at each call site because it is the thing that
+ * changes: an application rotating to a new cipher has to be able to say which
+ * one the old messages used, and a literal repeated in three places cannot.
+ */
+export const DEFAULT_CIPHER = "aes-256-gcm";
+
+export function defaultCipher(): string {
+  return DEFAULT_CIPHER;
+}
+
+/**
+ * The key length a cipher needs, in bytes. Rails' `MessageEncryptor.key_len`.
+ *
+ * Read out of the name rather than tabulated, because the name is where the
+ * number comes from: `aes-256-gcm` takes 256 bits. A table would be a second
+ * place to update, and getting it wrong means deriving a key of the wrong
+ * length — which fails at encryption time, in a deploy, and not in a test.
+ */
+export function keyLen(cipher: string = defaultCipher()): number {
+  const bits = /^aes-(\d+)-/.exec(cipher)?.[1];
+
+  if (bits === undefined) throw new Error(`Unknown cipher ${JSON.stringify(cipher)}.`);
+
+  return Number(bits) / 8;
+}
+
+/**
+ * How long a key file's contents must be. Rails'
+ * `EncryptedFile.expected_key_length`.
+ *
+ * Twice the key length, because the file holds hex. Checking it when the key is
+ * read is what turns "this file has a stray newline" into a message about the
+ * key rather than a decryption failure against every encrypted file.
+ */
+export function expectedKeyLength(cipher: string = defaultCipher()): number {
+  return keyLen(cipher) * 2;
+}
+
+/**
  * Signs a payload so tampering is detectable. The payload stays readable —
  * signing is not encryption.
  */
@@ -145,6 +186,17 @@ export class MessageVerifier {
   }
 
   generate(value: unknown, options?: MessageOptionsOrPurpose): string {
+    return this.createMessage(value, options);
+  }
+
+  /**
+   * The message this verifier makes. Rails' `create_message`.
+   *
+   * Its own method because it is the seam rotation is defined against: a
+   * rotation reads with an older secret and never writes with one, so having
+   * exactly one place that writes is what makes that statement checkable.
+   */
+  createMessage(value: unknown, options?: MessageOptionsOrPurpose): string {
     const resolved = optionsFor(options);
     const expiry = expiryFor(resolved);
     const envelope: Envelope<unknown> = {
@@ -172,8 +224,39 @@ export class MessageVerifier {
    */
   #rotations: MessageVerifier[] = [];
 
-  rotate(secret: string | Buffer): this {
-    this.#rotations.push(new MessageVerifier(secret));
+  rotate(secret: string | Buffer, digest = "sha256"): this {
+    this.#rotations.push(new MessageVerifier(secret, digest));
+
+    return this;
+  }
+
+  /**
+   * Accept messages made with the library's default digest. Rails'
+   * `rotate_defaults`.
+   *
+   * For a verifier constructed with a digest of its own: the messages already
+   * in browsers were signed with the default, and without this the day the
+   * digest changes is the day every session ends. It rotates to the *same*
+   * secret, because the secret did not change — only how it was applied.
+   */
+  rotateDefaults(): this {
+    if (this.digest !== "sha256") this.rotate(this.#secret, "sha256");
+
+    return this;
+  }
+
+  #onRotationCallback: (() => void) | undefined;
+
+  /**
+   * Called when a message was read by an older secret. Rails' `on_rotation`.
+   *
+   * The only way to know whether a secret can be retired. Without it the
+   * question "is anything still using the old key" has no answer, so either the
+   * old key is kept for ever — which is the same as not having rotated — or it
+   * is dropped on a guess and some fraction of visitors is signed out.
+   */
+  onRotation(callback: () => void): this {
+    this.#onRotationCallback = callback;
 
     return this;
   }
@@ -187,17 +270,50 @@ export class MessageVerifier {
 
   /** Returns the value, or null when the message is missing or tampered with. */
   verified<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
-    const current = this.#verifiedWith(message, purpose);
-    if (current !== null) return current as T;
+    return this.readMessage<T>(message, purpose);
+  }
 
-    // Only after the current secret has failed, so the common path costs
-    // nothing and a rotation is not a way to make verification slower.
+  /**
+   * Rails' `read_message` — the read that knows about rotations.
+   *
+   * Older secrets are tried only after the current one has failed, so the
+   * common path costs nothing and rotating is not a way to make every request
+   * slower.
+   */
+  readMessage<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
+    const current = this.#verifiedWith<T>(message, purpose);
+    if (current !== null) return current;
+
     for (const older of this.#rotations) {
-      const value = older.verified<T>(message, purpose);
-      if (value !== null) return value;
+      const value = older.readMessage<T>(message, purpose);
+
+      if (value !== null) {
+        this.#onRotationCallback?.();
+
+        return value;
+      }
     }
 
     return null;
+  }
+
+  /**
+   * Whether the signature is this verifier's. Rails' `valid_message?`.
+   *
+   * The signature alone: no purpose, no expiry, nothing deserialised. It
+   * answers "did we make this" for a message that is going to be rejected
+   * anyway, which is what separates "somebody is forging messages" from "this
+   * link is three months old" in a log.
+   */
+  validMessage(message: string | null | undefined): boolean {
+    if (!message) return false;
+
+    const parts = message.split(SEPARATOR);
+    if (parts.length !== 2) return false;
+
+    const [payload, signature] = parts as [string, string];
+
+    return this.#matches(this.#digestFor(payload), signature);
   }
 
   #verifiedWith<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
@@ -259,9 +375,10 @@ export class MessageEncryptor {
 
   constructor(key: Buffer | string) {
     const material = Buffer.from(key as string);
-    if (material.length !== 32) {
+    if (material.length !== keyLen()) {
       throw new Error(
-        `AES-256-GCM needs a 32-byte key, got ${material.length}. Derive one with KeyGenerator.`,
+        `${DEFAULT_CIPHER} needs a ${keyLen()}-byte key, got ${material.length}. ` +
+          `Derive one with KeyGenerator.`,
       );
     }
     this.#key = material;
@@ -291,10 +408,20 @@ export class MessageEncryptor {
   }
 
   encrypt(value: unknown, options?: MessageOptionsOrPurpose): string {
+    return this.createMessage(value, options);
+  }
+
+  /**
+   * The message this encryptor makes. Rails' `create_message`.
+   *
+   * The single place a message is written, which is what lets "a rotation only
+   * ever reads" be a fact about the code rather than a convention.
+   */
+  createMessage(value: unknown, options?: MessageOptionsOrPurpose): string {
     const resolved = optionsFor(options);
     const expiry = expiryFor(resolved);
     const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", this.#key, iv);
+    const cipher = createCipheriv(DEFAULT_CIPHER, this.#key, iv);
 
     const plaintext = JSON.stringify({
       value,
@@ -307,18 +434,45 @@ export class MessageEncryptor {
     return [encode(encrypted), encode(iv), encode(tag)].join(SEPARATOR);
   }
 
+  #onRotationCallback: (() => void) | undefined;
+
+  /**
+   * Called when a message was read by an older key. Rails' `on_rotation`.
+   *
+   * The same reason the verifier has it: without a signal, an old key is either
+   * kept for ever — which is the same as not having rotated — or dropped on a
+   * guess, and the guess costs some fraction of visitors their session.
+   */
+  onRotation(callback: () => void): this {
+    this.#onRotationCallback = callback;
+
+    return this;
+  }
+
   /** Returns the value, or null when the message cannot be authenticated. */
   decrypt<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
+    return this.readMessage<T>(message, purpose);
+  }
+
+  /**
+   * Rails' `read_message` — the read that knows about rotations.
+   *
+   * Older keys are tried only after the current one has failed, so the common
+   * path costs nothing and rotating is not a way to make every request slower.
+   */
+  readMessage<T = unknown>(message: string | null | undefined, purpose?: string): T | null {
     const current = this.#decryptWith<T>(message, purpose);
 
     if (current !== null) return current;
 
-    // Only after the current key has failed, so the common path costs nothing
-    // and a rotation is not a way to make decryption slower.
     for (const older of this.#rotations) {
-      const value = older.decrypt<T>(message, purpose);
+      const value = older.readMessage<T>(message, purpose);
 
-      if (value !== null) return value;
+      if (value !== null) {
+        this.#onRotationCallback?.();
+
+        return value;
+      }
     }
 
     return null;
@@ -332,7 +486,7 @@ export class MessageEncryptor {
 
     try {
       const [payload, iv, tag] = parts as [string, string, string];
-      const decipher = createDecipheriv("aes-256-gcm", this.#key, decode(iv));
+      const decipher = createDecipheriv(DEFAULT_CIPHER, this.#key, decode(iv));
       decipher.setAuthTag(decode(tag));
 
       const plaintext = Buffer.concat([
