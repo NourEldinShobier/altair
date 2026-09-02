@@ -83,3 +83,5 @@ export * from "./pg_type_registry.js";
 export * from "./connection_url.js";
 export * from "./encryption_properties.js";
 export * from "./reflection_chain.js";
+export * from "./preload_batching.js";
+export * from "./find_by_sql.js";
