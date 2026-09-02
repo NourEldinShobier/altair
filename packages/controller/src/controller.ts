@@ -23,12 +23,14 @@ import {
   skipCallback,
 } from "@altair/support";
 import { UnsafeRedirect, sameHost } from "./redirect_safety.js";
+import { buildInstrumented, type ProcessActionPayload } from "./instrumentation.js";
+import { filteredParameters, filteredPath } from "./filtered_logging.js";
 import { Parameters } from "./parameters.js";
 import { parseNestedParams } from "./nested_params.js";
 import { CookieJar } from "./cookies.js";
 import { Flash, Session, type SessionOptions } from "./session.js";
 import { InvalidAuthenticityToken, isSafeMethod, isVerifiedRequest, maskedToken } from "./csrf.js";
-import { Current, type Secrets } from "@altair/support";
+import { Current, ParameterFilter, notifier, type Secrets } from "@altair/support";
 import { renderDocument, renderInertia, type InertiaOptions, type Node } from "@altair/view";
 
 export type ActionName = string;
@@ -323,6 +325,50 @@ export class Controller extends Callbacks {
       throw new Error(`The action "${name}" could not be found for ${this.constructor.name}`);
     }
 
+    const payload = this.#instrumentationPayload(name);
+
+    // Around the whole action, including the filters and the handler: an
+    // action that raised is the one whose timing matters most, and an event
+    // that simply does not fire leaves a gap in the log at the moment
+    // something went wrong. `buildInstrumented` rethrows and finishes in a
+    // `finally`, so nothing here behaves differently for a caller.
+    return await buildInstrumented(
+      payload,
+      (event, load, totalMs) => {
+        notifier().publish(`${event}.altair`, { ...load }, totalMs);
+      },
+      async () => {
+        const response = await this.#runAction(action as () => unknown);
+
+        payload.status = response.status;
+
+        return response;
+      },
+    );
+  }
+
+  /**
+   * What the request log is built from. Rails' `process_action` payload.
+   *
+   * The parameters are filtered here rather than by whoever subscribes,
+   * because a subscriber is application code and a password that reaches one
+   * has already left the framework. Filtering at the point of publication
+   * means there is one place to get it right.
+   */
+  #instrumentationPayload(name: ActionName): ProcessActionPayload {
+    const klass = this.constructor as typeof Controller;
+    const filter = klass.parameterFilter;
+
+    return {
+      controller: klass.name,
+      action: String(name),
+      method: this.request.method,
+      path: filteredPath(this.request, filter),
+      params: filteredParameters({ request: this.params.toUnsafeObject() }, filter),
+    };
+  }
+
+  async #runAction(action: () => unknown): Promise<Response> {
     try {
       // Before the filters, not among them: a `beforeAction` that writes
       // anything — touching a last-seen column, recording an audit row — would
@@ -349,6 +395,14 @@ export class Controller extends Callbacks {
     const response = this.#response ?? new Response(null, { status: 204 });
     return this.cookies.applyTo(response);
   }
+
+  /**
+   * What never reaches a log. Rails' `config.filter_parameters`.
+   *
+   * On the class so an application can add to it once, and copied on write so
+   * a controller that adds one does not add it for everything else.
+   */
+  static parameterFilter = new ParameterFilter();
 
   /**
    * Puts what a view needs into the request scope.
