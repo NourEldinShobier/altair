@@ -7,7 +7,7 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 113 of
+does anything else in `src` name any of its exports? As of this writing, 112 of
 335 modules do not.
 
 That number is not a defect count. Three different things land in the list.
@@ -37,15 +37,20 @@ None of these is wrong. Each was ported against its Rails counterpart and each
 has its own tests. The question they raise is which one should survive, and
 that is a decision rather than a bug.
 
+## Joined up since
+
+- **`support/file_update_checker.ts`** and the `Reloader` in `execution.ts`
+  were two halves nothing connected, so nothing reloaded on an edit.
+  `watchForChanges` in `autoloading.ts` is the joint — and it also gave
+  `directoriesToWatch` and `watchedDirsWithExtensions`, which existed for
+  exactly this and had no caller, something to do.
+
 ## A feature ported ahead of the thing it serves
 
 - **`orm/join_dependency.ts`** builds column aliases for a single-JOIN eager
   load — `t0_r0`, `t0_r1`, and `extractRecord` to take them apart again.
   `includes` preloads with separate queries instead, which is Rails' default
   and correct. Nothing in the ORM issues the joined query these exist for.
-- **`support/file_update_checker.ts`** answers "has anything changed since I
-  last looked". `autoloading.ts` knows how to unload and reload. Nothing
-  connects the two, so nothing reloads on an edit.
 - **`orm/record_pack.ts`** turns a record into a cacheable payload and back,
   through a `RecordReader`/`RecordWriter` pair. No adapter for `Model` exists,
   so nothing can pack an actual record yet.

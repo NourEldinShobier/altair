@@ -29,7 +29,8 @@
 
 import { NameError } from "./class_attributes.js";
 import { camelize, underscore } from "./inflector.js";
-import { loadInterlock } from "./execution.js";
+import { loadInterlock, type Reloader } from "./execution.js";
+import { FileUpdateChecker, type FileStats } from "./file_update_checker.js";
 
 // --- names and paths ----------------------------------------------------------
 
@@ -411,6 +412,77 @@ export function watchedDirsWithExtensions(
   extensions: readonly string[] = ["ts", "tsx"],
 ): Record<string, string[]> {
   return Object.fromEntries(directoriesToWatch(paths).map((path) => [path, [...extensions]]));
+}
+
+/** What a reloader watches, and what it forgets when something changes. */
+export interface ChangeWatch {
+  /** The autoload paths. Nested ones are watched once; see `directoriesToWatch`. */
+  paths: readonly string[];
+  /** What an edit has to be to count. A template is not a class. */
+  extensions?: readonly string[];
+  /** Files watched by name rather than by directory — a routes file, a schema. */
+  files?: readonly string[];
+  /** The set of loaded constants to forget. Rails' `Dependencies.loaded`. */
+  loaded: Set<string>;
+  stats?: FileStats;
+}
+
+/**
+ * Points a reloader at the filesystem. Rails' `Rails.application.reloader`
+ * setup in the `active_support.set_configs` initializer.
+ *
+ * Both halves of this already existed and nothing joined them.
+ * `file_update_checker.ts` answers "has anything changed since I last looked";
+ * `Reloader` in `execution.ts` knows how to take the interlock alone, unload,
+ * and put everything back. `directoriesToWatch` and `watchedDirsWithExtensions`
+ * above exist for exactly this and had no caller. This is the joint.
+ *
+ * `directoriesToWatch` collapses a path nested inside another. That matters
+ * for a watcher fed by filesystem events, where a directory watched twice
+ * reports every change twice; the scan here would deduplicate anyway, and the
+ * helper is used because the day this is backed by events is not the day to
+ * find that out.
+ *
+ * The check goes on as a `check` rather than as the checker's own block,
+ * because the checker is deliberately synchronous — it is a directory scan,
+ * paid once per request in development — and a reload is not. Making the cheap
+ * "nothing changed" answer wait on a promise would put the cost on every
+ * request instead of on the ones that edited something.
+ *
+ * The forgetting happens in `beforeClassUnload`, so the constants are gone
+ * before the body re-reads them and before any prepare hook runs — a hook that
+ * re-reads a constant which has not been forgotten yet gets back the version
+ * being replaced, which is the whole failure a reload exists to avoid.
+ *
+ * The scan is recorded alongside it. Where in the sequence that happens turns
+ * out not to matter, because `execute` records the scan `updated` took rather
+ * than a fresh one — an edit made while the reload runs is seen by the next
+ * check either way. It is here because this is where the reload is decided.
+ */
+export function watchForChanges(reloader: Reloader, watch: ChangeWatch): FileUpdateChecker {
+  const checker = new FileUpdateChecker(
+    {
+      files: watch.files,
+      dirs: watchedDirsWithExtensions(watch.paths, watch.extensions),
+    },
+    () => undefined,
+    watch.stats,
+  );
+
+  reloader.check(() => checker.updated());
+
+  reloader.beforeClassUnload(() => {
+    checker.execute();
+    clearContext(watch.loaded);
+  });
+
+  // After, not before: a prepare hook re-reads a constant, and re-reading one
+  // that has not been forgotten yet gives back the version being replaced.
+  reloader.afterClassUnload(() => {
+    runPrepareHooks();
+  });
+
+  return checker;
 }
 
 // --- deprecating a constant -------------------------------------------------------
