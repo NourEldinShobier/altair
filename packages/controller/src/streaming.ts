@@ -16,6 +16,8 @@
  * spinner for ninety seconds usually gives up before a proxy does.
  */
 
+import { errors } from "@altair/support";
+
 /** One Server-Sent Event. Every field is optional except the data. */
 export interface ServerSentEvent {
   data: unknown;
@@ -53,10 +55,51 @@ export function frameEvent(event: ServerSentEvent): string {
   return `${lines.join("\n")}\n\n`;
 }
 
+/** Told about a failure that happened after the headers went out. */
+export type StreamErrorHandler = (error: unknown) => void;
+
 export interface StreamOptions extends ResponseInit {
   contentType?: string;
   /** Stops the stream when the client goes away. */
   signal?: AbortSignal;
+  /**
+   * Called when the source throws mid-stream. Rails' `on_error`.
+   *
+   * This is the only chance the application gets. By the time a stream fails,
+   * a 200 and the headers are already on the wire and cannot be taken back —
+   * so there is no status to change, no error page to render, and no
+   * `rescue_from` that can run. All that is left is to break the body, and
+   * without this the failure is invisible on the server as well as the client.
+   */
+  onError?: StreamErrorHandler;
+}
+
+/**
+ * Tells the application a stream failed after its headers went out. Rails'
+ * `call_on_error`.
+ *
+ * Reports the failure itself when nobody is listening, which Rails does not
+ * do. A half-sent CSV export is not distinguishable from a complete one by
+ * anything the client can see — no status says so, and the file simply stops —
+ * so a mid-stream failure that nothing logged is a failure nobody will ever
+ * hear about. That is the one kind of error worth reporting even unasked.
+ *
+ * A handler that throws is reported, and so is the error it was given: the
+ * handler's own failure must not swallow the one it was called about.
+ */
+export function callOnError(error: unknown, handler?: StreamErrorHandler): void {
+  if (handler === undefined) {
+    errors.report(error, { handled: false, source: "streaming" });
+
+    return;
+  }
+
+  try {
+    handler(error);
+  } catch (failure) {
+    errors.report(failure, { handled: false, source: "streaming" });
+    errors.report(error, { handled: false, source: "streaming" });
+  }
 }
 
 /**
@@ -70,7 +113,7 @@ export function streamResponse(
   source: AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array>,
   options: StreamOptions = {},
 ): Response {
-  const { contentType, signal, headers, ...init } = options;
+  const { contentType, signal, onError, headers, ...init } = options;
   const encoder = new TextEncoder();
 
   const iterator = (
@@ -102,8 +145,10 @@ export function streamResponse(
       } catch (error) {
         // The headers are long gone, so there is no status left to change:
         // all that can be done is to break the body, which is what a reader
-        // needs in order to know it did not get everything.
+        // needs in order to know it did not get everything — and tell the
+        // application, which is the only place the failure can be recorded.
         await iterator.return?.();
+        callOnError(error, onError);
         controller.error(error);
       }
     },
