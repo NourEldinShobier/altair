@@ -96,8 +96,10 @@ export function foldsCase(options: EncryptedAttributeOptions): boolean {
 export class UnreadableCiphertext extends Error {
   constructor(attribute: string) {
     super(
-      `Could not decrypt "${attribute}". The key may have changed, or the column may hold ` +
-        `unencrypted data — pass supportUnencrypted to read it while migrating.`,
+      `Could not decrypt "${attribute}" with the current key or any previous one. The key may ` +
+        `have changed without the old one being kept — pass it as \`previous\` to ` +
+        `configureEncryption — or the column may hold unencrypted data, which needs ` +
+        `supportUnencrypted to read while migrating.`,
     );
     this.name = "UnreadableCiphertext";
   }
@@ -106,7 +108,13 @@ export class UnreadableCiphertext extends Error {
 const PREFIX = "altenc:";
 const DETERMINISTIC_PREFIX = "altdet:";
 
-let keys: { primary: Buffer; deterministic: Buffer } | undefined;
+interface KeyMaterial {
+  primary: Buffer;
+  deterministic: Buffer;
+}
+
+let keys: KeyMaterial | undefined;
+let retired: KeyMaterial[] = [];
 
 /**
  * Derives the keys from the application's secret.
@@ -114,17 +122,44 @@ let keys: { primary: Buffer; deterministic: Buffer } | undefined;
  * Two separate keys from one secret, so the deterministic scheme cannot be
  * used to learn anything about values encrypted under the other.
  */
-export function configureEncryption(secretKeyBase: string): void {
+export function configureEncryption(
+  secretKeyBase: string,
+  { previous = [] }: { previous?: readonly string[] } = {},
+): void {
+  keys = deriveKeys(secretKeyBase);
+  retired = previous.map((secret) => deriveKeys(secret));
+}
+
+function deriveKeys(secretKeyBase: string): KeyMaterial {
   const generator = new KeyGenerator(secretKeyBase);
 
-  keys = {
+  return {
     primary: generator.generate("active record encryption"),
     deterministic: generator.generate("active record deterministic encryption"),
   };
 }
 
+/**
+ * The keys a column will still read, after the one it is written with. Rails'
+ * `previous_types`.
+ *
+ * A rotation that could not read the old key would not be a rotation — it
+ * would be an outage. Every encrypted row in the database was written under
+ * the previous secret, and re-encrypting them all before the new one can be
+ * deployed is a migration that has to run while the application is down.
+ *
+ * So the new key is what writes, the old ones are what still read, and rows
+ * move over as they are next saved. The old secrets come out of the
+ * configuration once nothing is left that needs them — and until then, this
+ * being empty is what an application that never rotated looks like.
+ */
+export function previousTypes(): readonly KeyMaterial[] {
+  return retired;
+}
+
 export function resetEncryption(): void {
   keys = undefined;
+  retired = [];
 }
 
 export function isEncryptionConfigured(): boolean {
@@ -222,12 +257,18 @@ export function decryptValue(
     throw new UnreadableCiphertext(attribute);
   }
 
-  const material = requireKeys();
+  // A row is read under whichever key wrote it, and nothing has to know which
+  // that was. The current key is tried first for speed rather than for
+  // correctness: the cipher is authenticated, so a ciphertext decrypts under
+  // exactly one of these and the order cannot change the answer — but most
+  // rows were written under the current key, so most reads stop at the first.
+  for (const material of [requireKeys(), ...retired]) {
+    const plaintext = value.startsWith(DETERMINISTIC_PREFIX)
+      ? decryptDeterministic(value, material.deterministic)
+      : new MessageEncryptor(material.primary).decrypt<string>(value.slice(PREFIX.length));
 
-  const plaintext = value.startsWith(DETERMINISTIC_PREFIX)
-    ? decryptDeterministic(value, material.deterministic)
-    : new MessageEncryptor(material.primary).decrypt<string>(value.slice(PREFIX.length));
+    if (plaintext !== null) return plaintext;
+  }
 
-  if (plaintext === null) throw new UnreadableCiphertext(attribute);
-  return plaintext;
+  throw new UnreadableCiphertext(attribute);
 }
