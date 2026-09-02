@@ -91,7 +91,9 @@ import {
   type NumericalityOptions,
   type ValidationOptions,
   type ValidationTarget,
+  type UniquenessComparison,
 } from "./validations.js";
+import { uniquenessComparison } from "./predicate_builder.js";
 import { fingerprintMatches, generateToken, readToken, type TokenDefinition } from "./token_for.js";
 import {
   PRELOAD_PREFIX,
@@ -4331,8 +4333,29 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       const probe = {
         isPersisted: this.isPersisted,
         id: this[ATTRIBUTES][klass.primaryKey],
-        exists: async (conditions: Conditions, excludeId?: unknown) => {
-          let relation = klass.all().where(conditions);
+        exists: async (
+          conditions: Conditions,
+          excludeId?: unknown,
+          comparison?: UniquenessComparison,
+        ) => {
+          const folded = new Set(comparison?.caseInsensitive ?? []);
+          const plain: Conditions = {};
+          let relation = klass.all();
+
+          for (const [column, value] of Object.entries(conditions)) {
+            if (!folded.has(column)) {
+              plain[column] = value as Conditions[string];
+              continue;
+            }
+
+            relation = relation.where(
+              uniquenessComparison(column, value, (name) => klass.connection.quote(name)),
+              value,
+            );
+          }
+
+          relation = relation.where(plain);
+
           if (excludeId !== undefined)
             relation = relation.whereNot({ [klass.primaryKey]: excludeId });
           return await relation.exists();

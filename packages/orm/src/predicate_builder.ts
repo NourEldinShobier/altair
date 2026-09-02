@@ -219,6 +219,31 @@ export function caseSensitiveComparison(
 }
 
 /**
+ * The comparison a case-insensitive uniqueness check uses for one condition.
+ *
+ * The column's own type is not to hand where this is called — the validator
+ * has the record, not the schema — but the value's is, and a value that is not
+ * a string has no case to fold. That guard is not tidiness: `LOWER` on a
+ * numeric column is a hard error on PostgreSQL (`function lower(integer) does
+ * not exist`), so a `caseSensitive: false` on the wrong attribute would turn
+ * every validation of that record into a failed query rather than a failed
+ * rule.
+ */
+export function uniquenessComparison(
+  column: string,
+  value: unknown,
+  quote: (name: string) => string = (name) => `"${name}"`,
+  placeholder = "?",
+): string {
+  return caseInsensitiveComparison(
+    column,
+    typeof value === "string" ? "string" : "integer",
+    quote,
+    placeholder,
+  );
+}
+
+/**
  * Rails' `case_insensitive_comparison`.
  *
  * Both sides lowered, not just the column. Lowering only the column compares

@@ -89,7 +89,23 @@ export interface ValidationOptions {
   inclusion?: { in: readonly unknown[] };
   exclusion?: { in: readonly unknown[] };
   numericality?: boolean | NumericalityOptions;
-  uniqueness?: boolean | { scope?: string | string[] };
+  uniqueness?:
+    | boolean
+    | {
+        scope?: string | string[];
+        /**
+         * Whether two values differing only in case collide. Rails'
+         * `case_sensitive:`, and `true` there as here.
+         *
+         * `false` is what an email or a username almost always wants:
+         * `Bob@example.com` and `bob@example.com` are one address, and a
+         * sign-up form that accepts both has handed two accounts to one
+         * person — which is a support ticket at best and an account-takeover
+         * path at worst, since a password reset then goes to whichever row
+         * was found first.
+         */
+        caseSensitive?: boolean;
+      };
   confirmation?: boolean;
   acceptance?: boolean;
   /** Rails' `allow_nil`. */
@@ -224,10 +240,19 @@ export interface ValidationTarget {
   [key: string]: unknown;
 }
 
+/** Which columns a uniqueness check compares without regard to case. */
+export interface UniquenessComparison {
+  caseInsensitive?: readonly string[];
+}
+
 /** What a uniqueness check needs to reach the database. */
 export interface UniquenessProbe {
   /** Counts matching rows, optionally ignoring the record being validated. */
-  exists: (conditions: Record<string, unknown>, excludeId?: unknown) => Promise<boolean>;
+  exists: (
+    conditions: Record<string, unknown>,
+    excludeId?: unknown,
+    comparison?: UniquenessComparison,
+  ) => Promise<boolean>;
   isPersisted: boolean;
   id: unknown;
 }
@@ -363,14 +388,26 @@ export async function runValidation(
 
   if (options.uniqueness && probe && !isBlank(value)) {
     const conditions: Record<string, unknown> = { [attribute]: value };
+    const settings = options.uniqueness === true ? {} : options.uniqueness;
 
-    const scope = options.uniqueness === true ? undefined : options.uniqueness.scope;
+    const scope = settings.scope;
     for (const column of scope === undefined ? [] : Array.isArray(scope) ? scope : [scope]) {
       conditions[column] = record[column];
     }
 
+    // The attribute only, never the scope columns — the scope is what narrows
+    // the search, and folding its case would widen it instead. Rails draws the
+    // same line, and it matters for a scope like a tenant slug that is
+    // deliberately case-sensitive.
+    const comparison =
+      settings.caseSensitive === false ? { caseInsensitive: [attribute] } : undefined;
+
     // A persisted record must not collide with itself, so it is excluded by id.
-    const taken = await probe.exists(conditions, probe.isPersisted ? probe.id : undefined);
+    const taken = await probe.exists(
+      conditions,
+      probe.isPersisted ? probe.id : undefined,
+      comparison,
+    );
 
     if (taken) fail(MESSAGES.taken, "taken");
   }
