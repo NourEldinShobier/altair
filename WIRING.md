@@ -7,7 +7,7 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 108 of
+does anything else in `src` name any of its exports? As of this writing, 107 of
 336 modules do not.
 
 That number is not a defect count. Three different things land in the list.
@@ -74,6 +74,14 @@ that is a decision rather than a bug.
   which a suite sharing one process between files cannot observe. That is not a
   guess: the first version registered on import, and the test proving it passed
   alone and failed in the full run.
+- **`cable/worker_pool.ts`** had the hooks a channel action runs inside — the
+  ones where a database connection is checked out and returned — and the server
+  called `channel.dispatch` directly. So an action had no connection management
+  at all, and `currentWork()` was always undefined, which made every line in a
+  cable log anonymous. Subscribing, unsubscribing and every message go through
+  `performWork` now. Calling it also exposed a bug in it: the running context
+  was a module-level variable, which cannot survive two sockets working at
+  once. It is an `AsyncLocalStorage` now.
 
 ## A feature ported ahead of the thing it serves
 
