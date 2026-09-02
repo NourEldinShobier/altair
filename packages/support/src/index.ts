@@ -12,6 +12,8 @@ export * from "./i18n.js";
 export * from "./logger.js";
 export * from "./error_reporter.js";
 export * from "./pretty.js";
+export * from "./continuous_integration.js";
+export * from "./file_update_checker.js";
 export * from "./time_travel.js";
 export * from "./sanitize.js";
 export * from "./environment.js";

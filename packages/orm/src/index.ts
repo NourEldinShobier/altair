@@ -71,6 +71,7 @@ export * from "./model_conformance.js";
 export * from "./transaction_outcome.js";
 export * from "./database_tasks.js";
 export * from "./connection_leasing.js";
+export * from "./database_errors.js";
 export * from "./model_naming.js";
 export * from "./signed_ids.js";
 export * from "./rich_text_attachments.js";

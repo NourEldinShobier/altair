@@ -163,6 +163,31 @@ const DECLARATION =
  */
 const DEFINED_PROPERTY = /defineProperty\(\s*[^,]+,\s*["']([a-zA-Z][a-zA-Z0-9]*)["']/g;
 
+/**
+ * A name bound by destructuring, or listed in an export.
+ *
+ * `const { before: beforeValidation } = callbackDecorators("validation")` is
+ * how the ORM builds its callback decorators, and `export { beforeValidation }`
+ * is how they leave the module. Neither is followed by `(`, `<`, `:` or `=`,
+ * so the rule above cannot see either — and `beforeValidation` was being
+ * counted as missing while being the documented way to write one.
+ *
+ * Deliberately only these two shapes rather than "an identifier before a comma
+ * or a brace": that wider rule would read the *values* of an object literal as
+ * declarations, so `{ from: options.to }` would claim `to` is implemented.
+ * Counting something we have not written is a worse failure for this tool than
+ * missing something we have.
+ */
+const BOUND_NAMES = /(?:export\s*|(?:const|let|var)\s*)\{([^}]*)\}(?=\s*(?:=|from|;|$))/gm;
+
+/** The name a destructuring or export entry actually binds: the half after `:` or `as`. */
+function boundName(entry: string): string | undefined {
+  const parts = entry.split(/:|\bas\b/);
+  const last = parts[parts.length - 1]?.trim();
+
+  return last !== undefined && /^[a-zA-Z][a-zA-Z0-9_]*$/.test(last) ? last : undefined;
+}
+
 /** Every identifier that appears as a declaration in our source. */
 async function ourNames(packages: string[]): Promise<Set<string>> {
   const names = new Set<string>();
@@ -176,6 +201,14 @@ async function ourNames(packages: string[]): Promise<Set<string>> {
       for (const pattern of [DECLARATION, DEFINED_PROPERTY]) {
         for (const match of source.matchAll(pattern)) {
           names.add(key(match[1] as string));
+        }
+      }
+
+      for (const match of source.matchAll(BOUND_NAMES)) {
+        for (const entry of (match[1] as string).split(",")) {
+          const name = boundName(entry);
+
+          if (name !== undefined) names.add(key(name));
         }
       }
     }
