@@ -22,6 +22,7 @@ export * from "./text.js";
 export * from "./options.js";
 export * from "./tags.js";
 export * from "./assets.js";
+export * from "./atom_feed.js";
 export * from "./escaping.js";
 export * from "./asset_urls.js";
 export * from "./dom.js";

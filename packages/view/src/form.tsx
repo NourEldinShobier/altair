@@ -52,7 +52,15 @@ export interface FormOptions {
   class?: string;
   /** Anything else lands on the form element. */
   attributes?: Attributes;
+  /** The builder this one form uses. Rails' `builder:`. */
+  builder?: FormBuilderClass;
 }
+
+/** Anything that can stand in for `FormBuilder`. */
+export type FormBuilderClass = new (
+  scope: string | undefined,
+  record: FormRecord | undefined,
+) => FormBuilder;
 
 /** The name an input gets: `post[title]`, and `post[tags][]` for many. */
 export function fieldName(scope: string | undefined, attribute: string, many = false): string {
@@ -349,15 +357,51 @@ export class FormBuilder {
     );
   }
 
-  /** Fields for a nested record. Rails' `fields_for`. */
+  /**
+   * Fields for a nested record. Rails' `fields_for`.
+   *
+   * Built from this builder's own class rather than from `FormBuilder`, so an
+   * application's builder does not stop applying halfway down a form. A nested
+   * `fields_for` that quietly reverted to the plain builder is exactly the
+   * place errors would stop being rendered — and it would look like the nested
+   * record simply had none.
+   */
   fieldsFor(attribute: string, index?: number): FormBuilder {
     const nested =
       index === undefined
         ? `${this.scope ?? ""}[${attribute}_attributes]`
         : `${this.scope ?? ""}[${attribute}_attributes][${index}]`;
 
-    return new FormBuilder(nested, undefined);
+    const Builder = this.constructor as FormBuilderClass;
+
+    return new Builder(nested, undefined);
   }
+}
+
+let applicationBuilder: FormBuilderClass = FormBuilder;
+
+/**
+ * The builder every form uses unless told otherwise. Rails'
+ * `ActionView::Base.default_form_builder`.
+ *
+ * The thing this exists for is consistency that nobody has to remember. Every
+ * form in an application wants the same error markup, the same label
+ * conventions, the same required-field marker — and without a default, that
+ * lives in each template. The template that forgets is the form where
+ * validation errors silently do not appear, which is the one bug in this area
+ * nobody notices until a user reports that saving "does nothing".
+ */
+export function defaultFormBuilder(): FormBuilderClass {
+  return applicationBuilder;
+}
+
+export function setDefaultFormBuilder(builder: FormBuilderClass): void {
+  applicationBuilder = builder;
+}
+
+/** Puts the plain builder back. For a test that installed one. */
+export function resetDefaultFormBuilder(): void {
+  applicationBuilder = FormBuilder;
 }
 
 function isTruthy(value: unknown): boolean {
@@ -376,7 +420,8 @@ const NATIVE_METHODS = new Set(["get", "post"]);
  */
 export function FormWith(props: FormOptions & { children: (f: FormBuilder) => Node }): Node {
   const scope = scopeFor(props.model, props.scope);
-  const builder = new FormBuilder(scope, props.model);
+  const Builder = props.builder ?? defaultFormBuilder();
+  const builder = new Builder(scope, props.model);
 
   const intended = props.method ?? (props.model?.isNewRecord === false ? "patch" : "post");
   const sent = NATIVE_METHODS.has(intended) ? intended : "post";
