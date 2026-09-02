@@ -165,21 +165,57 @@ export function createSubclass(
 // --- dependent destruction ------------------------------------------------
 
 /** What happens to children when their parent is destroyed. */
-export type DependentOption = "destroy" | "destroy_async" | "delete_all" | "nullify" | "restrict";
+export type DependentOption =
+  | "destroy"
+  | "destroy_async"
+  | "delete"
+  | "delete_all"
+  | "nullify"
+  | "restrict";
 
 export const DEPENDENT_OPTIONS: readonly DependentOption[] = [
   "destroy",
   "destroy_async",
+  // `delete` and `delete_all` are the same action on a different number of
+  // rows, and both exist because the macro they belong to is different: a
+  // `hasOne` has one child, so `delete_all` on it names a collection that is
+  // not there.
+  "delete",
   "delete_all",
   "nullify",
   "restrict",
 ];
 
+/**
+ * What each macro can do to its children. Rails' `valid_dependent_options`.
+ *
+ * Three lists rather than one and a rule, because the reason each option is
+ * excluded is different: `delete_all` is a collection operation and `hasOne`
+ * has no collection; `nullify` clears a column on the child, which a
+ * `belongsTo` does not own; `delete` names one row, which a `hasMany` has many
+ * of.
+ */
+export function validDependentOptions(
+  macro: "belongsTo" | "hasOne" | "hasMany",
+): readonly DependentOption[] {
+  switch (macro) {
+    case "belongsTo":
+      return ["destroy", "destroy_async", "delete"];
+    case "hasOne":
+      return ["destroy", "destroy_async", "delete", "nullify", "restrict"];
+    case "hasMany":
+      return ["destroy", "destroy_async", "delete_all", "nullify", "restrict"];
+  }
+}
+
 export class InvalidDependentOption extends Error {
-  constructor(given: string, kind: string) {
+  constructor(given: string, kind: string, allowed: readonly string[] = DEPENDENT_OPTIONS) {
     super(
       `"${given}" is not something a ${kind} association can do to its children. ` +
-        `One of: ${DEPENDENT_OPTIONS.join(", ")}.`,
+        // What *this* macro allows, not every option there is: half of them are
+        // refused here precisely because they belong to another macro, and
+        // listing those sends the reader to try one that will be refused too.
+        `One of: ${allowed.join(", ")}.`,
     );
     this.name = "InvalidDependentOption";
   }
@@ -188,20 +224,18 @@ export class InvalidDependentOption extends Error {
 /**
  * Checks what a declaration asked for. Rails' `check_dependent_options`.
  *
- * A `belongsTo` cannot `nullify` or `delete_all`: those act on the many side,
- * and the parent has no children to act on. Rails accepts the option and does
- * nothing, which reads as configured and is not — so this refuses it.
+ * Rails accepts an option a macro cannot honour and does nothing with it, which
+ * reads as configured and is not — so this refuses it, against the list for
+ * that macro rather than a list of everything.
  */
 export function checkDependentOptions(
   option: string,
   kind: "hasMany" | "hasOne" | "belongsTo",
 ): DependentOption {
-  if (!DEPENDENT_OPTIONS.includes(option as DependentOption)) {
-    throw new InvalidDependentOption(option, kind);
-  }
+  const allowed = validDependentOptions(kind);
 
-  if (kind === "belongsTo" && (option === "nullify" || option === "delete_all")) {
-    throw new InvalidDependentOption(option, kind);
+  if (!allowed.includes(option as DependentOption)) {
+    throw new InvalidDependentOption(option, kind, allowed);
   }
 
   return option as DependentOption;
@@ -228,6 +262,7 @@ export function handleDependency(option: DependentOption, foreignKey: string): D
       return { action: "destroy" };
     case "destroy_async":
       return { action: "enqueue" };
+    case "delete":
     case "delete_all":
       return { action: "delete" };
     case "nullify":

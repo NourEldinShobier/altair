@@ -78,3 +78,4 @@ export * from "./password_algorithms.js";
 export * from "./arel.js";
 export * from "./connection_scoping.js";
 export * from "./generated_methods.js";
+export * from "./association_builder.js";
