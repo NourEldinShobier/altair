@@ -9,10 +9,14 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 |           | Tests      | of Rails' |       |
 | --------- | ---------- | --------- | ----- |
 <<<<<<< HEAD
-| **Total** | **11,229** | 26,775    | 41.9% |
+<<<<<<< HEAD
+| **Total** | **11,243** | 26,775    | 42.0% |
 =======
 | **Total** | **11,218** | 26,775    | 41.9% |
 >>>>>>> 4ce9ed1 (feat(controller): reordering a middleware that is already in the stack)
+=======
+| **Total** | **11,232** | 26,775    | 41.9% |
+>>>>>>> 4ff04b9 (feat(controller): telling the browser what to fetch before the page exists)
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -29,7 +33,7 @@ one that needs no server.
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 2348  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
 | `@altair/orm`        | 4065  | Connection, migrations, models, relations, associations, ActiveModel       |
-| `@altair/controller` | 1328  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
+| `@altair/controller` | 1342  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 191   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 449   | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 369   | Action Cable, protocol-compatible with Rails' client                       |
@@ -191,7 +195,7 @@ pino-pretty works under Bun 1.4.
 environments/<env>.ts` layers over the defaults, `config/initializers/*.ts`
 run in filename order at boot, and `altair db:seed` runs `db/seeds.ts`.
 
-What remains everywhere is depth: 41.9% of Rails' test count, not 41.9% of Rails.
+What remains everywhere is depth: 42.0% of Rails' test count, not 42.0% of Rails.
 
 ## How to update this file
 

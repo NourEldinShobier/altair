@@ -41,3 +41,4 @@ export * from "./instrumentation.js";
 export * from "./csrf_strategies.js";
 export * from "./security_headers.js";
 export * from "./multipart.js";
+export * from "./early_hints.js";
