@@ -7,7 +7,7 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 111 of
+does anything else in `src` name any of its exports? As of this writing, 109 of
 336 modules do not.
 
 That number is not a defect count. Three different things land in the list.
@@ -19,6 +19,14 @@ Application code calls it; framework code has no reason to. Every test helper
 migration DSL (`schema_creation`, `database_tasks`, `editor`) and standalone
 support helper (`numbers`, `mutex`, `acts_like`) is here, correctly. This is
 most of the list and needs nothing.
+
+It is worth checking rather than assuming, though. `controller/instrumentation.ts`
+and `controller/filtered_logging.ts` looked like this bucket and were not:
+nothing published an action's timings, so an application got no request log at
+all, and the module that redacts passwords out of one had nothing to redact
+from. A middleware or a store an application installs — `permissions_policy`,
+`session_store` — really is public API. A module the framework should be
+calling on every request is not.
 
 ## A second implementation of something already done another way
 
@@ -52,6 +60,11 @@ that is a decision rather than a bug.
   an application that never does behaves exactly as before. The per-model
   `columnCache` is still there and still what runs by default; which of the two
   should survive is the open question, not something this decided.
+- **`controller/instrumentation.ts`** and **`controller/filtered_logging.ts`**
+  were a complete request-log module with no publisher and a redactor with
+  nothing to redact. `processAction` now publishes `start_processing` and
+  `process_action`, with the parameters filtered before they leave the
+  framework.
 
 ## A feature ported ahead of the thing it serves
 
