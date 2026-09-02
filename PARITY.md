@@ -8,7 +8,11 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests      | of Rails' |       |
 | --------- | ---------- | --------- | ----- |
-| **Total** | **11,214** | 26,775    | 41.9% |
+<<<<<<< HEAD
+| **Total** | **11,229** | 26,775    | 41.9% |
+=======
+| **Total** | **11,218** | 26,775    | 41.9% |
+>>>>>>> 4ce9ed1 (feat(controller): reordering a middleware that is already in the stack)
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -25,7 +29,7 @@ one that needs no server.
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 2348  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
 | `@altair/orm`        | 4065  | Connection, migrations, models, relations, associations, ActiveModel       |
-| `@altair/controller` | 1313  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
+| `@altair/controller` | 1328  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 191   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 449   | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 369   | Action Cable, protocol-compatible with Rails' client                       |

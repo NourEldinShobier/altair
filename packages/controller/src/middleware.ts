@@ -83,6 +83,51 @@ export class MiddlewareStack {
     return this.#entries.some((entry) => entry.name === name);
   }
 
+  /**
+   * The stack as it stands. Rails' `middlewares`.
+   *
+   * A copy, so a caller reading the order cannot change it by accident — the
+   * stack is built once and shared by every request, and an entry spliced out
+   * of the array somebody was iterating is a middleware that stops running
+   * with nothing to say it did.
+   */
+  get middlewares(): NamedMiddleware[] {
+    return [...this.#entries];
+  }
+
+  /**
+   * Moves one that is already in the stack. Rails' `move_after`.
+   *
+   * Different from inserting, and needed for the case inserting cannot cover:
+   * a library adds its own middleware at boot and puts it in the wrong place,
+   * and the application has to reorder it without knowing how it was built —
+   * it has no handler to re-insert, only a name.
+   *
+   * Removed before the target is located, so `moveAfter("a", "b")` on
+   * `[a, b, c]` means "b directly after a" whatever their order was. Located
+   * first, the index would be the one *before* the removal and the entry would
+   * land one place too far along, which is the kind of off-by-one that looks
+   * right in a three-entry stack and is wrong in a real one.
+   */
+  moveAfter(target: string, source: string): this {
+    const entry = this.#take(source);
+    this.#entries.splice(this.#indexOf(target) + 1, 0, entry);
+
+    return this;
+  }
+
+  /** The same, on the other side. Rails' `move_before`. */
+  moveBefore(target: string, source: string): this {
+    const entry = this.#take(source);
+    this.#entries.splice(this.#indexOf(target), 0, entry);
+
+    return this;
+  }
+
+  #take(name: string): NamedMiddleware {
+    return this.#entries.splice(this.#indexOf(name), 1)[0] as NamedMiddleware;
+  }
+
   #indexOf(name: string): number {
     const index = this.#entries.findIndex((entry) => entry.name === name);
     if (index === -1) throw new UnknownMiddleware(name, this.names);
