@@ -16,7 +16,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 > > > > > > > 4ce9ed1 (feat(controller): reordering a middleware that is already in the stack)
 > > > > > > > \=======
-> > > > > > > | **Total** | **11,424** | 26,775 | 42.7% |
+> > > > > > > | **Total** | **11,432** | 26,775 | 42.7% |
 > > > > > > > 4ff04b9 (feat(controller): telling the browser what to fetch before the page exists)
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
@@ -39,7 +39,7 @@ one that needs no server.
 | `@altair/router`     | 449   | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 369   | Action Cable, protocol-compatible with Rails' client                       |
 | `@altair/storage`    | 320   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
-| `@altair/view`       | 876   | TSX rendering, layouts, Inertia protocol, form builders                    |
+| `@altair/view`       | 884   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 268   | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 495   | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 244   | Config, boot lifecycle, request handler, credentials, logging              |
