@@ -52,25 +52,57 @@ function install(at: number): void {
 }
 
 /**
- * Runs a block with the clock held at a moment.
+ * Holds the clock at a moment.
  *
+ * With a block, the clock is put back when the block ends — however it ends.
  * Nesting is allowed and the inner one wins, since a test that sets a time
  * inside a suite-wide one is saying something more specific.
+ *
+ * Without one, the clock stays held until `travelBack`. That form exists
+ * because a test runner's per-test hooks are two separate functions: there is
+ * no block to wrap a whole test in from a `beforeEach`, so a suite that wants
+ * every test in a file to run at a fixed date cannot use the block form at
+ * all. It is the more dangerous of the two — nothing puts the clock back if
+ * the matching `travelBack` is forgotten — which is why the block form is
+ * still what a single test should use.
  */
-export async function travelTo<T>(moment: Date | number, body: () => T | Promise<T>): Promise<T> {
+export function travelTo(moment: Date | number): void;
+export function travelTo<T>(moment: Date | number, body: () => T | Promise<T>): Promise<T>;
+export function travelTo<T>(moment: Date | number, body?: () => T | Promise<T>): Promise<T> | void {
   const previous = globalThis.Date;
   const at = moment instanceof RealDate ? moment.getTime() : Number(moment);
 
   install(at);
 
-  try {
-    return await body();
-  } finally {
-    // Restored whatever the block did, including throwing. A test that left
-    // the clock moved would put every test after it in the wrong year, and
-    // the failure would look like it came from a file that never touched time.
-    globalThis.Date = previous;
-  }
+  if (body === undefined) return;
+
+  return (async () => {
+    try {
+      return await body();
+    } finally {
+      // Restored whatever the block did, including throwing. A test that left
+      // the clock moved would put every test after it in the wrong year, and
+      // the failure would look like it came from a file that never touched
+      // time.
+      globalThis.Date = previous;
+    }
+  })();
+}
+
+/**
+ * Gives the clock back. Rails' `travel_back`.
+ *
+ * Undoes every travel at once rather than one level, because the thing it is
+ * for is an `afterEach`, and an `afterEach` does not know how many times the
+ * test travelled. Unwinding one level would leave a test that travelled twice
+ * holding a clock that the next file inherits.
+ *
+ * Safe to call when nothing travelled, so a teardown can call it
+ * unconditionally rather than asking first — a teardown guarded by a question
+ * is a teardown that gets the question wrong once.
+ */
+export function travelBack(): void {
+  globalThis.Date = RealDate;
 }
 
 /** Holds the clock exactly where it is. Rails' `freeze_time`. */
