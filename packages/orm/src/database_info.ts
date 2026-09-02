@@ -121,6 +121,59 @@ export async function collationCurrent(connection: Connection): Promise<string |
 }
 
 /**
+ * How the database classifies characters. Rails' `ctype`.
+ *
+ * The sibling of `collation`, and a different thing: collation decides what
+ * sorts before what, ctype decides what counts as a letter and what the
+ * uppercase of it is. They are usually set together and can be set apart, and
+ * a database with the wrong ctype is one where `LOWER` and `UPPER` leave every
+ * non-ASCII character alone.
+ *
+ * That is the same shape of bug as MySQL's three-byte `utf8` above: the tests
+ * pass because the fixtures are in English, and the first case-insensitive
+ * search for a name with an accent in it silently matches nothing.
+ *
+ * PostgreSQL is the only one of the three that has this as a separate setting;
+ * MySQL folds it into the collation and SQLite has neither.
+ */
+export async function ctype(connection: Connection): Promise<string | undefined> {
+  if (connection.adapter !== "postgres") return undefined;
+
+  return await scalar(
+    connection,
+    "SELECT datctype FROM pg_database WHERE datname = current_database()",
+  );
+}
+
+/**
+ * One MySQL server variable. Rails' `show_variable`.
+ *
+ * Undefined rather than an error for one that does not exist, because that is
+ * the normal answer: the variables worth reading are the ones that came and
+ * went between versions, and the caller is asking precisely because it does
+ * not know whether this server has it.
+ *
+ * The name is checked rather than interpolated blind. `@@` takes no
+ * placeholder, so this is string-built by necessity, and a variable name is
+ * exactly the kind of thing that arrives from configuration.
+ */
+export async function showVariable(
+  connection: Connection,
+  name: string,
+): Promise<string | undefined> {
+  if (connection.adapter !== "mysql") return undefined;
+  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
+    throw new Error(
+      `${JSON.stringify(name)} is not a server variable name. Only letters, digits and ` +
+        `underscores — this is interpolated into the statement, because \`@@\` takes no ` +
+        `placeholder.`,
+    );
+  }
+
+  return await scalar(connection, `SELECT @@${name}`);
+}
+
+/**
  * Whether the charset can hold every character. Rails has no single method for
  * this; the check is worth having under a name that says what it is for.
  *
@@ -200,15 +253,17 @@ export async function databaseInfo(connection: Connection): Promise<{
   schema: string | undefined;
   charset: string | undefined;
   collation: string | undefined;
+  ctype: string | undefined;
   advisoryLocks: boolean;
   charsetHoldsEveryCharacter: boolean;
 }> {
-  const [version, database, schema, charset, collation] = await Promise.all([
+  const [version, database, schema, charset, collation, characterType] = await Promise.all([
     databaseVersion(connection),
     currentDatabase(connection),
     currentSchema(connection),
     charsetCurrent(connection),
     collationCurrent(connection),
+    ctype(connection),
   ]);
 
   return {
@@ -218,6 +273,7 @@ export async function databaseInfo(connection: Connection): Promise<{
     schema,
     charset,
     collation,
+    ctype: characterType,
     advisoryLocks: advisoryLocksEnabled(connection),
     charsetHoldsEveryCharacter: await charsetHoldsEveryCharacter(connection),
   };
