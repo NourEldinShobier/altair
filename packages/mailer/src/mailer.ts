@@ -29,6 +29,12 @@
 
 import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { smtpDeliveryFromUrl } from "./smtp.js";
+import {
+  addDeliveryMethod,
+  deliveryMethodNames,
+  wrapDeliveryBehavior,
+  type DeliveryMethodBuilder,
+} from "./delivery_registry.js";
 import { currentEnvironment, type Environment } from "@altair/support";
 import { renderToString, type Node } from "@altair/view";
 import {
@@ -279,10 +285,24 @@ export class Mailer {
  * environment itself, so an application that was not generated gets the same.
  */
 export function defaultDelivery(env: Environment = currentEnvironment()): DeliveryMethod {
-  // Never from a test, whatever the environment says. A suite that sends real
-  // mail is one that sends it to real people the first time it runs somewhere
-  // with the production variables set.
+  // Never from a test, whatever the environment says — and before the named
+  // method too. A suite that sends real mail is one that sends it to real
+  // people the first time it runs somewhere with the production variables set,
+  // and a variable naming a live method is exactly how that happens.
   if (env === "test") return new TestDelivery();
+
+  // A registered method wins, so an application that plugged in a
+  // transactional-email API gets it without the framework knowing the API
+  // exists. An unregistered name throws rather than falling through to SMTP:
+  // a typo that quietly resolves to the real thing is how a staging box mails
+  // a customer.
+  const named = process.env.MAIL_DELIVERY_METHOD;
+
+  if (named) {
+    registerBuiltInDeliveryMethods();
+
+    return wrapDeliveryBehavior(named, { url: process.env.SMTP_URL });
+  }
 
   // One variable and an application can send. `smtp://user:pass@host:587`,
   // which is the shape every hosted mail service already hands you.
@@ -292,6 +312,46 @@ export function defaultDelivery(env: Environment = currentEnvironment()): Delive
   if (env === "development") return new LogDelivery();
 
   return new UnconfiguredDelivery();
+}
+
+/**
+ * The methods this package brings, so `MAIL_DELIVERY_METHOD` works on a fresh
+ * application. Rails registers `:smtp`, `:file` and the rest the same way.
+ *
+ * Registered here rather than in `delivery_registry.ts` so the registry stays
+ * a registry: it knows how to hold a builder and nothing about what any of
+ * them do.
+ *
+ * Called when a method is asked for rather than when this module is imported.
+ * An import-time side effect makes the order of imports decide what is
+ * registered, which is a thing nobody can see and everybody trips on — and it
+ * is unobservable to a test suite that shares one process between files, which
+ * is how this was found.
+ *
+ * A name already registered is left alone, so calling this again cannot
+ * replace an application's own `smtp` with the built-in one.
+ */
+export function registerBuiltInDeliveryMethods(): void {
+  register("smtp", (settings) => {
+    const url = settings["url"];
+
+    if (typeof url !== "string" || url === "") {
+      throw new Error(
+        "The smtp delivery method needs a URL. Set SMTP_URL to something like " +
+          "smtp://user:pass@host:587 — it is the shape every hosted mail service hands you.",
+      );
+    }
+
+    return smtpDeliveryFromUrl(url);
+  });
+
+  register("log", () => new LogDelivery());
+  register("test", () => new TestDelivery());
+}
+
+/** Adds one only if nothing owns the name. */
+function register(name: string, build: DeliveryMethodBuilder): void {
+  if (!deliveryMethodNames().includes(name)) addDeliveryMethod(name, build);
 }
 
 /**

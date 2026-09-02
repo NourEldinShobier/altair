@@ -7,7 +7,7 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 109 of
+does anything else in `src` name any of its exports? As of this writing, 108 of
 336 modules do not.
 
 That number is not a defect count. Three different things land in the list.
@@ -65,6 +65,15 @@ that is a decision rather than a bug.
   nothing to redact. `processAction` now publishes `start_processing` and
   `process_action`, with the parameters filtered before they leave the
   framework.
+- **`mailer/delivery_registry.ts`** could hold a named delivery method and
+  nothing consulted it, so an application could not plug in a
+  transactional-email API however it registered one. `defaultDelivery` reads
+  `MAIL_DELIVERY_METHOD` now, and the built-in methods register themselves the
+  first time one is asked for rather than when the module is imported — an
+  import-time side effect makes the order of imports decide what is registered,
+  which a suite sharing one process between files cannot observe. That is not a
+  guess: the first version registered on import, and the test proving it passed
+  alone and failed in the full run.
 
 ## A feature ported ahead of the thing it serves
 
