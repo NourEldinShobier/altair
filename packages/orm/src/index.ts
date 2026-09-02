@@ -85,3 +85,4 @@ export * from "./encryption_properties.js";
 export * from "./reflection_chain.js";
 export * from "./preload_batching.js";
 export * from "./find_by_sql.js";
+export * from "./schema_namespaces.js";
