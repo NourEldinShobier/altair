@@ -109,6 +109,31 @@ function camel(name: string): string {
 }
 
 /**
+ * Whether a `def` line names a method, given what follows the name.
+ *
+ * Two shapes read as one and are not, and both were being counted against us
+ * as API we lack.
+ *
+ * `def build_#{name}(*args)` defines a method per association at run time, and
+ * the pattern stops at the `#`, so it captured the prefix `build_`. Rails has
+ * no method called `build_`; it has `build_author`, and this cannot know the
+ * association names. Four of these were in the ActiveRecord list —
+ * `build_`, `create_`, `reload_`, `reset_`.
+ *
+ * `def self.[](version)` and `def str.inspect` both leave the pattern with a
+ * `.` after what it captured, because the real name is an operator in the
+ * first and the receiver is a local variable in the second. Both captured
+ * literally the words `self` and `str`.
+ */
+function namesAMethod(name: string, next: string): boolean {
+  // Interpolated: `def build_#{…}` is a prefix, not a name.
+  if (next === "#") return false;
+
+  // A receiver, not a name: `def self.[]`, `def str.inspect`.
+  return next !== ".";
+}
+
+/**
  * Public methods in a Rails component.
  *
  * Everything after a `private`/`protected` keyword in a file is skipped, and
@@ -135,8 +160,8 @@ async function railsMethods(component: string, subdirs: string[]): Promise<Set<s
 
         if (!visible) continue;
 
-        const method = /^def\s+(?:self\.)?([a-z_][a-zA-Z0-9_]*[?!=]?)/.exec(trimmed);
-        if (method) {
+        const method = /^def\s+(?:self\.)?([a-z_][a-zA-Z0-9_]*[?!=]?)(.?)/.exec(trimmed);
+        if (method && namesAMethod(method[1] as string, method[2] as string)) {
           const name = method[1] as string;
           if (!name.startsWith("_") && !NOISE.has(camel(name))) names.add(camel(name));
         }
