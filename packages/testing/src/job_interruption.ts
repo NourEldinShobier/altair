@@ -20,6 +20,8 @@
  * test that caused it passed.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { Continuation } from "@altair/jobs";
 
 /** What a stopping predicate sees. */
@@ -30,33 +32,27 @@ export interface InterruptibleJob {
 
 export type StoppingPredicate = (job: InterruptibleJob) => string | false;
 
-let stopping: StoppingPredicate | undefined;
+const stopping = new AsyncLocalStorage<StoppingPredicate>();
 
 /** Whether the job running now should stop. Consulted by the continuation. */
 export function stoppingReason(job: InterruptibleJob): string | false {
-  return stopping?.(job) ?? false;
+  return stopping.getStore()?.(job) ?? false;
 }
 
 /**
  * Installs a stopping predicate for the length of a block.
  *
- * Restored rather than cleared in the `finally`, so nesting works — and
- * restored at all because a predicate left behind stops every later job in the
- * process, producing a failure in an unrelated test while the test that caused
- * it passes.
+ * Scoped rather than swapped. A predicate in a module-level variable stopped
+ * every job running beside the block as well as the ones inside it, which in
+ * a suite that runs files together is a failure in an unrelated test while
+ * the test that caused it passes. Nesting works because leaving a scope
+ * restores what surrounded it.
  */
 export async function withStopping<T>(
   predicate: StoppingPredicate,
   body: () => Promise<T> | T,
 ): Promise<T> {
-  const held = stopping;
-  stopping = predicate;
-
-  try {
-    return await body();
-  } finally {
-    stopping = held;
-  }
+  return await stopping.run(predicate, async () => await body());
 }
 
 function isInstanceOf(job: InterruptibleJob, jobClass: unknown): boolean {

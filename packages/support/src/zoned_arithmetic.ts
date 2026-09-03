@@ -21,6 +21,8 @@
  * neither is the default. A single `add` would be one of them silently.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { TimeZone } from "./time_zone.js";
 
 /** The parts of a time as somebody in a zone would read them. */
@@ -317,27 +319,29 @@ export function loadTimeZone(name: string): TimeZone | null {
 }
 
 /**
- * Runs something with a zone in force, and puts the old one back.
+ * The zone in force: what a `useZone` block chose, or what the process was
+ * told to use.
  *
- * Restored in a `finally`, because a test that throws while a zone is set
- * leaves every later test running in it — and the failures then appear in
- * tests that had nothing to do with time.
+ * The block's is scoped. Swapping a module-level variable put one request's
+ * zone on every request rendering beside it, so a page could show a timestamp
+ * in a zone belonging to somebody else's session — wrong in a way that reads
+ * as right, since the number is plausible and the label is missing.
+ *
+ * Rails keeps `Time.zone` per fiber for exactly this. The comment that used
+ * to be here worried about a test that throws leaving the zone set, which is
+ * the failure one thread can have; there is nothing left to leave now.
  */
 let current: string | undefined;
 
+/** The zone a `useZone` block is in, which is not the process's. */
+const scopedZone = new AsyncLocalStorage<string | undefined>();
+
 export function currentZoneName(): string | undefined {
-  return current;
+  return scopedZone.getStore() ?? current;
 }
 
 export function useZone<T>(zone: string, body: () => T): T {
-  const held = current;
-  current = zone;
-
-  try {
-    return body();
-  } finally {
-    current = held;
-  }
+  return scopedZone.run(zone, body);
 }
 
 export function resetZone(): void {

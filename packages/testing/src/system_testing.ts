@@ -24,6 +24,8 @@
  *   about a modal would pass without testing anything.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 // --- choosing a driver ---------------------------------------------------------------
 
 export type DriverName =
@@ -274,6 +276,16 @@ export interface ControllerSession {
 let current: ControllerSession | undefined;
 
 /**
+ * The controller a `newControllerThread` is tracking, if one is running.
+ *
+ * A box rather than a value, because the body *writes* to this — every request
+ * it makes replaces the controller — and a scope's store is fixed once it is
+ * opened. The box is what makes a write inside the thread visible inside it
+ * and invisible outside.
+ */
+const thread = new AsyncLocalStorage<{ session: ControllerSession | undefined }>();
+
+/**
  * Rails' `controller_instance` / `current_controller`.
  *
  * The instance the last request ran through, kept so assertions can ask about
@@ -282,15 +294,18 @@ let current: ControllerSession | undefined;
  * happened to be looked up first.
  */
 export function setCurrentController(session: ControllerSession | undefined): void {
-  current = session;
+  const running = thread.getStore();
+
+  if (running) running.session = session;
+  else current = session;
 }
 
 export function currentController(): ControllerSession | undefined {
-  return current;
+  return thread.getStore()?.session ?? current;
 }
 
 export function controllerInstance(): unknown {
-  return current?.controller;
+  return currentController()?.controller;
 }
 
 /**
@@ -308,18 +323,15 @@ export function differentController(expected: string, actual: string | undefined
 /**
  * Rails' `new_controller_thread` — run a request in its own scope.
  *
- * The current controller is restored afterwards, so a nested request — a test
- * helper that signs in by posting to a session controller — does not leave the
- * outer test asserting against the wrong one.
+ * The name is Rails' and it is the right one here: a scope, not a swap. What
+ * the block does to the current controller stays inside it, so a nested
+ * request — a test helper that signs in by posting to a session controller —
+ * does not leave the outer test asserting against the wrong one, and does not
+ * reach a test running beside it either. Saving and restoring only managed
+ * the first of those.
  */
 export async function newControllerThread<T>(body: () => Promise<T> | T): Promise<T> {
-  const held = current;
-
-  try {
-    return await body();
-  } finally {
-    current = held;
-  }
+  return await thread.run({ session: currentController() }, async () => await body());
 }
 
 /** Rails' `setup_controller_request_and_response`. */

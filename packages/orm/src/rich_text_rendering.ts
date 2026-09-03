@@ -20,6 +20,8 @@
  * recoverable from the stored value.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { Fragment } from "./fragment.js";
 import type { AttachedNode } from "./content.js";
 import type { AttachmentAttributes } from "./attachables.js";
@@ -51,6 +53,14 @@ let fallback: AttachmentRenderer = (attachment) =>
     attachment.filename ?? "attachment",
   )}</a>`;
 
+/** The renderer a `withRenderer` block chose, which is not the process's. */
+const scopedRenderer = new AsyncLocalStorage<AttachmentRenderer>();
+
+/** The fallback in force here: a block's if there is one, the process's if not. */
+function currentFallback(): AttachmentRenderer {
+  return scopedRenderer.getStore() ?? fallback;
+}
+
 export function registerAttachmentRenderer(contentType: string, render: AttachmentRenderer): void {
   renderers.set(contentType.toLowerCase(), render);
 }
@@ -67,7 +77,7 @@ export function setFallbackRenderer(render: AttachmentRenderer): void {
  * the one it forgets renders as a bare link on a page full of pictures.
  */
 export function rendererFor(contentType: string | undefined): AttachmentRenderer {
-  if (contentType === undefined) return fallback;
+  if (contentType === undefined) return currentFallback();
 
   const exact = renderers.get(contentType.toLowerCase());
 
@@ -75,7 +85,7 @@ export function rendererFor(contentType: string | undefined): AttachmentRenderer
 
   const prefix = `${contentType.split("/")[0] ?? ""}/`;
 
-  return renderers.get(prefix) ?? fallback;
+  return renderers.get(prefix) ?? currentFallback();
 }
 
 export function clearAttachmentRenderers(): void {
@@ -250,16 +260,16 @@ export function setEditorName(name: string): void {
   editor = name;
 }
 
-/** Runs something with a different renderer in place. Rails' `with_renderer`. */
+/**
+ * Runs something with a different renderer in place. Rails' `with_renderer`.
+ *
+ * Scoped, because swapping a module-level variable handed the replacement to
+ * every render happening beside the block — so a request rendering rich text
+ * got somebody else's renderer, and the attachment came out wrong rather than
+ * missing.
+ */
 export function withRenderer<T>(render: AttachmentRenderer, body: () => T): T {
-  const held = fallback;
-  fallback = render;
-
-  try {
-    return body();
-  } finally {
-    fallback = held;
-  }
+  return scopedRenderer.run(render, body);
 }
 
 function escapeText(value: string): string {

@@ -254,21 +254,16 @@ export function cacheUnless(condition: boolean, name: string): boolean {
 }
 
 /** Whether caching is on at all. Rails' `disable_cache` inverted. */
-let disabled = false;
+const disabled = new AsyncLocalStorage<boolean>();
 
 export function disableCache<T>(body: () => T): T {
-  const held = disabled;
-  disabled = true;
-
-  try {
-    return body();
-  } finally {
-    disabled = held;
-  }
+  // Scoped: turning the cache off is a decision about this render, and a
+  // module-level flag turned it off for every render running beside it.
+  return disabled.run(true, body);
 }
 
 export function cacheDisabled(): boolean {
-  return disabled;
+  return disabled.getStore() ?? false;
 }
 
 /** Forgets the recorded sources too, for a test that declared its own. */
@@ -276,6 +271,6 @@ export function resetDigestor(): void {
   clearCache();
   sources.clear();
   caching = true;
-  disabled = false;
+  // Nothing to clear for `disableCache`: its scope ends when its body does.
   hits = 0;
 }
