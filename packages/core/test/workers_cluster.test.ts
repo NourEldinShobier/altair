@@ -54,7 +54,10 @@ interface Started {
 const start = async (workers: number): Promise<Started> => {
   const expected = workers > 1 ? workers : 0;
   const port = 34_000 + Math.floor(Math.random() * 4_000);
-  const proc = Bun.spawn(["bun", SERVER, String(port), String(workers)], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["bun", SERVER, String(port), String(workers)], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 
   running = proc;
 
@@ -84,7 +87,9 @@ const start = async (workers: number): Promise<Started> => {
 };
 
 const get = async (port: number, path = "/pid"): Promise<string> => {
-  const response = await fetch(`http://127.0.0.1:${port}${path}`, { headers: { connection: "close" } });
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+    headers: { connection: "close" },
+  });
 
   return await response.text();
 };
