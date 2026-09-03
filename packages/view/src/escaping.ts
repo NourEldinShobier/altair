@@ -67,3 +67,53 @@ export function safeJoin(parts: (string | RawHtml)[], separator: string | RawHtm
 
   return raw(escaped.join(between));
 }
+
+/**
+ * Characters an XML name may start with, from
+ * https://www.w3.org/TR/REC-xml/#NT-Name, plus the `@` and `:` that template
+ * frameworks put in front of an attribute.
+ */
+const NAME_START = String.raw`@:A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD`;
+
+/**
+ * The same, plus what may appear after the first character.
+ *
+ * The `-` leads, where a character class reads it as itself rather than as
+ * the start of a range. Escaping it instead works and reads as a mistake to a
+ * linter, which cannot see that this string becomes a regular expression.
+ */
+const NAME_FOLLOWING = `-.0-9\u00B7\u0300-\u036F\u203F-\u2040${NAME_START}`;
+
+const SAFE_NAME = new RegExp(`^[${NAME_START}][${NAME_FOLLOWING}]*$`);
+const INVALID_START = new RegExp(`[^${NAME_START}]`, "g");
+const INVALID_FOLLOWING = new RegExp(`[^${NAME_FOLLOWING}]`, "g");
+
+/**
+ * An attribute or tag name, with anything that is not part of a name replaced
+ * by `_`. Rails' `ERB::Util.xml_name_escape`.
+ *
+ *     xmlNameEscape("1 < 2 & 3")  //=> "1___2___3"
+ *
+ * Escaping the *value* of an attribute is not enough on its own. A name is
+ * written outside the quotes, so a name holding `>` closes the tag and
+ * everything after it is markup:
+ *
+ *     tagOptions({ 'x><script>alert(1)</script': "1" })
+ *     //  x><script>alert(1)</script="1"
+ *
+ * Rails escapes names for this reason and so does this. A name is usually a
+ * literal in the source and this does nothing to it — but "usually" is not a
+ * security boundary, and a spread of attributes built from a record or a
+ * request is the case that is not.
+ */
+export function xmlNameEscape(name: string): string {
+  // A shortcut, not a branch: a name with nothing invalid in it comes out of
+  // the replacements unchanged, and almost every name is one.
+  if (SAFE_NAME.test(name)) return name;
+
+  // The first character and the rest follow different rules — a digit may
+  // follow a name character and may not begin one — so `1a` is `_a`.
+  const first = name.slice(0, 1).replace(INVALID_START, "_");
+
+  return first + name.slice(1).replace(INVALID_FOLLOWING, "_");
+}
