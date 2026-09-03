@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests      | of Rails' |       |
 | --------- | ---------- | --------- | ----- |
-| **Total** | **12,036** | 26,775    | 45.0% |
+| **Total** | **12,050** | 26,775    | 45.0% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -43,7 +43,7 @@ reading before quoting any of the three:
 | `@altair/storage`    | 320   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
 | `@altair/view`       | 1003  | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 268   | Jobs, queues, retries, worker                                              |
-| `@altair/testing`    | 495   | Transactional tests, fixtures, factories, test databases                   |
+| `@altair/testing`    | 509   | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 244   | Config, boot lifecycle, request handler, credentials, logging              |
 | `@altair/mailer`     | 351   | Messages, TSX bodies, delivery methods                                     |
 
