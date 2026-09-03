@@ -214,6 +214,21 @@ export function scalarValue(value: unknown): unknown {
   return Number.isNaN(asNumber) ? value : asNumber;
 }
 
+/**
+ * Both sets of clauses, with anything on both sides kept once.
+ *
+ * Compared on the statement *and* its bindings, because the statement alone
+ * does not say what a clause means: two `id = ?` are the same condition only
+ * when they are asking about the same id, and collapsing them when they are
+ * not would drop a condition the caller wrote.
+ */
+function unionClauses(mine: WhereClause[], theirs: WhereClause[]): WhereClause[] {
+  const identity = (clause: WhereClause): string => JSON.stringify([clause.sql, clause.bindings]);
+  const seen = new Set(mine.map(identity));
+
+  return [...mine, ...theirs.filter((clause) => !seen.has(identity(clause)))];
+}
+
 function joinClauses(clauses: WhereClause[]): { sql: string; bindings: unknown[] } | undefined {
   if (clauses.length === 0) return undefined;
 
@@ -549,6 +564,35 @@ export class Relation<T> implements PromiseLike<T[]> {
   }
 
   /**
+   * Both sets of conditions at once. Rails' `and`.
+   *
+   *     Post.where({ id: [1, 2] }).and(Post.where({ id: [2, 3] }))
+   *     // WHERE id IN (1, 2) AND id IN (2, 3)
+   *
+   * Not the same as chaining `where` twice, and not the same as `merge`, which
+   * is the reason it exists. `merge` lets the later condition on a column
+   * *replace* the earlier one, which is what you want when a scope refines
+   * another. `and` keeps both, which is what you want when neither relation
+   * knows about the other — two independently-built filters that must each
+   * hold, where dropping one because it happens to name the same column would
+   * widen the result to rows the caller ruled out.
+   *
+   * A condition present on both sides is kept once. Rails unions the
+   * predicates for the same reason: `published.and(published)` is `published`,
+   * and repeating it changes nothing but the size of the statement.
+   */
+  and(other: Relation<T>): Relation<T> {
+    this.#assertCompatible(other, "and");
+
+    const next = this.#clone();
+
+    next.#wheres = unionClauses(this.#wheres, other.#wheres);
+    next.#havings = unionClauses(this.#havings, other.#havings);
+
+    return next;
+  }
+
+  /**
    * Folds another relation's conditions into this one. Rails' `merge`.
    *
    * A merged condition on a column *replaces* an earlier one rather than being
@@ -588,6 +632,18 @@ export class Relation<T> implements PromiseLike<T[]> {
    * produces a query that runs and answers something else.
    */
   #assertCompatible(other: Relation<T>, method: string): void {
+    const differences = this.#incompatibleValues(other);
+
+    if (differences.length > 0) {
+      throw new Error(
+        `Relations passed to ${"`"}${method}${"`"} must differ only in their conditions. ` +
+          `These differ in: ${differences.join(", ")}.`,
+      );
+    }
+  }
+
+  /** What the two relations disagree about, other than their conditions. */
+  #incompatibleValues(other: Relation<T>): string[] {
     const differences: string[] = [];
 
     if (this.#limit !== other.#limit) differences.push("limit");
@@ -597,12 +653,24 @@ export class Relation<T> implements PromiseLike<T[]> {
     if (this.#groups.join() !== other.#groups.join()) differences.push("group");
     if (this.#havings.length !== other.#havings.length) differences.push("having");
 
-    if (differences.length > 0) {
-      throw new Error(
-        `Relations passed to \`${method}\` must differ only in their conditions. ` +
-          `These differ in: ${differences.join(", ")}.`,
-      );
-    }
+    return differences;
+  }
+
+  /**
+   * Whether `or` and `and` would accept this pair. Rails'
+   * `structurally_compatible?`.
+   *
+   *     Post.where({ draft: 1 }).structurallyCompatible(Post.where({ id: 2 }))  // true
+   *     Post.all().distinct().structurallyCompatible(Post.where({ id: 2 }))     // false
+   *
+   * The question is worth asking because the answer is otherwise an exception.
+   * Code that combines relations it did not build — a filter object folding
+   * together whichever scopes a request named — has no other way to find out
+   * except to try it and rescue, and a rescue around a query swallows the
+   * failures that are not about compatibility along with the one that is.
+   */
+  structurallyCompatible(other: Relation<T>): boolean {
+    return this.#incompatibleValues(other).length === 0;
   }
 
   order(column: string, direction: Direction = "asc"): Relation<T> {
