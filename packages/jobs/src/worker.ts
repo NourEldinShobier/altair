@@ -217,22 +217,42 @@ export async function runJob(
       return { status: "interrupted", payload: resumed };
     }
 
-    const policy = klass.policyFor(error);
+    const { policy, key } = klass.ruleFor(error);
     const attempts = payload.attempts + 1;
+
+    // The rule's own count, not the job's. `retryOn(Timeout, { attempts: 3 })`
+    // means three timeouts, and sharing one counter spends those three on
+    // whatever failed first — so the job gives up on the failure that would
+    // have come right, having used its tries on the one that was always slow.
+    // With no rule there is no budget to name and the total is the count.
+    //
+    // A payload with no record at all is one enqueued before this existed, or
+    // one on its first failure. Its total is the only count there is, so it is
+    // the count — which keeps a job that was already nine retries deep at the
+    // deploy from being handed nine more. Rails falls back the same way and
+    // for the same reason.
+    const executions =
+      key === undefined || payload.exceptionExecutions === undefined
+        ? attempts
+        : (payload.exceptionExecutions[key] ?? 0) + 1;
+    const spent: Partial<JobPayload> =
+      key === undefined
+        ? {}
+        : { exceptionExecutions: { ...payload.exceptionExecutions, [key]: executions } };
 
     // Null means a rule said this failure will not come right. Reported apart
     // from a failure on purpose: a discard is the job working as intended, and
     // counting it as a failure trains people to ignore the failure count.
     if (policy === null) {
-      const discarded: JobPayload = { ...payload, attempts };
+      const discarded: JobPayload = { ...payload, ...spent, attempts };
 
       await announceDiscard(discarded, error);
 
       return { status: "discarded", payload: discarded, error };
     }
 
-    if (attempts >= policy.attempts) {
-      const exhausted: JobPayload = { ...payload, attempts };
+    if (executions >= policy.attempts) {
+      const exhausted: JobPayload = { ...payload, ...spent, attempts };
 
       // Announced apart from a discard: this one ran out of tries and that one
       // was refused by a rule, and an application usually wants to do
@@ -246,8 +266,12 @@ export async function runJob(
     // the worker and a restart does not lose the job.
     const retried: JobPayload = {
       ...payload,
+      ...spent,
       attempts,
-      runAt: Date.now() + policy.backoff(attempts) * 1000,
+      // Backed off by the rule's count too: a rate limit on its ninth try
+      // should wait like a ninth try, and a timeout on its first should not
+      // wait as though it were.
+      runAt: Date.now() + policy.backoff(executions) * 1000,
     };
     await adapter.enqueue(retried);
 
