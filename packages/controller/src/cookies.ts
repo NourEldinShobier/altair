@@ -89,6 +89,16 @@ const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~\dA-Za-z]+$/;
 export function assertCookieSafe(record: { name: string; path?: string; domain?: string }): void {
   if (!COOKIE_NAME.test(record.name)) throw new UnsafeCookie("name", record.name);
 
+  assertAttributesSafe(record);
+}
+
+/**
+ * The attributes alone, without a name to check.
+ *
+ * Separate because the defaults are attributes with no cookie attached, and
+ * they reach the header by exactly the same interpolation.
+ */
+function assertAttributesSafe(record: { path?: string; domain?: string }): void {
   for (const [field, value] of [
     ["path", record.path],
     ["domain", record.domain],
@@ -97,6 +107,12 @@ export function assertCookieSafe(record: { name: string; path?: string; domain?:
     if (ATTRIBUTE_BREAK.test(value)) throw new UnsafeCookie(field, value);
   }
 }
+
+const SAME_SITE: Record<string, string | undefined> = {
+  strict: "Strict",
+  lax: "Lax",
+  none: "None",
+};
 
 /** A separator or a control character — either ends the attribute it is in. */
 const ATTRIBUTE_BREAK = new RegExp(
@@ -116,6 +132,14 @@ export function serializeCookie(record: CookieRecord): string {
   // one place, and the twelfth is always the one added in a hurry.
   const applied = { ...defaults, ...stripUndefined(record) };
 
+  // The merged attributes, not the record's own. A cookie that names no path
+  // or domain — which is most of them — is written with the defaults, and
+  // checking only what the caller passed left those unread: a domain of
+  // `example.com; SameSite=None` put a second `SameSite` in front of the
+  // intended one, and a browser takes the first. Every cookie in the
+  // application would have lost its CSRF protection from one line of config.
+  assertAttributesSafe(applied);
+
   parts.push(`Path=${applied.path ?? "/"}`);
   if (applied.domain) parts.push(`Domain=${applied.domain}`);
   if (record.maxAge !== undefined) parts.push(`Max-Age=${Math.floor(record.maxAge)}`);
@@ -123,8 +147,14 @@ export function serializeCookie(record: CookieRecord): string {
   if (applied.secure) parts.push("Secure");
   if (applied.httpOnly !== false) parts.push("HttpOnly");
 
-  const sameSite = applied.sameSite ?? "lax";
-  parts.push(`SameSite=${sameSite.charAt(0).toUpperCase()}${sameSite.slice(1)}`);
+  // Read from a table rather than capitalised in place. The type says this is
+  // one of three words and a JavaScript caller is not bound by the type, so
+  // the value that reaches the header is one this file chose either way.
+  const sameSite = SAME_SITE[applied.sameSite ?? "lax"];
+
+  if (sameSite === undefined) throw new UnsafeCookie("sameSite", String(applied.sameSite));
+
+  parts.push(`SameSite=${sameSite}`);
 
   return parts.join("; ");
 }
@@ -174,6 +204,11 @@ let defaults: CookieDefaults = { sameSite: "lax", httpOnly: true, path: "/" };
 
 /** Rails' `cookies_same_site_protection` and the settings beside it. */
 export function configureCookies(options: CookieDefaults): void {
+  // Checked here as well, because this is where the mistake is made and where
+  // the error can name it. `serializeCookie` checks again on the way out,
+  // which is what makes the guarantee hold however a default was set.
+  assertAttributesSafe(options);
+
   defaults = { ...defaults, ...options };
 }
 
