@@ -8,6 +8,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import { Current } from "@altair/support";
+import { clientIp } from "../src/client_ip.js";
 import {
   acceptedTypes,
   contentMimeType,
@@ -123,21 +125,65 @@ describe("what the client sent and wants", () => {
 describe("where the request came from", () => {
   const chained = (value: string) => request("https://a.example/", { "x-forwarded-for": value });
 
-  it("takes the last entry by default", () => {
-    expect(remoteAddress(chained("1.1.1.1, 2.2.2.2, 3.3.3.3"))).toBe("3.3.3.3");
+  /**
+   * Nothing, by default. This used to take the last entry, which is the
+   * proxy's opinion when there is a proxy and whatever the client typed when
+   * there is not — so anyone sending `X-Forwarded-For: 1.2.3.4` was 1.2.3.4.
+   */
+  it("reads nothing from the header until told how many proxies there are", () => {
+    expect(remoteAddress(chained("1.1.1.1, 2.2.2.2, 3.3.3.3"))).toBeNull();
   });
 
-  it("walks back past the proxies you say you control", () => {
+  it("takes the entry your own proxy wrote", () => {
     expect(remoteAddress(chained("1.1.1.1, 2.2.2.2, 3.3.3.3"), { trustedProxies: 1 })).toBe(
+      "3.3.3.3",
+    );
+  });
+
+  it("walks back one more per proxy you control", () => {
+    expect(remoteAddress(chained("1.1.1.1, 2.2.2.2, 3.3.3.3"), { trustedProxies: 2 })).toBe(
       "2.2.2.2",
     );
-    expect(remoteAddress(chained("1.1.1.1, 2.2.2.2, 3.3.3.3"), { trustedProxies: 2 })).toBe(
+    expect(remoteAddress(chained("1.1.1.1, 2.2.2.2, 3.3.3.3"), { trustedProxies: 3 })).toBe(
       "1.1.1.1",
     );
   });
 
-  it("does not walk off the end", () => {
-    expect(remoteAddress(chained("1.1.1.1"), { trustedProxies: 9 })).toBe("1.1.1.1");
+  /**
+   * Fewer entries than declared proxies means the request did not come through
+   * them. This used to clamp to the first entry — the one anybody can write,
+   * and the exact value counting from the right exists to avoid.
+   */
+  it("refuses the chain rather than clamping to its first entry", () => {
+    expect(remoteAddress(chained("1.1.1.1"), { trustedProxies: 9 })).toBeNull();
+  });
+
+  /**
+   * One question, one answer. Two implementations of this disagreed by a hop,
+   * so an application that rate-limited through one and logged through the
+   * other throttled one address and recorded another.
+   */
+  it("agrees with clientIp, which is the same function underneath", () => {
+    const request = chained("1.1.1.1, 2.2.2.2, 3.3.3.3");
+
+    for (const trustedProxies of [0, 1, 2, 3, 9]) {
+      expect(remoteAddress(request, { trustedProxies })).toBe(
+        clientIp(request, { trustedProxies }) ?? null,
+      );
+    }
+  });
+
+  /**
+   * `X-Real-Ip` is the last resort, not the first. It is written by a proxy in
+   * a correct deployment and by anybody at all in the rest of them, so an
+   * address the resolver could produce always beats it.
+   */
+  it("prefers a resolved address to the real-ip header", async () => {
+    await Current.run({ peerAddress: "203.0.113.9" }, () => {
+      expect(remoteAddress(request("https://a.example/", { "x-real-ip": "1.2.3.4" }))).toBe(
+        "203.0.113.9",
+      );
+    });
   });
 
   it("falls back to the real-ip header", () => {
