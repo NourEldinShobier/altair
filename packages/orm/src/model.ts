@@ -23,7 +23,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { didYouMean, secureToken } from "@altair/support";
 import { errors } from "@altair/support";
 import { lookupType, typeNames, typeRegistered, type Type, type TypeOptions } from "./types.js";
-import { checkDependentOptions, destroyAssociations, type DependentOption } from "./inheritance.js";
+import {
+  checkDependentOptions,
+  destroyAssociations,
+  handleDependency,
+  type DependentOption,
+} from "./inheritance.js";
 import {
   composite,
   expectsMultipleIds,
@@ -2038,6 +2043,98 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         kind: "hasMany",
         target: target as () => ModelLike,
         ...options,
+      });
+
+      this.defineCollectionIds(name, options);
+    }
+
+    /**
+     * `post.commentIds()` and `post.setCommentIds([1, 3])`. Rails'
+     * `collection_singular_ids` and `collection_singular_ids=`.
+     *
+     * What a form needs. A checkbox list posts back a set of ids and nothing
+     * else, and without these the controller has to work out which rows to
+     * detach and which to attach — which is the diff below, written again at
+     * every call site that edits a collection.
+     *
+     * The reader asks for the keys alone rather than loading the records,
+     * because a form that renders a hundred checkboxes does not want a hundred
+     * objects to read one column from each.
+     */
+    private static defineCollectionIds(name: string, options: AssociationOptions): void {
+      const singular = name.endsWith("s") ? name.slice(0, -1) : name;
+      const capitalised = `${singular.charAt(0).toUpperCase()}${singular.slice(1)}`;
+      const definition = this.associations[name] as AssociationDefinition;
+
+      const keyFor = (owner: typeof BaseModel): string =>
+        options.foreignKey ?? defaultForeignKey(owner.name);
+
+      Object.defineProperty(this.prototype, `${singular}Ids`, {
+        configurable: true,
+        writable: true,
+        value: async function ids(this: InstanceLike): Promise<unknown[]> {
+          const owner = this.constructor as typeof BaseModel;
+          const target = definition.target();
+
+          return await target
+            .where({ [keyFor(owner)]: this[owner.primaryKey] })
+            .pluck(target.primaryKey);
+        },
+      });
+
+      Object.defineProperty(this.prototype, `set${capitalised}Ids`, {
+        configurable: true,
+        writable: true,
+        value: async function setIds(this: InstanceLike, given: readonly unknown[]): Promise<void> {
+          const owner = this.constructor as typeof BaseModel;
+          const target = definition.target();
+          const foreignKey = keyFor(owner);
+          const id = this[owner.primaryKey];
+
+          if (id === undefined || id === null) {
+            throw new Error(
+              `${owner.name} must be saved before its ${name} can be set: a child needs an id to point at.`,
+            );
+          }
+
+          // Blanks dropped, as Rails does: a checkbox list posts an empty
+          // string alongside the ticked ones so that unticking them all still
+          // submits the field.
+          const wanted = given.filter((one) => one !== null && one !== undefined && one !== "");
+
+          const found = await target.where({ [target.primaryKey]: wanted }).toArray();
+
+          // Refused rather than quietly assigning the ones that exist. A form
+          // posting an id that has since been deleted means the page was stale,
+          // and silently dropping it writes a collection nobody chose.
+          if (found.length !== new Set(wanted.map((one) => String(one))).size) {
+            const here = new Set(
+              found.map((record) =>
+                String((record as unknown as Record<string, unknown>)[target.primaryKey]),
+              ),
+            );
+
+            throw new RecordNotFound(
+              `Could not find all ${target.name} records with ${target.primaryKey}: ` +
+                `(${wanted.filter((one) => !here.has(String(one))).join(", ")}).`,
+            );
+          }
+
+          const owned = target.where({ [foreignKey]: id });
+
+          // No `whereNot` when nothing is being kept, rather than one against
+          // an empty list. `NOT IN (NULL)` is unknown for every row, so the
+          // case that drops the whole collection would drop none of it — which
+          // is the same three-valued-logic trap `where` was fixed for.
+          const dropped =
+            wanted.length > 0 ? owned.whereNot({ [target.primaryKey]: wanted }) : owned;
+
+          await releaseFromCollection(dropped, definition, foreignKey);
+
+          if (wanted.length > 0) {
+            await target.where({ [target.primaryKey]: wanted }).updateAll({ [foreignKey]: id });
+          }
+        },
       });
     }
 
@@ -5452,6 +5549,53 @@ export function serialize(value: unknown, connection?: Connection): unknown {
   }
   if (value !== null && typeof value === "object") return JSON.stringify(value);
   return value;
+}
+
+/**
+ * What happens to records dropped from a collection when its ids are rewritten.
+ *
+ * The same rule a destroy follows, through the same mapping: a `hasMany` with
+ * `dependent: "delete_all"` means the records go, and reassigning the
+ * collection is the other way they leave it. Nullifying a record the
+ * declaration says should be deleted would leave rows an application believes
+ * are gone.
+ *
+ * A `restrict` refuses, because that is what it says: these children may not
+ * be orphaned, and reassignment orphans them.
+ */
+async function releaseFromCollection(
+  dropped: Relation<InstanceLike>,
+  definition: AssociationDefinition,
+  foreignKey: string,
+): Promise<void> {
+  const action = definition.dependent
+    ? handleDependency(definition.dependent, foreignKey).action
+    : "nullify";
+
+  if (action === "refuse") {
+    const remaining = await dropped.count();
+
+    if (remaining > 0) {
+      throw new DeleteRestricted(definition.name, definition.name, remaining);
+    }
+
+    return;
+  }
+
+  if (action === "destroy") {
+    for (const record of await dropped.toArray()) {
+      await (record as unknown as { destroy(): Promise<boolean> }).destroy();
+    }
+
+    return;
+  }
+
+  if (action === "delete") {
+    await dropped.deleteAll();
+    return;
+  }
+
+  await dropped.updateAll({ [foreignKey]: null });
 }
 
 /**
