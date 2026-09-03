@@ -67,8 +67,18 @@ export function unboundable(value: unknown): boolean {
   return typeof value === "symbol" || typeof value === "function";
 }
 
-function isRange(value: unknown): value is { from: unknown; to: unknown; excludeEnd?: boolean } {
-  return typeof value === "object" && value !== null && "from" in value && "to" in value;
+/**
+ * Whether a condition value is a range. Rails' `RangeHandler` dispatch.
+ *
+ * Exported because `relation.ts` has to ask the same question before it builds
+ * a condition, and two answers to it would mean a value this file treats as a
+ * range and the relation treats as a scalar — which is `column = [object
+ * Object]`, matching nothing and reporting nothing.
+ */
+export function isRangeCondition(
+  value: unknown,
+): value is { from?: unknown; to?: unknown; excludeEnd?: boolean } {
+  return typeof value === "object" && value !== null && ("from" in value || "to" in value);
 }
 
 /**
@@ -107,10 +117,16 @@ export function arrayPredicateFor(
  * An excluded end is `<`, not `<=`. `BETWEEN` is always inclusive, so writing
  * a half-open range as one is off by exactly one row — which for a range of
  * dates is a whole day of records in the wrong report.
+ *
+ * One end is enough. `{ from: 4 }` means four and up, which is the only thing
+ * it can mean — and the alternative is that it falls through to `=` and is
+ * bound as an object, matching nothing and saying nothing. That is also why
+ * having either key is enough to be a range: a value object that happens to
+ * carry a `from` was already unusable as a scalar comparison.
  */
 export function rangePredicateFor(
   column: string,
-  range: { from: unknown; to: unknown; excludeEnd?: boolean },
+  range: { from?: unknown; to?: unknown; excludeEnd?: boolean },
   quote: (name: string) => string = (name) => `"${name}"`,
   placeholder: (index: number) => string = () => "?",
 ): Predicate {
@@ -162,7 +178,7 @@ export function buildPredicate(
 
   if (Array.isArray(value)) return arrayPredicateFor(column, value, quote, placeholder);
 
-  if (isRange(value)) return rangePredicateFor(column, value, quote, placeholder);
+  if (isRangeCondition(value)) return rangePredicateFor(column, value, quote, placeholder);
 
   return { sql: `${quote(column)} = ${placeholder(0)}`, binds: [value] };
 }
