@@ -9,9 +9,16 @@ tell the difference.
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
 does anything else in `src` use it? Inside a package that is read from the
 relative imports and is exact; across packages, where a caller reaches through
-the package index, it falls back to the name. As of this writing 199 of 336
-modules are used by nothing, and `--exports` finds 448 more exports sitting
+the package index, it falls back to the name. As of this writing 127 of 336
+modules are used by nothing, and `--exports` finds 2179 more exports sitting
 unused inside modules that _are_ used.
+
+That last number is too big to read, and most of it is not a problem: an
+exported helper called all over its own file is public API, not a loose end.
+`--dead` drops those and keeps the 1027 that nothing uses at all, not even the
+file that declares them. `model_naming.ts` is 25 of them in one module — a
+whole second answer to what a table is called, sitting beside the one `model.ts`
+actually uses.
 
 That second number is the more useful one, and it exists because the first was
 hiding things. `predicate_builder.ts` never appeared in the module list: one of

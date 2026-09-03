@@ -20,6 +20,28 @@ step() {
 # one verify run in three. It never happened running oxfmt straight from a
 # terminal, which is why it looked like a test failure the first two times.
 # One thread has no pool to spawn, and costs 0.4s on this repository.
+# A literal backspace in a source file, which is what a mangled `\b` leaves
+# behind. It has happened six times, once to this check itself: a regex written
+# through a shell heredoc arrives with the character where the escape should
+# be, the file still parses, the formatter still passes, and the pattern
+# silently matches nothing.
+#
+# Backspace only. A NUL is legitimate here, `dom.ts` joins cycle keys on one,
+# and so is an ESC, which `logger.ts` writes ANSI colour with. Banning those
+# would flag the intended ones, and a check that cries wolf is turned off.
+#
+# perl rather than grep, because GNU grep cannot match a NUL and reads a
+# pattern containing one as ending there. The first version of this check was
+# written through a heredoc, had its own pattern mangled into exactly the two
+# bytes it was looking for, and so passed on every file that contained them.
+BACKSPACED=$(find packages tools \( -name '*.ts' -o -name '*.tsx' \) \
+  -exec perl -0777 -ne 'print "$ARGV\n" if /\x08/' {} +)
+if [ -n "$BACKSPACED" ]; then
+  echo "FAILED: a literal backspace in source, where an escape was meant"
+  echo "$BACKSPACED"
+  exit 1
+fi
+
 step "format" bunx oxfmt --threads=1 .
 step "typecheck" bun run typecheck
 step "lint" bunx oxlint --deny-warnings
