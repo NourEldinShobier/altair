@@ -184,17 +184,30 @@ describe("what a dependent option may be", () => {
   });
 
   /**
-   * Every option belongs to some macro, so a list nobody accepts would mean an
-   * option that can never be written.
+   * The two lists are not the same list, and the gap is deliberate.
+   * `DEPENDENT_OPTIONS` is what Rails has; `validDependentOptions` is what the
+   * destroy path here can honour. Validating against the wider one is how
+   * `delete_all` came to pass the check and then nullify.
    */
-  it("leaves no option that no macro accepts", () => {
+  it("accepts only options that are options", () => {
     const accepted = new Set([
       ...validDependentOptions("hasMany"),
       ...validDependentOptions("hasOne"),
       ...validDependentOptions("belongsTo"),
     ]);
 
-    expect([...accepted].sort()).toEqual([...DEPENDENT_OPTIONS].sort());
+    for (const option of accepted) expect(DEPENDENT_OPTIONS).toContain(option);
+  });
+
+  /**
+   * Refused where it is written rather than accepted and quietly turned into
+   * something else: it needs a job to enqueue and the ORM has no job to reach
+   * for.
+   */
+  it("refuses destroy_async, which nothing here can honour", () => {
+    for (const macro of ["hasMany", "hasOne", "belongsTo"] as const) {
+      expect(() => checkDependentOptions("destroy_async", macro)).toThrow(InvalidDependentOption);
+    }
   });
 
   /**
@@ -232,8 +245,14 @@ describe("what a dependent option may be", () => {
     expect(() => checkDependentOptions("delete_all", "belongsTo")).toThrow(InvalidDependentOption);
   });
 
-  it("still allows one a belongs_to can", () => {
-    expect(checkDependentOptions("destroy", "belongsTo")).toBe("destroy");
+  /**
+   * None, for now. `handleDependents` skips a `belongsTo` outright, so
+   * destroying a parent from a child is a feature this does not have — and
+   * refusing at the declaration says so where saying nothing at the destroy
+   * did not.
+   */
+  it("allows nothing on a belongs_to, because nothing acts on it", () => {
+    expect(() => checkDependentOptions("destroy", "belongsTo")).toThrow(InvalidDependentOption);
   });
 });
 

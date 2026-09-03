@@ -8,7 +8,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 |           | Tests      | of Rails' |       |
 | --------- | ---------- | --------- | ----- |
-| **Total** | **11,873** | 26,775    | 44.3% |
+| **Total** | **11,885** | 26,775    | 44.4% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)
@@ -35,7 +35,7 @@ reading before quoting any of the three:
 | Package              | Tests | Covers                                                                     |
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 2438  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
-| `@altair/orm`        | 4400  | Connection, migrations, models, relations, associations, ActiveModel       |
+| `@altair/orm`        | 4412  | Connection, migrations, models, relations, associations, ActiveModel       |
 | `@altair/controller` | 1394  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 191   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 457   | Resourceful routing, typed path helpers                                    |
@@ -198,7 +198,7 @@ pino-pretty works under Bun 1.4.
 environments/<env>.ts` layers over the defaults, `config/initializers/*.ts`
 run in filename order at boot, and `altair db:seed` runs `db/seeds.ts`.
 
-What remains everywhere is depth: 44.3% of Rails' test count, not 44.3% of Rails.
+What remains everywhere is depth: 44.4% of Rails' test count, not 44.4% of Rails.
 
 ## How to update this file
 
