@@ -94,6 +94,42 @@ describe("a range with one end", () => {
   });
 });
 
+describe("a list holding a null", () => {
+  /**
+   * `IN (1, NULL)` never matches the null rows: SQL's three-valued logic makes
+   * every comparison with null unknown. `[1, null]` means "one, or nothing at
+   * all", and this used to mean only the first half.
+   */
+  it("matches the rows that are null as well", async () => {
+    await Reading.create({ value: 6, taken_at: "yesterday" });
+
+    const rows = await Reading.where({ taken_at: ["yesterday", null] })
+      .order("value")
+      .toArray();
+
+    expect(rows.map((row) => row.value)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("matches only the nulls when that is all the list holds", async () => {
+    await Reading.create({ value: 6, taken_at: "yesterday" });
+
+    const rows = await Reading.where({ taken_at: [null] })
+      .order("value")
+      .toArray();
+
+    expect(rows.map((row) => row.value)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  /** One value is `=`, not a one-element `IN`: the same rows, and a plan more index-friendly. */
+  it("compares a single value by equality", async () => {
+    expect(await valuesWhere({ value: [3] })).toEqual([3]);
+  });
+
+  it("still matches nothing for an empty list", async () => {
+    expect(await valuesWhere({ value: [] })).toEqual([]);
+  });
+});
+
 describe("what is not a range", () => {
   it("still compares by equality", async () => {
     expect(await valuesWhere({ value: 3 })).toEqual([3]);

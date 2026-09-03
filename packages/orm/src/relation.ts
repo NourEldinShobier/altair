@@ -12,7 +12,7 @@
  * against the model's known columns.
  */
 
-import { isRangeCondition, rangePredicateFor } from "./predicate_builder.js";
+import { arrayPredicateFor, isRangeCondition, rangePredicateFor } from "./predicate_builder.js";
 import { createHash } from "node:crypto";
 import type { Connection, Row } from "./connection.js";
 import { checkWritable } from "./databases.js";
@@ -408,16 +408,16 @@ export class Relation<T> implements PromiseLike<T[]> {
       if (value === null) {
         next.#wheres.push({ sql: `${quoted} IS NULL`, bindings: [], column });
       } else if (Array.isArray(value)) {
-        if (value.length === 0) {
-          // Rails: an empty IN matches nothing rather than erroring.
-          next.#wheres.push({ sql: "1 = 0", bindings: [], column });
-        } else {
-          next.#wheres.push({
-            sql: `${quoted} IN (${value.map(() => "?").join(", ")})`,
-            bindings: value,
-            column,
-          });
-        }
+        // Through the predicate builder, which pulls a `null` out of the list
+        // and asks for it separately. `IN (1, NULL)` never matches the null
+        // rows — SQL's three-valued logic makes every comparison with null
+        // unknown — so `where({ parent_id: [1, null] })` means "child of 1, or
+        // a root" and this used to silently mean only the first half. An empty
+        // list still matches nothing rather than erroring, which is Rails'
+        // behaviour and the builder's.
+        const predicate = arrayPredicateFor(column, value, (name) => this.#quoteColumn(name));
+
+        next.#wheres.push({ sql: predicate.sql, bindings: predicate.binds, column });
       } else if (isRangeCondition(value)) {
         // Without this a range falls through to `=` and is bound as an
         // object, which the driver stringifies into a comparison nobody wrote:

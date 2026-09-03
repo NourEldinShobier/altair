@@ -7,12 +7,12 @@
  * and thoroughly tested while no code path in the framework routes through it
  * — and the coverage number cannot tell the difference.
  *
- * This asks the other question. For every module it collects the names it
- * exports, then looks for any of them in every *other* source file across
- * every package. Cross-package use counts, because a package's `index.ts`
- * re-exports everything and an importer names the symbol either way. An
- * `index.ts` is never counted as a caller: re-exporting a thing is not using
- * it.
+ * This asks the other question, in two ways depending on how far the caller
+ * would be. Inside a package it reads the relative imports — which names, from
+ * which file — and that is exact. Across packages there is no path to follow,
+ * because a caller reaches through the package index, so it falls back to
+ * looking for the name. An `index.ts` is never counted as a caller:
+ * re-exporting a thing is not using it.
  *
  * A hit here is not automatically a defect. Three things land in the list and
  * only two of them are problems:
@@ -35,23 +35,37 @@
  * A name the other module declares for itself is discounted for the same
  * reason.
  *
- * It is a heuristic and says so. It matches names, and two modules can own the
- * same name: `arel.ts` exports a `toSql` and `relation.ts` has a method called
- * one, so `arel.ts` reads as called and is not in the list even though nothing
- * calls it. A declaration of the same name is already discounted; a *method* of
- * the same name is not, because telling `foo() {` in a class from `foo();` in a
+ * It is a heuristic where it falls back to names, and says so. Two modules can
+ * own the same name, and across a package boundary there is nothing to tell
+ * them apart: a declaration of the same name is discounted, a *method* of the
+ * same name is not, because telling `foo() {` in a class from `foo();` in a
  * function body needs a parser rather than a regex. That direction hides
  * findings, so `--why` exists: it prints every match with the file it came
  * from, and a collision takes seconds to dismiss by looking.
  *
+ * A module is too coarse a unit, and that is not a theory either.
+ * `predicate_builder.ts` never appeared in this list because one of its
+ * exports is called — and `rangePredicateFor` sat unused beside it, so a
+ * `where` given a range bound it as an object and matched nothing. One wired
+ * export hides every unwired one beside it. `--exports` asks the finer
+ * question, and the first thing it said was that `arrayPredicateFor` was
+ * unused too: `where({ parent_id: [1, null] })` was dropping the roots,
+ * because `IN (1, NULL)` never matches a null.
+ *
+ * Most of what `--exports` lists is public API — a type, an error class, a
+ * helper meant for callers — so it is a thing to read module by module rather
+ * than a list to work through.
+ *
  *     bun run tools/unwired-modules.ts
  *     bun run tools/unwired-modules.ts --package=orm
+ *     bun run tools/unwired-modules.ts --exports
+ *     bun run tools/unwired-modules.ts --exports --package=orm
  *     bun run tools/unwired-modules.ts --why=orm/src/arel.ts
  */
 
 import { Glob } from "bun";
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const PACKAGES = "packages";
 
@@ -64,6 +78,71 @@ interface Module {
   package: string;
   exports: string[];
   source: string;
+}
+
+/**
+ * A relative import and the names it takes.
+ *
+ * Within a package this is exact, which is the point: matching on names alone
+ * says `predicate_builder.ts` is called because somebody wrote `tableName`
+ * somewhere, and then every unused export beside the one real caller is
+ * invisible. An import says which names, from which file, with no guessing.
+ */
+const RELATIVE_IMPORT = /import\s+(?:type\s+)?([\s\S]*?)\s+from\s+"(\.[^"]*)\.js"/g;
+
+interface Uses {
+  /** Names imported from a sibling module, by that module's path. */
+  byPath: Map<string, Set<string>>;
+  /** Modules imported wholesale (`import * as x`), where every export counts. */
+  whole: Set<string>;
+}
+
+function usesOf(all: readonly Module[]): Uses {
+  const byPath = new Map<string, Set<string>>();
+  const whole = new Set<string>();
+
+  for (const module of all) {
+    for (const [, clause, relative] of module.source.matchAll(RELATIVE_IMPORT)) {
+      const target = resolveImport(module.path, relative as string, all);
+
+      if (target === undefined) continue;
+
+      if ((clause as string).includes("*")) {
+        whole.add(target);
+        continue;
+      }
+
+      const names = byPath.get(target) ?? new Set<string>();
+
+      for (const name of namesIn(clause as string)) names.add(name);
+
+      byPath.set(target, names);
+    }
+  }
+
+  return { byPath, whole };
+}
+
+/** The module a relative specifier points at, if it is one this scan holds. */
+function resolveImport(from: string, relative: string, all: readonly Module[]): string | undefined {
+  const target = join(dirname(from), relative).replaceAll("\\", "/");
+
+  return all.find((module) => module.path === `${target}.ts` || module.path === `${target}.tsx`)
+    ?.path;
+}
+
+/** The bindings an import clause introduces, ignoring how they were spelled. */
+function namesIn(clause: string): string[] {
+  const braced = /\{([\s\S]*)\}/.exec(clause);
+  const parts = braced === null ? [clause] : (braced[1] as string).split(",");
+
+  return parts
+    .map((part) => {
+      const halves = part.split(/\bas\b/);
+
+      return (halves[0] as string).replace(/\btype\b/, "").trim();
+    })
+    .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name));
 }
 
 async function modules(): Promise<Module[]> {
@@ -114,16 +193,42 @@ function withoutComments(source: string): string {
  * uses. Two modules owning the same name is worth knowing about on its own,
  * but it is not evidence that either calls the other.
  */
-function called(module: Module, all: readonly Module[]): boolean {
+function called(module: Module, all: readonly Module[], uses: Uses): boolean {
+  if (uses.whole.has(module.path)) return true;
+  if ((uses.byPath.get(module.path)?.size ?? 0) > 0) return true;
+
   if (module.exports.length === 0) return false;
 
-  return all.some((other) => {
-    if (other.path === module.path) return false;
+  // Within the package an import is exact and the checks above are the whole
+  // answer. Across packages there is no path to follow — a caller reaches
+  // through the package index — so the name is all there is, and a common word
+  // is still a collision there. That is why this stays a floor.
+  return module.exports.some((name) => namedInAnotherPackage(module, name, all));
+}
 
-    return module.exports.some(
-      (name) => new RegExp(`\\b${escape(name)}\\b`).test(other.source) && !declares(other, name),
-    );
-  });
+/**
+ * Whether anything but this module uses one particular export.
+ *
+ * An import inside the package is exact. Across packages it falls back to the
+ * name, because a cross-package caller reaches through the package index and
+ * there is no path to follow — so a common word is still a collision there,
+ * and this stays a floor rather than a total.
+ */
+function usedElsewhere(module: Module, name: string, all: readonly Module[], uses: Uses): boolean {
+  if (uses.whole.has(module.path)) return true;
+  if (uses.byPath.get(module.path)?.has(name) === true) return true;
+
+  return namedInAnotherPackage(module, name, all);
+}
+
+/** The cross-package fallback: the name, in a module of a different package. */
+function namedInAnotherPackage(module: Module, name: string, all: readonly Module[]): boolean {
+  const wanted = new RegExp(String.raw`${escape(name)}`);
+
+  return all.some(
+    (other) =>
+      other.package !== module.package && wanted.test(other.source) && !declares(other, name),
+  );
 }
 
 /** Whether a module introduces this name itself, rather than borrowing it. */
@@ -174,9 +279,41 @@ if (why !== undefined) {
 
 const only = process.argv.find((argument) => argument.startsWith("--package="))?.slice(10);
 const all = await modules();
+const uses = usesOf(all);
+const inPackage = (module: Module) => only === undefined || module.package === only;
+
+if (process.argv.includes("--exports")) {
+  // Only the modules something *does* call: a module nothing calls at all is
+  // the other report, and listing every one of its exports here would bury
+  // the finding this one exists for.
+  const partial = all
+    .filter((module) => module.exports.length > 0 && called(module, all, uses) && inPackage(module))
+    .map((module) => ({
+      module,
+      unused: module.exports.filter((name) => !usedElsewhere(module, name, all, uses)),
+    }))
+    .filter((entry) => entry.unused.length > 0)
+    .sort((a, b) => b.unused.length - a.unused.length);
+
+  const total = partial.reduce((sum, entry) => sum + entry.unused.length, 0);
+
+  console.log(
+    `${String(total)} exports of ${String(partial.length)} otherwise-called modules are named nowhere else.`,
+  );
+
+  for (const { module, unused } of partial) {
+    console.log(module.path);
+
+    for (const name of unused) console.log(`  ${name}`);
+
+    console.log("");
+  }
+
+  process.exit(0);
+}
 const unwired = all
-  .filter((module) => module.exports.length > 0 && !called(module, all))
-  .filter((module) => only === undefined || module.package === only)
+  .filter((module) => module.exports.length > 0 && !called(module, all, uses))
+  .filter(inPackage)
   .sort((a, b) => b.source.length - a.source.length);
 
 console.log(
