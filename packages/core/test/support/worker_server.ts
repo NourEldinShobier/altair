@@ -10,6 +10,7 @@
  */
 
 import { Controller } from "@altair/controller";
+import cluster from "node:cluster";
 import { createApplication } from "../../src/index.js";
 
 const [port = "0", workers = "4"] = process.argv.slice(2);
@@ -40,6 +41,12 @@ const app = createApplication({
   },
   controllers: { pid: PidController },
 });
+
+// Printed by each worker as it starts serving, so the test can count the
+// workers that actually came up. Distribution of connections across them is
+// the kernel's business and not assertable; how many are serving is the
+// framework's contract and is.
+if (!cluster.isPrimary) console.log(`WORKER ${process.pid}`);
 
 const server = await app.listen(Number(port));
 
