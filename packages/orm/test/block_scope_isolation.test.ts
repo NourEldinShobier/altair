@@ -24,14 +24,8 @@ import {
   withEncryptionContext,
   withoutEncryption,
 } from "../src/encryption_keys.js";
-import {
-  collectingQueriesForExplain,
-  enableQueryCache,
-  queryCacheEnabled,
-  recordForExplain,
-  resetQueryCache,
-  uncached,
-} from "../src/query_analysis.js";
+import { collectingQueriesForExplain, recordForExplain, uncached } from "../src/query_analysis.js";
+import { isCaching, withQueryCache } from "../src/query_cache.js";
 import {
   preserveLockVersionOnTouch,
   preservingLockVersionOnTouch,
@@ -135,20 +129,18 @@ describe("running without encryption", () => {
 });
 
 describe("running uncached", () => {
-  beforeEach(() => {
-    resetQueryCache();
-    enableQueryCache();
-  });
-
-  afterEach(() => {
-    resetQueryCache();
-  });
-
+  /**
+   * Against the cache that runs — `query_cache.ts`'s, the one
+   * `Connection.query` consults. These used to assert on this file's own
+   * cache, which nothing calls, so they held while `uncached` did nothing.
+   */
   it("holds inside the block", async () => {
-    await uncached(async () => {
-      await tick();
+    await withQueryCache(async () => {
+      await uncached(async () => {
+        await tick();
 
-      expect(queryCacheEnabled()).toBe(false);
+        expect(isCaching()).toBe(false);
+      });
     });
   });
 
@@ -156,28 +148,32 @@ describe("running uncached", () => {
   it("does not reach work running beside it", async () => {
     let seen: boolean | undefined;
 
-    await Promise.all([
-      uncached(async () => {
-        await tick();
-        await tick();
-      }),
-      (async () => {
-        await tick();
-        seen = queryCacheEnabled();
-      })(),
-    ]);
+    await withQueryCache(async () => {
+      await Promise.all([
+        uncached(async () => {
+          await tick();
+          await tick();
+        }),
+        (async () => {
+          await tick();
+          seen = isCaching();
+        })(),
+      ]);
+    });
 
     expect(seen).toBe(true);
   });
 
   it("is over even when the block throws", async () => {
-    await expect(
-      uncached(() => {
-        throw new Error("from the body");
-      }),
-    ).rejects.toThrow("from the body");
+    await withQueryCache(async () => {
+      await expect(
+        uncached(() => {
+          throw new Error("from the body");
+        }),
+      ).rejects.toThrow("from the body");
 
-    expect(queryCacheEnabled()).toBe(true);
+      expect(isCaching()).toBe(true);
+    });
   });
 });
 

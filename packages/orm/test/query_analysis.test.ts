@@ -39,7 +39,9 @@ import {
   uncached,
   unpreparedStatement,
   writeQuery,
+  skippingThisFilesCache,
 } from "../src/query_analysis.js";
+import { isCaching, withQueryCache } from "../src/query_cache.js";
 
 afterEach(() => {
   resetQueryCache();
@@ -182,24 +184,42 @@ describe("the cache", () => {
     expect(clearQueryCachesForCurrentThread()).toBe(1);
   });
 
+  /**
+   * `uncached` turns off the cache that runs, which is `query_cache.ts`'s —
+   * the one `Connection.query` consults. It used to gate this file's own
+   * cache, which nothing calls, so the block did nothing at all.
+   */
   it("is off inside an uncached block", async () => {
+    await withQueryCache(async () => {
+      expect(isCaching()).toBe(true);
+
+      await uncached(() => {
+        expect(isCaching()).toBe(false);
+      });
+
+      expect(isCaching()).toBe(true);
+    });
+  });
+
+  /** This file's own switch still does what it says, for what still reads it. */
+  it("has its own switch, which is not that one", async () => {
     enableQueryCache();
 
-    await uncached(() => {
+    await skippingThisFilesCache(() => {
       expect(queryCacheEnabled()).toBe(false);
     });
 
     expect(queryCacheEnabled()).toBe(true);
   });
 
-  /** Counted, so an inner block finishing does not turn the cache back on. */
+  /** Scoped, so an inner block finishing does not turn the cache back on. */
   it("stays off while an outer block is still open", async () => {
-    enableQueryCache();
+    await withQueryCache(async () => {
+      await uncached(async () => {
+        await uncached(() => undefined);
 
-    await uncached(async () => {
-      await uncached(() => undefined);
-
-      expect(queryCacheEnabled()).toBe(false);
+        expect(isCaching()).toBe(false);
+      });
     });
   });
 
