@@ -64,6 +64,32 @@
  * by the file that defines them. None of them turned out to be a feature a
  * person could want and could not have here.
  *
+ * ## What this does not count, and what that is worth
+ *
+ * Only `def` and `delegate`. Rails also makes public methods with
+ * `attr_reader`, `attr_accessor` and `attr_writer`, and none of them are read
+ * here.
+ *
+ * That is not a small omission and it flatters us. Scraping them was tried:
+ * 393 more names, and the total goes from 3651/3544 to 4044/3781 — 97.1% down
+ * to 93.5%.
+ *
+ * It was not kept, and the reason is not the number. `attr_reader` sits inside
+ * internal classes far more often than `def` does, and the `# :nodoc:` filter
+ * cannot reach it: the comment goes on the class, and class-level `:nodoc:`
+ * cannot be honoured here because `module Helpers # :nodoc:` heads nearly
+ * every file under `actionview/lib/action_view/helpers` and means only that
+ * RDoc should not make a page for the namespace. So counting attributes drags
+ * in `halted_lambda`, `user_callback` and `progname` with no way to tell them
+ * from `scheduled_at` and `executions`, and this is a direction tracker where
+ * noise is the enemy.
+ *
+ * The right way to read the number, then: it is the coverage of Rails'
+ * *methods*, not of its API, and the gap between those two is about three and
+ * a half points. That the attributes reachable this way did turn up real work
+ * — ActiveJob's `enqueue_error` among them — is the argument for scraping them
+ * one day behind a flag rather than never.
+ *
  * What is left is in `WIRING.md`: whether the code that exists is reachable.
  */
 
