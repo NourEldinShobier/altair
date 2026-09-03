@@ -22,6 +22,7 @@
  *   all three of class, role and shard.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DEFAULT_SHARD, type Role, connectedTo, currentScope, isReadOnly } from "./databases.js";
 
 export const READING_ROLE: Role = "reading";
@@ -58,7 +59,21 @@ export function connectionDescriptor({
 
 // --- preventing writes on a writer -----------------------------------------
 
-let preventing = 0;
+/**
+ * Whether the current work is inside `whilePreventingWrites`.
+ *
+ * In `AsyncLocalStorage` for the reason this file's header gives about
+ * `connected_to`, and it applies here word for word: a module-level counter
+ * let one request's block prevent writes in a *concurrent* request, which
+ * failed with `PreventedWrite` on a write that was never in question. The
+ * argument was written down two functions above the variable that ignored it.
+ *
+ * A flag, where the counter it replaces needed a depth. Leaving a scope
+ * restores whatever surrounded it, so an inner block that finishes cannot
+ * lift an outer one and nothing has to be decremented — which also means a
+ * body that throws cannot leave the process refusing writes.
+ */
+const preventing = new AsyncLocalStorage<boolean>();
 
 /**
  * Rails' `current_preventing_writes`.
@@ -67,7 +82,7 @@ let preventing = 0;
  * inside an explicit `whilePreventingWrites` block.
  */
 export function currentPreventingWrites(): boolean {
-  return preventing > 0 || isReadOnly();
+  return (preventing.getStore() ?? false) || isReadOnly();
 }
 
 /**
@@ -79,8 +94,8 @@ export function currentPreventingWrites(): boolean {
  * could not answer that, because the replica has different data and different
  * latency.
  *
- * Counted rather than set, so nesting works: an inner block that finishes must
- * not lift an outer block's prevention.
+ * Nesting works without counting: the scope an inner block opens is unwound
+ * when it ends, and what it unwinds to is the outer block's.
  */
 export async function whilePreventingWrites<T>(
   prevent: boolean,
@@ -88,15 +103,7 @@ export async function whilePreventingWrites<T>(
 ): Promise<T> {
   if (!prevent) return body();
 
-  preventing += 1;
-
-  try {
-    return await body();
-  } finally {
-    // In a `finally`: a body that throws must not leave the process refusing
-    // writes for the rest of its life.
-    preventing -= 1;
-  }
+  return await preventing.run(true, async () => await body());
 }
 
 export class PreventedWrite extends Error {
@@ -117,7 +124,8 @@ export function checkWriteAllowed(operation: string): void {
 
 // --- shards ----------------------------------------------------------------
 
-let prohibited = 0;
+/** The same, for shard swapping, and scoped for the same reason. */
+const prohibited = new AsyncLocalStorage<boolean>();
 
 export class ShardSwappingProhibited extends Error {
   constructor(from: string, to: string) {
@@ -132,7 +140,7 @@ export class ShardSwappingProhibited extends Error {
 
 /** Rails' `shard_swapping_prohibited?`. */
 export function shardSwappingProhibited(): boolean {
-  return prohibited > 0;
+  return prohibited.getStore() ?? false;
 }
 
 /** Rails' `prohibit_shard_swapping`. */
@@ -142,13 +150,7 @@ export async function prohibitShardSwapping<T>(
 ): Promise<T> {
   if (!prohibit) return body();
 
-  prohibited += 1;
-
-  try {
-    return await body();
-  } finally {
-    prohibited -= 1;
-  }
+  return await prohibited.run(true, async () => await body());
 }
 
 /** Refuses a swap where one is prohibited. */
@@ -206,8 +208,14 @@ export function withABiasFor(shard: string, available: readonly string[]): strin
   return available.includes(shard) ? shard : (available[0] ?? DEFAULT_SHARD);
 }
 
-/** Clears the counters. For a test, or a worker between jobs. */
+/**
+ * Nothing to clear, kept because callers ask.
+ *
+ * Both depths live in `AsyncLocalStorage` now, and a scope ends when its body
+ * does — including when the body throws. A test that ran a block and then
+ * reset was working around the leak this used to have; there is no state left
+ * to escape a block, and none for a worker to inherit from the last job.
+ */
 export function resetSwitchingState(): void {
-  preventing = 0;
-  prohibited = 0;
+  // Deliberately empty.
 }
