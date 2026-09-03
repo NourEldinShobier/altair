@@ -5494,6 +5494,34 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
  * Only the differences a driver introduces are corrected. A column whose type
  * is unknown is left exactly as it arrived.
  */
+/**
+ * A timestamp with no end, and one with no beginning. Rails' `infinity`.
+ *
+ * PostgreSQL's `timestamp` and `date` accept the literals `infinity` and
+ * `-infinity`, which is how you say "this subscription does not expire"
+ * without a nullable column that also means "nobody has decided yet".
+ *
+ * Bun's driver hands them back as the *numbers* `Infinity` and `-Infinity`,
+ * where every other row in the same column arrives as a `Date`. Nothing here
+ * noticed, so the number went into the attribute unchanged and the first
+ * `new Date(row.expiresAt)` on it produced `Invalid Date` — or, if the caller
+ * reached for `.toISOString()`, a `TypeError` at a call site with no clue
+ * where the value came from.
+ *
+ * Represented as the extremes JavaScript can hold rather than as `Infinity`,
+ * because the point of the value is that it compares: `new Date(expiresAt) >
+ * now` has to be true for a subscription that never ends, and it is not true
+ * of `Invalid Date`. These are real instants, they parse, they order, and on
+ * the way back out they become the literals again.
+ */
+export const DISTANT_FUTURE = new Date(8_640_000_000_000_000).toISOString();
+export const DISTANT_PAST = new Date(-8_640_000_000_000_000).toISOString();
+
+/** Whether a timestamp is one of the two that never arrive. Rails' `infinite?`. */
+export function isInfiniteTime(value: unknown): boolean {
+  return value === DISTANT_FUTURE || value === DISTANT_PAST;
+}
+
 function castValue(value: unknown, type: ColumnType | undefined): unknown {
   if (value === null || value === undefined || type === undefined) return value;
 
@@ -5514,7 +5542,14 @@ function castValue(value: unknown, type: ColumnType | undefined): unknown {
 
     case "datetime":
     case "date":
-      return value instanceof Date ? value.toISOString() : value;
+      if (value instanceof Date) return value.toISOString();
+
+      // PostgreSQL's `infinity` and `-infinity`, which Bun's driver hands back
+      // as numbers where every other row in the column is a `Date`.
+      if (value === Infinity) return DISTANT_FUTURE;
+      if (value === -Infinity) return DISTANT_PAST;
+
+      return value;
 
     default:
       return value;
@@ -5648,6 +5683,12 @@ function stableJson(value: unknown): string {
 
 /** Values the database cannot store directly are serialized on the way in. */
 export function serialize(value: unknown, connection?: Connection): unknown {
+  // Back to the literal they were read as, so a row round-trips. Written as
+  // the instant instead, the column would hold a timestamp in the year 275760
+  // — which orders the same way and means something quite different to anyone
+  // reading the table.
+  if (isInfiniteTime(value)) return value === DISTANT_FUTURE ? "infinity" : "-infinity";
+
   if (value instanceof Date) {
     return connection ? formatTimestamp(connection, value) : value.toISOString();
   }
