@@ -35,10 +35,26 @@ describe("making a filename safe", () => {
     expect(safeFilename('a";x="y')).toBe("a;x=y");
   });
 
-  // A filename is not a path.
-  it("removes directory separators", () => {
-    expect(safeFilename("../../etc/passwd")).toBe("....etcpasswd");
-    expect(safeFilename("C:\\Windows\\system32")).toBe("C:Windowssystem32");
+  // A filename is not a path: Rails takes `File.basename` and so does this.
+  it("keeps only the last segment of a path", () => {
+    expect(safeFilename("../../etc/passwd")).toBe("passwd");
+    expect(safeFilename("C:\\Windows\\system32")).toBe("system32");
+  });
+
+  /**
+   * The two spellings of the header have to name the same file. Removing the
+   * separators rather than the path left `....etcpasswd`, which has no stem —
+   * so the ASCII half substituted `download.etcpasswd` and the RFC 5987 half
+   * kept `....etcpasswd`, and which one a browser used depended on its age.
+   */
+  it("names the same file in both spellings", () => {
+    const header = contentDisposition("attachment", "../../etc/passwd");
+
+    expect(header).toBe('attachment; filename="passwd"');
+  });
+
+  it("has nothing left to name for a directory", () => {
+    expect(safeFilename("a/b/")).toBe("download");
   });
 
   it("falls back rather than sending nothing", () => {
