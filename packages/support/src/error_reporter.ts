@@ -62,6 +62,18 @@ export class ErrorReporter {
   #subscribers: ErrorSubscriber[] = [];
   #middlewares: ErrorContextMiddleware[] = [];
 
+  /**
+   * Subscribers that are not to be told, for the length of a block.
+   *
+   * Scoped, not a flag on the reporter, and Rails scopes it too — per fiber,
+   * in `IsolatedExecutionState`. A reporter is process-wide and errors happen
+   * everywhere, so a flag would silence one integration for every request
+   * running beside the block. Silencing an error tracker for somebody else's
+   * request is a failure nobody will ever be told about, which is the one
+   * failure mode this class exists to prevent.
+   */
+  readonly #disabled = new AsyncLocalStorage<readonly ErrorSubscriber[]>();
+
   subscribe(subscriber: ErrorSubscriber): { unsubscribe(): void } {
     this.#subscribers.push(subscriber);
 
@@ -115,6 +127,25 @@ export class ErrorReporter {
    * when something has already gone wrong; a broken reporter must not replace
    * the original error with its own.
    */
+  /**
+   * Runs a block without telling one subscriber about anything. Rails'
+   * `disable`.
+   *
+   * For an integration that wants to handle errors higher in the stack: the
+   * library reports, the application catches, and the tracker should hear
+   * about it once rather than twice. Unsubscribing and resubscribing around
+   * the block does the same thing badly — it loses the subscriber's position
+   * in the list, and it leaves it unsubscribed if the block throws.
+   *
+   * Nesting works, and there is nothing to restore: leaving the scope puts
+   * back whatever surrounded it.
+   */
+  async disable<T>(subscriber: ErrorSubscriber, body: () => T | Promise<T>): Promise<T> {
+    const already = this.#disabled.getStore() ?? [];
+
+    return await this.#disabled.run([...already, subscriber], async () => await body());
+  }
+
   report(error: unknown, options: ReportOptions = {}): void {
     const context: ErrorContext = {
       handled: options.handled ?? true,
@@ -136,7 +167,11 @@ export class ErrorReporter {
       }
     }
 
+    const silenced = this.#disabled.getStore() ?? [];
+
     for (const subscriber of this.#subscribers) {
+      if (silenced.includes(subscriber)) continue;
+
       try {
         const result = subscriber(error, context);
 
