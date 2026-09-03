@@ -42,6 +42,14 @@ if [ -n "$BACKSPACED" ]; then
   exit 1
 fi
 
+# What the formatter is about to change, recorded before it changes it.
+#
+# This script formats and then checks, so a run that reformats a file still
+# ends in ALL GREEN — and the fix lives in the working tree rather than
+# in the commit. Committing after a green verify then failed CI on the one
+# file verify had silently fixed. Green now says whether anything was touched.
+UNFORMATTED=$(bunx oxfmt --threads=1 --check . 2>&1 | grep -oE "[^ ]+\.(ts|tsx|md|json|css)" || true)
+
 step "format" bunx oxfmt --threads=1 .
 step "typecheck" bun run typecheck
 step "lint" bunx oxlint --deny-warnings
@@ -64,4 +72,9 @@ if ! PARITY=$(bun run tools/check-parity.ts 2>&1); then
   exit 1
 fi
 
-echo "ALL GREEN"
+if [ -n "$UNFORMATTED" ]; then
+  echo "ALL GREEN (reformatted, stage these before committing):"
+  echo "$UNFORMATTED" | sed "s/^/  /"
+else
+  echo "ALL GREEN"
+fi
