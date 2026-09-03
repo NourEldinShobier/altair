@@ -16,7 +16,7 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 
 > > > > > > > 4ce9ed1 (feat(controller): reordering a middleware that is already in the stack)
 > > > > > > > \=======
-> > > > > > > | **Total** | **11,839** | 26,775 | 44.2% |
+> > > > > > > | **Total** | **11,865** | 26,775 | 44.3% |
 > > > > > > > 4ff04b9 (feat(controller): telling the browser what to fetch before the page exists)
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
@@ -34,12 +34,12 @@ one that needs no server.
 | -------------------- | ----- | -------------------------------------------------------------------------- |
 | `@altair/support`    | 2438  | Inflector, callbacks, cache, i18n, logging, durations, time zones          |
 | `@altair/orm`        | 4392  | Connection, migrations, models, relations, associations, ActiveModel       |
-| `@altair/controller` | 1380  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
+| `@altair/controller` | 1394  | Filters, strong params, rendering, dispatch, cookies, sessions, CSRF, i18n |
 | `@altair/cli`        | 191   | Generators, db tasks, file loading, encrypted credentials                  |
 | `@altair/router`     | 457   | Resourceful routing, typed path helpers                                    |
 | `@altair/cable`      | 385   | Action Cable, protocol-compatible with Rails' client                       |
 | `@altair/storage`    | 320   | Disk and S3 services, blobs, attachments, variants, direct uploads         |
-| `@altair/view`       | 929   | TSX rendering, layouts, Inertia protocol, form builders                    |
+| `@altair/view`       | 941   | TSX rendering, layouts, Inertia protocol, form builders                    |
 | `@altair/jobs`       | 268   | Jobs, queues, retries, worker                                              |
 | `@altair/testing`    | 495   | Transactional tests, fixtures, factories, test databases                   |
 | `@altair/core`       | 244   | Config, boot lifecycle, request handler, credentials, logging              |
@@ -196,7 +196,7 @@ pino-pretty works under Bun 1.4.
 environments/<env>.ts` layers over the defaults, `config/initializers/*.ts`
 run in filename order at boot, and `altair db:seed` runs `db/seeds.ts`.
 
-What remains everywhere is depth: 44.2% of Rails' test count, not 44.2% of Rails.
+What remains everywhere is depth: 44.3% of Rails' test count, not 44.3% of Rails.
 
 ## How to update this file
 

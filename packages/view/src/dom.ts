@@ -12,8 +12,41 @@ import { underscore } from "@altair/support";
 
 /** Something with a table name and possibly a saved id. */
 interface RecordLike {
-  constructor: { tableName?: string; name?: string };
+  constructor: {
+    tableName?: string;
+    name?: string;
+    /** Rails' `query_constraints_list` — the columns that name one row. */
+    queryConstraintsList?: () => string[];
+  };
   id?: unknown;
+  [column: string]: unknown;
+}
+
+/**
+ * The identifying part of a record's DOM id. Rails' `record_key_for_dom_id`.
+ *
+ * Every column of the key, not the `id` column. On a model that declares
+ * `queryConstraints` — a tenanted table keyed `(account_id, id)` — the `id`
+ * alone does not name a row, so two accounts' row 5 both became `shop_5`.
+ * That is the collision `dom_id` exists to prevent, and on a page listing
+ * across tenants it means a Turbo Stream update lands on the wrong row.
+ *
+ * Joined with `_`, as Rails joins it. `String([1, 5])` would give `1,5`, and a
+ * comma in an id is legal HTML that reads as two selectors in CSS — so the
+ * element would be unreachable by the very thing this exists to make
+ * reachable.
+ *
+ * Undefined when any part is missing, which Rails spells `key.all?`. A half
+ * known key names nothing, so the record is treated as new rather than given
+ * an id that cannot be looked up.
+ */
+function recordKey(record: RecordLike): string | undefined {
+  const columns = record.constructor?.queryConstraintsList?.();
+  const parts = columns ? columns.map((column) => record[column]) : [record.id];
+
+  if (parts.some((part) => part === null || part === undefined || part === "")) return undefined;
+
+  return parts.map((part) => String(part)).join("_");
 }
 
 /**
@@ -41,14 +74,12 @@ export function domClass(record: object, prefix?: string): string {
  * page are genuinely indistinguishable — which is Rails' answer too.
  */
 export function domId(record: object, prefix?: string): string {
-  const id = (record as RecordLike).id;
+  const key = recordKey(record as RecordLike);
   const base = domClass(record);
 
-  if (id === null || id === undefined || id === "") {
-    return prefix ? `${prefix}_new_${base}` : `new_${base}`;
-  }
+  if (key === undefined) return prefix ? `${prefix}_new_${base}` : `new_${base}`;
 
-  return prefix ? `${prefix}_${base}_${String(id)}` : `${base}_${String(id)}`;
+  return prefix ? `${prefix}_${base}_${key}` : `${base}_${key}`;
 }
 
 /**

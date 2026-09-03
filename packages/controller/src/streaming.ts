@@ -161,11 +161,35 @@ export function streamResponse(
   return new Response(body, {
     status: 200,
     ...init,
-    headers: {
-      "content-type": contentType ?? "application/octet-stream",
-      ...headers,
-    },
+    headers: mergedHeaders({ "content-type": contentType ?? "application/octet-stream" }, headers),
   });
+}
+
+/**
+ * Defaults, with the caller's headers on top.
+ *
+ * Built up rather than spread, because `HeadersInit` is three shapes and only
+ * one of them spreads. A `Headers` instance spreads to `{}` — every header the
+ * caller set, dropped without a word — and an array of pairs spreads to
+ * `{ "0": [...] }`, which writes a header named `0`. `StreamOptions` extends
+ * `ResponseInit`, so both were types this accepted.
+ *
+ * Not `new Headers(given)` either: a record may hold `undefined` for a header
+ * the caller decided against, and the constructor writes that out as the five
+ * characters `undefined`.
+ */
+function mergedHeaders(defaults: Record<string, string>, given: ResponseInit["headers"]): Headers {
+  const headers = new Headers(defaults);
+
+  if (given instanceof Headers) for (const [name, value] of given) headers.set(name, value);
+  else if (Array.isArray(given)) for (const [name, value] of given) headers.set(name, value);
+  else if (given !== undefined) {
+    for (const [name, value] of Object.entries(given)) {
+      if (value !== undefined) headers.set(name, value);
+    }
+  }
+
+  return headers;
 }
 
 /**
@@ -190,11 +214,13 @@ export function eventStreamResponse(
   return streamResponse(framed(), {
     ...rest,
     contentType: "text/event-stream",
-    headers: {
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-      ...headers,
-    },
+    headers: mergedHeaders(
+      {
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      },
+      headers,
+    ),
   });
 }
