@@ -97,8 +97,16 @@ interface Module {
  * says `predicate_builder.ts` is called because somebody wrote `tableName`
  * somewhere, and then every unused export beside the one real caller is
  * invisible. An import says which names, from which file, with no guessing.
+ *
+ * The clause cannot hold a `;` or a `"`, and both exclusions are load-bearing.
+ * With `[\s\S]*?` the match started at an *earlier* import and ran to this
+ * one's specifier, so the names captured belonged to the wrong statement:
+ * `job.ts` imports `InlineQueue` from `./worker.js` and the clause read for it
+ * was the tail of the `@altair/support` import above. Every import with
+ * another one before it was attributed wrongly, which is most of them, and the
+ * cross-package fallback quietly covered for it.
  */
-const RELATIVE_IMPORT = /import\s+(?:type\s+)?([\s\S]*?)\s+from\s+"(\.[^"]*)\.js"/g;
+const RELATIVE_IMPORT = /import\s+(?:type\s+)?([^;"]*?)\s+from\s+"(\.[^"]*)\.js"/g;
 
 interface Uses {
   /** Names imported from a sibling module, by that module's path. */
