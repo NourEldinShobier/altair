@@ -11,6 +11,7 @@
  */
 
 import { escapeHtml as escape, RawHtml, type Node } from "./render.js";
+import { xmlNameEscape } from "./escaping.js";
 
 /** Anything else that should land on the element. */
 export type TagAttributes = Record<string, string | number | boolean | null | undefined>;
@@ -25,18 +26,28 @@ export type TagAttributes = Record<string, string | number | boolean | null | un
 export function tagOptions(attributes: TagAttributes): string {
   return Object.entries(attributes)
     .filter(([, value]) => value !== false && value !== null && value !== undefined)
-    .map(([key, value]) => (value === true ? ` ${key}` : ` ${key}="${escape(String(value))}"`))
+    .map(([key, value]) => {
+      // The name as well as the value. A name is written outside the quotes,
+      // so escaping only the value leaves `{ "x><script>alert(1)</script": 1 }`
+      // closing the tag and everything after it reading as markup. Rails
+      // escapes names here for the same reason.
+      const name = xmlNameEscape(key);
+
+      return value === true ? ` ${name}` : ` ${name}="${escape(String(value))}"`;
+    })
     .join("");
 }
 
 /** An element with children. Rails' `content_tag`. */
 export function contentTag(name: string, content: string, attributes: TagAttributes = {}): Node {
-  return new RawHtml(`<${name}${tagOptions(attributes)}>${escape(content)}</${name}>`);
+  const tag = xmlNameEscape(name);
+
+  return new RawHtml(`<${tag}${tagOptions(attributes)}>${escape(content)}</${tag}>`);
 }
 
 /** An element with nothing inside it. */
 export function voidTag(name: string, attributes: TagAttributes = {}): Node {
-  return new RawHtml(`<${name}${tagOptions(attributes)}>`);
+  return new RawHtml(`<${xmlNameEscape(name)}${tagOptions(attributes)}>`);
 }
 
 /**
@@ -48,7 +59,7 @@ export function voidTag(name: string, attributes: TagAttributes = {}): Node {
  * slash silently empties the rest of the drawing.
  */
 export function selfClosingTag(name: string, attributes: TagAttributes = {}): Node {
-  return new RawHtml(`<${name}${tagOptions(attributes)} />`);
+  return new RawHtml(`<${xmlNameEscape(name)}${tagOptions(attributes)} />`);
 }
 
 /**
@@ -66,8 +77,11 @@ export function contentTagString(
   escapeContent = true,
 ): string {
   const inner = escapeContent ? escape(content) : content;
+  // Rails leaves the tag name alone, because its builder takes one from a
+  // method call and cannot be handed a string. This takes a string.
+  const tag = xmlNameEscape(name);
 
-  return `<${name}${tagOptions(attributes)}>${inner}</${name}>`;
+  return `<${tag}${tagOptions(attributes)}>${inner}</${tag}>`;
 }
 
 /**
