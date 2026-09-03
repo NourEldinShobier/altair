@@ -429,6 +429,60 @@ export class MailboxRouter {
 /** What a middleware is handed to continue the chain. */
 type Next = (request: Request) => Promise<Response>;
 
+/**
+ * A base class that carries its own routes. Rails' `ApplicationMailbox`.
+ *
+ *     class ApplicationMailbox extends MailboxRoutes {}
+ *
+ *     ApplicationMailbox.routing(/^reply\+/, RepliesMailbox)
+ *     ApplicationMailbox.routing("support@example.com", SupportMailbox)
+ *
+ *     app.middleware.use("inbound", inboundIngress(ApplicationMailbox.router(), { secret }))
+ *
+ * Rails puts this DSL on a class because Ruby autoloads the file that declares
+ * it. The reason to have it here is different and better: first match wins, so
+ * the order routes are added in *is* the routing, and a shared
+ * `MailboxRouter` that several modules push onto at import time is routed by
+ * whatever order the bundler settled on. Declaring on a class keeps a route
+ * beside the mailbox it names, and `router()` reads them in declaration order
+ * every time.
+ *
+ * Routes are copied to a subclass on its first write, the same rule the
+ * callback chains and the model associations follow, so a mailbox class
+ * declared for a test does not add a route to the application's.
+ */
+export class MailboxRoutes {
+  static routes: readonly Route[] = [];
+
+  /** Adds one route. Rails' `routing`. First match wins, as in Rails. */
+  static routing(pattern: MailboxPattern, mailbox: MailboxClass): typeof MailboxRoutes {
+    if (!Object.hasOwn(this, "routes")) this.routes = [...this.routes];
+
+    (this.routes as Route[]).push({ pattern, mailbox });
+
+    return this;
+  }
+
+  /** Every pattern this class routes on, in the order it will try them. */
+  static routingPatterns(): MailboxPattern[] {
+    return this.routes.map((one) => one.pattern);
+  }
+
+  /** A router carrying these routes, in order. */
+  static router(options: { log?: InboundLog } = {}): MailboxRouter {
+    const router = new MailboxRouter(options);
+
+    for (const { pattern, mailbox } of this.routes) router.route(pattern, mailbox);
+
+    return router;
+  }
+
+  /** Forgets them. For a test, which would otherwise inherit the last one's. */
+  static resetRouting(): void {
+    this.routes = [];
+  }
+}
+
 export interface IngressOptions {
   path?: string;
   /**
