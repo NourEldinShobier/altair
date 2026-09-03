@@ -50,6 +50,17 @@ fi
 # file verify had silently fixed. Green now says whether anything was touched.
 UNFORMATTED=$(bunx oxfmt --threads=1 --check . 2>&1 | grep -oE "[^ ]+\.(ts|tsx|md|json|css)" || true)
 
+# State that belongs to a block, kept where the process can see it. Seventeen
+# of these were found and fixed, and every one had a comment explaining that
+# it was restored in a `finally` so a throwing body would not leave it set
+# — which is the failure one thread can have, and is why nobody noticed the
+# other one. A check is cheaper than finding the eighteenth by hand.
+if ! SHARED=$(bun run tools/shared-block-state.ts 2>&1); then
+  echo "FAILED: block-scoped state held where the process can see it"
+  echo "$SHARED"
+  exit 1
+fi
+
 step "format" bunx oxfmt --threads=1 .
 step "typecheck" bun run typecheck
 step "lint" bunx oxlint --deny-warnings
@@ -63,6 +74,7 @@ if ! echo "$OUT" | grep -qE "^ 0 fail"; then
   echo "$OUT" | grep -A6 "^(fail)" | head -40
   exit 1
 fi
+
 
 # The public claim about how far along this is, checked against the suite that
 # produced it. It had drifted three times before anything checked.

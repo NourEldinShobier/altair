@@ -13,6 +13,8 @@
  * one.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { Logger, logger as shared } from "./logger.js";
 
 const components = new Map<string, Logger>();
@@ -26,8 +28,18 @@ const components = new Map<string, Logger>();
  * import time would leave whichever components loaded first writing somewhere
  * else.
  */
+/**
+ * The loggers a `silenceComponent` block installed, if one is running.
+ *
+ * Separate from the process's, because they answer different questions.
+ * `setComponentLogger` is configuration; silencing is a decision about one
+ * block, and a shared map made it a decision about every request logging
+ * beside it — their lines went missing and nothing said so.
+ */
+const silenced = new AsyncLocalStorage<Map<string, Logger>>();
+
 export function componentLogger(component: string): Logger {
-  return components.get(component) ?? shared;
+  return silenced.getStore()?.get(component) ?? components.get(component) ?? shared;
 }
 
 /**
@@ -63,14 +75,11 @@ export async function silenceComponent<T>(
   component: string,
   body: () => T | Promise<T>,
 ): Promise<T> {
-  const before = components.get(component);
+  // A copy of whatever is already silenced, so nesting adds rather than
+  // replaces, and so nothing has to be put back.
+  const quiet = new Map(silenced.getStore());
 
-  components.set(component, new Logger({ level: "fatal", sink: () => undefined }));
+  quiet.set(component, new Logger({ level: "fatal", sink: () => undefined }));
 
-  try {
-    return await body();
-  } finally {
-    if (before === undefined) components.delete(component);
-    else components.set(component, before);
-  }
+  return await silenced.run(quiet, async () => await body());
 }

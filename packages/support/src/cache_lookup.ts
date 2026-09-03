@@ -139,7 +139,15 @@ interface Versioned<T> {
   graceMs: number;
 }
 
-/** Keys currently being recomputed, so only one caller does it. */
+/**
+ * Keys currently being recomputed, so only one caller does it.
+ *
+ * shared-block-state: deduplicating across callers is what this is for, so
+ * per-caller state would defeat it — a scoped set would let every caller
+ * believe it was the only one and recompute in parallel, which is the
+ * stampede the whole entry exists to prevent. The `delete` in the `finally`
+ * releases this caller's own key rather than restoring a saved value.
+ */
 const recomputing = new Set<string>();
 
 export interface FetchOptions {
