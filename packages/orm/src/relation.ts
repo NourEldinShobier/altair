@@ -396,7 +396,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     const next = this.#clone();
 
     if (typeof conditionsOrSql === "string") {
-      next.#wheres.push({ sql: conditionsOrSql, bindings });
+      next.#wheres.push({ sql: conditionsOrSql, bindings: this.#bind(bindings) });
       return next;
     }
 
@@ -417,7 +417,7 @@ export class Relation<T> implements PromiseLike<T[]> {
         // behaviour and the builder's.
         const predicate = arrayPredicateFor(column, value, (name) => this.#quoteColumn(name));
 
-        next.#wheres.push({ sql: predicate.sql, bindings: predicate.binds, column });
+        next.#wheres.push({ sql: predicate.sql, bindings: this.#bind(predicate.binds), column });
       } else if (isRangeCondition(value)) {
         // Without this a range falls through to `=` and is bound as an
         // object, which the driver stringifies into a comparison nobody wrote:
@@ -425,12 +425,33 @@ export class Relation<T> implements PromiseLike<T[]> {
         // known how to write one since it was added.
         const predicate = rangePredicateFor(column, value, (name) => this.#quoteColumn(name));
 
-        next.#wheres.push({ sql: predicate.sql, bindings: predicate.binds, column });
+        next.#wheres.push({ sql: predicate.sql, bindings: this.#bind(predicate.binds), column });
       } else {
-        next.#wheres.push({ sql: `${quoted} = ?`, bindings: [value], column, value });
+        // `value` stays as it was handed over. It is what `firstOrCreate`
+        // builds a new record from, and that wants the Date rather than the
+        // string the database is about to be given.
+        next.#wheres.push({ sql: `${quoted} = ?`, bindings: this.#bind([value]), column, value });
       }
     }
     return next;
+  }
+
+  /**
+   * The values a condition binds, in the form the driver takes.
+   *
+   * The same `serialize` a save uses, and the reason it has to be the same one
+   * is that a write and a read of the same column have to agree. `create` has
+   * always serialized; `where` did not, so `where({ at: aDate })` handed a Date
+   * straight to the driver and bun's SQLite refused it outright — "Binding
+   * expected string, TypedArray, boolean, number, bigint or null". Querying a
+   * datetime column by a Date is the most ordinary thing there is, and it
+   * threw.
+   *
+   * Idempotent for everything it touches, which matters because `or()` merges
+   * bindings that have already been through here.
+   */
+  #bind(values: readonly unknown[]): unknown[] {
+    return values.map((value) => serialize(value, this.connection));
   }
 
   /** Rails' `where.not`, in its common single-condition form. */
@@ -443,10 +464,10 @@ export class Relation<T> implements PromiseLike<T[]> {
       } else if (Array.isArray(value)) {
         next.#wheres.push({
           sql: `${quoted} NOT IN (${value.map(() => "?").join(", ")})`,
-          bindings: value,
+          bindings: this.#bind(value),
         });
       } else {
-        next.#wheres.push({ sql: `${quoted} != ?`, bindings: [value] });
+        next.#wheres.push({ sql: `${quoted} != ?`, bindings: this.#bind([value]) });
       }
     }
     return next;
