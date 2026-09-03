@@ -23,6 +23,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withoutQueryCache } from "./query_cache.js";
+import type { Row } from "./connection.js";
 
 /** Statements that only read. Everything else is treated as a write. */
 const READ_STATEMENTS = ["SELECT", "WITH", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "PRAGMA"];
@@ -291,6 +292,88 @@ export function execExplain(
   options: { analyze?: boolean; adapter?: string } = {},
 ): string[] {
   return queries.map((sql) => buildExplainClause(sql, options));
+}
+
+/**
+ * An `EXPLAIN` result, printed the way a database shell prints it. Rails'
+ * `ExplainPrettyPrinter#pp`.
+ *
+ * `explain()` hands back rows, which is right — what each adapter reports
+ * differs enough that flattening it to a string would lose the detail somebody
+ * ran it for. But rows are not what a person reads. A PostgreSQL plan is eight
+ * lines of indentation that only mean anything in order, and a MySQL plan is
+ * ten columns wide; dumped as objects, the first loses its shape and the
+ * second scrolls off. The plan is the whole output, and an output nobody can
+ * read is one nobody checks.
+ *
+ * Two shapes, because the databases print two shapes and matching them is the
+ * point: a reader who knows what `psql` looks like should not have to learn
+ * this as well.
+ */
+export function explainPretty(rows: readonly Row[], elapsed?: number): string {
+  if (rows.length === 0) return "";
+
+  const columns = Object.keys(rows[0] as Row);
+
+  // PostgreSQL returns one column of text, already laid out and meaningful
+  // only line by line. Boxing it would put a border around ASCII art.
+  if (columns.length === 1) return planLines(rows, columns[0] as string);
+
+  return planTable(rows, columns, elapsed);
+}
+
+/** PostgreSQL's shape: a centred header, a rule, and the plan verbatim. */
+function planLines(rows: readonly Row[], header: string): string {
+  const lines = rows.map((row) => String(row[header] ?? ""));
+  // Two more than the widest, because there is a space of padding either side.
+  const width = Math.max(header.length, ...lines.map((line) => line.length)) + 2;
+  const left = Math.floor((width - header.length) / 2);
+
+  const out = [
+    `${" ".repeat(left)}${header}`.trimEnd(),
+    "-".repeat(width),
+    ...lines.map((line) => ` ${line}`),
+    `(${String(rows.length)} ${rows.length === 1 ? "row" : "rows"})`,
+  ];
+
+  return `${out.join("\n")}\n`;
+}
+
+/** MySQL's and SQLite's shape: a bordered table, one row per plan step. */
+function planTable(rows: readonly Row[], columns: readonly string[], elapsed?: number): string {
+  const cell = (value: unknown): string =>
+    value === null || value === undefined ? "NULL" : String(value);
+  const numeric = columns.map((column) =>
+    // Right-aligned only when every value under it is a number, the way a
+    // shell aligns them. One text value in the column and the whole column
+    // reads better left-aligned.
+    rows.every((row) => row[column] === null || typeof row[column] === "number"),
+  );
+  const widths = columns.map((column) =>
+    Math.max(column.length, ...rows.map((row) => cell(row[column]).length)),
+  );
+  const separator = `+${widths.map((width) => "-".repeat(width + 2)).join("+")}+`;
+  const line = (values: readonly string[]): string =>
+    `| ${values.map((value, index) => (numeric[index] ? value.padStart(widths[index] as number) : value.padEnd(widths[index] as number))).join(" | ")} |`;
+
+  const out = [
+    separator,
+    // The header is a name, never a number, so it is left-aligned whatever the
+    // column holds.
+    `| ${columns.map((column, index) => column.padEnd(widths[index] as number)).join(" | ")} |`,
+    separator,
+    ...rows.map((row) => line(columns.map((column) => cell(row[column])))),
+    separator,
+  ];
+
+  const label = rows.length === 1 ? "row" : "rows";
+  out.push(
+    elapsed === undefined
+      ? `${String(rows.length)} ${label} in set`
+      : `${String(rows.length)} ${label} in set (${elapsed.toFixed(2)} sec)`,
+  );
+
+  return `${out.join("\n")}\n`;
 }
 
 // --- sequences ---------------------------------------------------------------
