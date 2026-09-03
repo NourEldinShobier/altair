@@ -37,11 +37,12 @@
  *   we scored, so it moved the ratio by half a point and the noise by a lot
  *   more. What is left in this bullet is the plumbing Rails never got round to
  *   marking.
- * - **Ruby, not a feature.** `try`, `to_ary`, `pop`, `flatten`,
- *   `symbolize_keys` and the `with_indifferent_access` family, which a
- *   language with symbols needs and this one does not; `silence_warnings` and
- *   its neighbours, which are `$VERBOSE`; `method_symbol` and
- *   `request_method_symbol`, which are the same string twice.
+ * - **Ruby, not a feature**, and no longer counted: `symbolize_keys` and the
+ *   `with_indifferent_access` family, which a language that tells `:name` from
+ *   `"name"` needs and this one cannot; `silence_warnings` and its
+ *   neighbours, which set `$VERBOSE`; `method_symbol`, which is `method`
+ *   returning `:GET`; `try`, which is `?.`. The test is in `RUBY_ONLY` below
+ *   and it is narrow: ported faithfully, each of these has an empty body.
  * - **Scraper artifacts**, now two: `pp` and `fmod` are real Ruby methods
  *   nobody would want here, and both stay counted against us, which is the
  *   honest way for them to read. The interpolated halves — `build_`,
@@ -124,6 +125,57 @@ const NOISE = new Set([
   "prettyPrint",
 ]);
 
+/**
+ * Methods whose whole purpose is a distinction Ruby draws and JavaScript does
+ * not.
+ *
+ * The set above is the object protocol — `inspect`, `to_s`, `dup`. This one is
+ * the type system, and the test for membership is narrow on purpose: not "we
+ * do it differently" and not "JavaScript has something like it", but *there is
+ * nothing here for the method to do*. Every name below is a method that, ported
+ * faithfully, would have an empty body.
+ *
+ * Two families and three strays.
+ *
+ * `symbolize_keys` and the whole `with_indifferent_access` family exist
+ * because a Ruby hash tells `:name` and `"name"` apart, so a params hash built
+ * from a query string cannot be read with the symbol the code wants to write.
+ * An object here has string keys and only string keys, which means every
+ * object already has indifferent access and there is no second kind of key to
+ * convert to. Porting `symbolize_keys` gets you the identity function.
+ *
+ * `silence_warnings`, `enable_warnings` and `with_warnings` set `$VERBOSE`, a
+ * Ruby global that turns the interpreter's own warnings on and off. There is
+ * no such switch to flip.
+ *
+ * `method_symbol` and `request_method_symbol` are `method` and `request_method`
+ * returning `:GET` instead of `"GET"`. Here they would return the same string
+ * twice, under two names.
+ *
+ * `try` is `receiver&.method`, which JavaScript spells `?.` and has in the
+ * language. Rails wrote it because Ruby did not have `&.` until 2.3.
+ *
+ * `to_time` and `to_datetime` were considered and left out. Ruby has two time
+ * classes and this has one, so the pair of names has nothing to distinguish —
+ * but converting a string to a date is a real operation somebody wants, and
+ * "the language provides it" is a wider door than this set should open.
+ */
+const RUBY_ONLY = new Set([
+  "symbolizeKeys",
+  "deepSymbolizeKeys",
+  "withIndifferentAccess",
+  "nestedUnderIndifferentAccess",
+  "asIndifferentHash",
+  "readHashWithIndifferentAccess",
+  "writeHashWithIndifferentAccess",
+  "silenceWarnings",
+  "enableWarnings",
+  "withWarnings",
+  "methodSymbol",
+  "requestMethodSymbol",
+  "try",
+]);
+
 /** `find_by_token!` -> `findByToken` */
 function camel(name: string): string {
   return name.replace(/[?!=]$/, "").replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
@@ -172,6 +224,11 @@ function namesAMethod(name: string, next: string): boolean {
  * Everything after a `private`/`protected` keyword in a file is skipped, and
  * so are the `_`-prefixed internals Rails uses for framework plumbing.
  */
+/** Not a feature, for either of the two reasons above. */
+function excluded(name: string): boolean {
+  return NOISE.has(name) || RUBY_ONLY.has(name);
+}
+
 async function railsMethods(component: string, subdirs: string[]): Promise<Set<string>> {
   const names = new Set<string>();
 
@@ -199,7 +256,7 @@ async function railsMethods(component: string, subdirs: string[]): Promise<Set<s
           namesAMethod(method[1] as string, method[2] as string)
         ) {
           const name = method[1] as string;
-          if (!name.startsWith("_") && !NOISE.has(camel(name))) names.add(camel(name));
+          if (!name.startsWith("_") && !excluded(camel(name))) names.add(camel(name));
         }
 
         // `delegate :foo, :bar, to: :baz` is public API too.
@@ -210,7 +267,11 @@ async function railsMethods(component: string, subdirs: string[]): Promise<Set<s
               .trim()
               .replace(/^:/, "")
               .replace(/[?!=]$/, "");
-            if (/^[a-z_][a-zA-Z0-9_]*$/.test(clean) && !clean.startsWith("_")) {
+            if (
+              /^[a-z_][a-zA-Z0-9_]*$/.test(clean) &&
+              !clean.startsWith("_") &&
+              !excluded(camel(clean))
+            ) {
               names.add(camel(clean));
             }
           }
