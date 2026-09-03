@@ -142,6 +142,14 @@ export class TemplateResolver {
 const resolvers: TemplateResolver[] = [];
 
 /**
+ * The paths a class was given, if it was given any.
+ *
+ * A `WeakMap`, so a class declared in a test does not keep itself alive
+ * through this for the rest of the process.
+ */
+const byClass = new WeakMap<object, TemplateResolver[]>();
+
+/**
  * A box rather than a list, because a block can append to its own paths.
  *
  * A store is fixed once the scope opens, and `appendViewPaths` inside a block
@@ -184,11 +192,53 @@ export function prependViewPaths(...added: readonly TemplateResolver[]): void {
   current().unshift(...added);
 }
 
-export function setViewPaths(paths: readonly TemplateResolver[]): void {
+/**
+ * The paths a class searches, its own or the nearest ancestor's that has any.
+ * Rails' `PathRegistry.get_view_paths`.
+ *
+ * Per class, not per process, because a hierarchy is the natural unit: an
+ * `Admin::BaseController` that prepends `app/views/admin` means every
+ * controller under it, and saying so once is the whole point. Rails walks up
+ * the superclass chain for exactly this, and so does this.
+ *
+ * Falls through to the process's paths when no class in the chain has any,
+ * which is every application that never needed the feature.
+ */
+export function getViewPaths(klass: object): TemplateResolver[] {
+  for (
+    let ancestor: object | null = klass;
+    ancestor !== null;
+    ancestor = Object.getPrototypeOf(ancestor) as object | null
+  ) {
+    const own = byClass.get(ancestor);
+
+    if (own) return [...own];
+  }
+
+  return [...current()];
+}
+
+/** Rails' `PathRegistry.set_view_paths`, and the process-wide form beside it. */
+export function setViewPaths(paths: readonly TemplateResolver[]): void;
+export function setViewPaths(klass: object, paths: readonly TemplateResolver[]): void;
+export function setViewPaths(
+  first: object | readonly TemplateResolver[],
+  second?: readonly TemplateResolver[],
+): void {
+  if (second !== undefined) {
+    byClass.set(first as object, [...second]);
+    return;
+  }
+
   const list = current();
 
   list.length = 0;
-  list.push(...paths);
+  list.push(...(first as readonly TemplateResolver[]));
+}
+
+/** Forgets a class's own paths, so it inherits again. */
+export function resetViewPaths(klass: object): void {
+  byClass.delete(klass);
 }
 
 /** Rails' `view_paths` — what a lookup will search, in the order it searches. */
