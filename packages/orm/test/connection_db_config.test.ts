@@ -32,7 +32,9 @@ beforeEach(async () => {
   await disconnectDatabases();
 
   configureDatabases({
-    primary: { writing: "sqlite://primary.db", reading: "sqlite://replica.db" },
+    // In-memory, because opening `sqlite://primary.db` writes a real file into
+    // the working tree — which is how one reached a commit.
+    primary: { writing: "sqlite://:memory:", reading: "sqlite://:memory:" },
     analytics: {
       writing: "postgres://user:hunter2@warehouse/analytics",
       shards: {
