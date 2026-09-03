@@ -246,7 +246,10 @@ export function validEncoding(value: string): boolean {
  * is invalid rather than short.
  */
 export function chr(value: string): string {
-  return [...value][0] ?? "";
+  // `Array.from` rather than a spread: the same code points, and it does not
+  // read as an accident to a linter that cannot tell this apart from a
+  // spread meant to preserve grapheme clusters.
+  return Array.from(value)[0] ?? "";
 }
 
 /**

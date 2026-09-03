@@ -66,6 +66,19 @@ step "typecheck" bun run typecheck
 step "lint" bunx oxlint --deny-warnings
 step "format check" bunx oxfmt --threads=1 --check .
 
+# The rules that need type information, which are a separate pass because they
+# need a whole program rather than a file. Two defects came out of the first
+# run: a response spread `HeadersInit` into an object, where a `Headers`
+# spreads to nothing and a list of pairs spreads to a header named 0; and
+# `domId` named a row by its `id` column rather than its whole key.
+#
+# Which rules is in `.oxlintrc.json`, and the ones left off are left off for a
+# reason rather than a backlog: `no-base-to-string` is 78 deliberate
+# `String(unknown)` coercions around the one that mattered, `await-thenable`
+# is 347 `await expect(...)` in tests, and `require-array-sort-compare` found
+# nothing it could tell apart from a string sort.
+step "typecheck (type-aware lint)" bunx oxlint --type-aware --deny-warnings
+
 OUT=$(bun test 2>&1)
 echo "$OUT" | grep -E "^ [0-9]+ (pass|fail)" || true
 

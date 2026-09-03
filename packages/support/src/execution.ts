@@ -406,7 +406,7 @@ export function onLoad(name: string, hook: (base: unknown) => void): void {
 }
 
 /** Rails' `run_load_hooks`. */
-export function runLoadHooks(name: string, base: unknown = undefined): void {
+export function runLoadHooks(name: string, base?: unknown): void {
   const already = ranHooks.get(name);
 
   if (already) already.push(base);

@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "rules": {
+    "typescript/no-misused-spread": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/unbound-method": "error",
+    "typescript/no-meaningless-void-operator": "error",
+    "typescript/no-useless-default-assignment": "error",
+    "typescript/require-array-sort-compare": "off",
+    "typescript/await-thenable": "off",
+    "typescript/no-base-to-string": "off",
+    "typescript/no-redundant-type-constituents": "off",
+    "typescript/restrict-template-expressions": "off"
+  }
+}

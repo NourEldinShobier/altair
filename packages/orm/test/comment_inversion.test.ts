@@ -104,10 +104,10 @@ describe("inverting through the general path", () => {
   });
 
   /** A `revert` block inverts as it records. */
-  it("inverts while reverting", () => {
+  it("inverts while reverting", async () => {
     const recorder = new CommandRecorder();
 
-    recorder.revert(() => {
+    await recorder.revert(() => {
       recorder.changeTableComment("posts", { from: "old", to: "new" });
     });
 

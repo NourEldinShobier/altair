@@ -205,7 +205,7 @@ describe("the table", () => {
     table.set(0, 1, "a");
     table.set(0, 2, /\w+/);
 
-    expect(table.move([0], "a").sort()).toEqual([1, 2]);
+    expect(table.move([0], "a").sort((a, b) => a - b)).toEqual([1, 2]);
   });
 
   /**
@@ -218,7 +218,7 @@ describe("the table", () => {
     table.set(0, 2, "b");
     table.set(1, 3, "b");
 
-    expect(table.move([0, 1], "b").sort()).toEqual([2, 3]);
+    expect(table.move([0, 1], "b").sort((a, b) => a - b)).toEqual([2, 3]);
   });
 
   it("marks accepting states", () => {

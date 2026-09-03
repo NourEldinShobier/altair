@@ -112,11 +112,11 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const ws of sockets) ws.close();
   sockets.length = 0;
   cable.detach();
-  server.stop(true);
+  await server.stop(true);
 });
 
 describe("a real connection", () => {
@@ -279,7 +279,7 @@ describe("a real connection", () => {
 
   it("pings on the configured interval", async () => {
     cable.detach();
-    server.stop(true);
+    await server.stop(true);
 
     const fast = new Cable({ channels: [RoomChannel], pingInterval: 0.05 });
     const handlers = fast.handlers();
