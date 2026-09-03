@@ -124,3 +124,74 @@ export function around<This extends object>(chain: string, options: SetCallbackO
 export function after<This extends object>(chain: string, options: SetCallbackOptions<This> = {}) {
   return callbackDecorator<This>(chain, "after", options);
 }
+
+/**
+ * The decorators a set of events gets, named the way Rails names them.
+ *
+ * A mapped type rather than `Record<string, …>`, so a destructured
+ * `beforeCreate` is a decorator rather than one that might be undefined — and
+ * so a mistyped `beforeCraete` is a compile error rather than a callback that
+ * never runs.
+ */
+export type ModelCallbackDecorators<Event extends string, Kind extends CallbackKind> = {
+  [E in Event as `${Kind}${Capitalize<E>}`]: CallbackDecorator;
+};
+
+/**
+ * Declares a lifecycle event and hands back the decorators for it. Rails'
+ * `define_model_callbacks`.
+ *
+ *     const { beforeCreate, afterCreate } = defineModelCallbacks("create")
+ *
+ *     class Signup {
+ *       @beforeCreate
+ *       normalise() { this.email = this.email.trim() }
+ *
+ *       async create() {
+ *         await runCallbacks(this, "create", () => save(this))
+ *       }
+ *     }
+ *
+ * Two things in one call, because they are useless apart. `defineCallbacks`
+ * gives a class a chain with nothing to put on it, and `callbackDecorators`
+ * gives decorators for a chain that may not exist — declaring an event means
+ * doing both, and doing them separately is how they come to disagree about
+ * the name, which fails as a callback that silently never runs.
+ *
+ * No class, and that is the one place this cannot follow Rails. Rails calls
+ * this inside the class body, where `self` is the class; a TypeScript
+ * decorator is evaluated *before* the class binding exists, so a caller who
+ * wants the decorators cannot yet name the class they belong to. It needs
+ * none: the first callback added creates the chain, which is what
+ * `setCallback` has always done. An event that needs a terminator or
+ * `skipAfterCallbacksIfTerminated` declares it with `defineCallbacks`, which
+ * takes the class and the configuration together.
+ *
+ * `only` narrows which kinds are made, as Rails' does. An event with no
+ * `around` is one a caller cannot wrap, which is worth being able to say:
+ * `around` is the kind that can swallow the block.
+ *
+ * Names are camel-cased into the decorator — `create` gives `beforeCreate` —
+ * while the chain keeps the name it was given, because that is what
+ * `runCallbacks` is called with.
+ */
+export function defineModelCallbacks<
+  const Event extends string,
+  const Kind extends CallbackKind = CallbackKind,
+>(
+  names: Event | readonly Event[],
+  options: { only?: readonly Kind[] } = {},
+): ModelCallbackDecorators<Event, Kind> {
+  const wanted =
+    options.only ?? (["before", "around", "after"] as readonly CallbackKind[] as readonly Kind[]);
+  const events = typeof names === "string" ? [names] : names;
+  const decorators: Record<string, CallbackDecorator> = {};
+
+  for (const event of events) {
+    const capitalised = `${event.charAt(0).toUpperCase()}${event.slice(1)}`;
+
+    for (const kind of wanted) decorators[`${kind}${capitalised}`] = makeDecorator(event, kind);
+  }
+
+  return decorators as ModelCallbackDecorators<Event, Kind>;
+}
