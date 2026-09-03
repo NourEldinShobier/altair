@@ -18,7 +18,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Connection, setConnectionResolver } from "./connection.js";
+import { Connection, adapterFor, setConnectionResolver } from "./connection.js";
 
 /** Rails' roles. A reading role is a replica; everything else writes. */
 export type Role = "writing" | "reading";
@@ -98,11 +98,17 @@ function reset(): void {
  * application without a replica behaves exactly as it did before roles
  * existed.
  */
-export function database(
-  name: string = PRIMARY,
-  role: Role = "writing",
-  shard: string = DEFAULT_SHARD,
-): Connection {
+/**
+ * Which URL a name, role and shard resolve to.
+ *
+ * Extracted so `database` and `resolveDatabaseConfig` cannot disagree about
+ * where a model is pointed. Two copies of "reading falls back to writing, and
+ * the default shard is the database itself" is one copy too many: the answer
+ * to "which database is this talking to" would then be produced by different
+ * code from the connection that talks to it, and the two would drift on the
+ * day somebody needs them not to.
+ */
+function resolveUrl(name: string, role: Role, shard: string): string {
   const config = configured.get(name);
   if (!config) {
     const known = [...configured.keys()];
@@ -130,7 +136,56 @@ export function database(
     target = found;
   }
 
-  const url = role === "reading" ? (target.reading ?? target.writing) : target.writing;
+  return role === "reading" ? (target.reading ?? target.writing) : target.writing;
+}
+
+/**
+ * A URL with its password removed.
+ *
+ * This is a diagnostic: it goes in a health endpoint, a log line, an error
+ * page. All three are places a password must not be, and a value that is safe
+ * only as long as nobody prints it is not safe.
+ */
+export function redactUrl(url: string): string {
+  return url.replace(/^([a-z0-9+.-]+:\/\/[^:@/]+):[^@/]*@/i, "$1:***@");
+}
+
+/** Where a model's connection actually points. Rails' `db_config`. */
+export interface ResolvedDatabaseConfig {
+  /** The configured name, or `primary` for a connection opened directly. */
+  name: string;
+  role: Role;
+  shard: string;
+  /** What this connection speaks: `sqlite`, `postgres` or `mysql`. */
+  adapter: string;
+  /** The URL, with any password replaced. */
+  url: string;
+}
+
+/**
+ * What a name, role and shard resolve to, without opening a connection.
+ *
+ * The question this answers is the first one asked during an incident: with
+ * replicas, shards and a `connectedTo` block somewhere up the stack, "which
+ * database is this model reading from right now" has no other answer than
+ * reading the code and hoping.
+ */
+export function resolveDatabaseConfig(
+  name: string = PRIMARY,
+  role: Role = "writing",
+  shard: string = DEFAULT_SHARD,
+): ResolvedDatabaseConfig {
+  const url = resolveUrl(name, role, shard);
+
+  return { name, role, shard, adapter: adapterFor(url), url: redactUrl(url) };
+}
+
+export function database(
+  name: string = PRIMARY,
+  role: Role = "writing",
+  shard: string = DEFAULT_SHARD,
+): Connection {
+  const url = resolveUrl(name, role, shard);
   const key = `${name}/${shard}/${url}`;
 
   let pool = pools.get(key);
