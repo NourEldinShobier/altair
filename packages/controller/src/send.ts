@@ -41,17 +41,26 @@ export interface SendOptions {
  * has no escaping to speak of, and a newline in one ends it — everything after
  * would be read as a header of its own, which is response splitting.
  *
- * Directory separators go too. A filename is not a path, and `../../etc` in
- * one is either a mistake or an attempt.
+ * A path becomes its last segment, which is what Rails does — `send_file`
+ * defaults the name to `File.basename(path)`. Deleting the separators instead
+ * kept everything around them: `../../etc/passwd` came out as
+ * `....etcpasswd`, which is inert but is not a filename, and the two
+ * spellings of the header then disagreed about it. `filename=` said
+ * `download.etcpasswd` — the leading dots leave no stem, so the ASCII half
+ * substitutes a name — while `filename*=` said `....etcpasswd`, and a browser
+ * saved one or the other depending on how old it was.
  */
 export function safeFilename(filename: string): string {
   const flattened = filename
     // oxlint-disable-next-line no-control-regex
     .replaceAll(/[\u0000-\u001f\u007f]/gu, "")
-    .replaceAll(/[\\/]/gu, "")
     .replaceAll('"', "");
 
-  const trimmed = flattened.trim();
+  // The last segment, and a trailing separator leaves none: `a/b/` names a
+  // directory and there is no filename in it.
+  const base = flattened.split(/[\\/]/u).pop() ?? "";
+
+  const trimmed = base.trim();
   return trimmed === "" || trimmed === "." || trimmed === ".." ? "download" : trimmed;
 }
 
