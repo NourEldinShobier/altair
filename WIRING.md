@@ -7,7 +7,7 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 107 of
+does anything else in `src` name any of its exports? As of this writing, 106 of
 336 modules do not.
 
 That number is not a defect count. Three different things land in the list.
@@ -82,6 +82,13 @@ that is a decision rather than a bug.
   `performWork` now. Calling it also exposed a bug in it: the running context
   was a module-level variable, which cannot survive two sockets working at
   once. It is an `AsyncLocalStorage` now.
+- **`router/route_declaration.ts`** was a module this repository added and then
+  never called, which is worth saying plainly. `router.ts` handles `via:`
+  itself. Only the refusal is taken from it — `via: []` drew a route that
+  exists and answers no method, findable by `url_for` and a 404 for every
+  request — because the lowercasing there is for the symbols Rails' `via:`
+  accepts and `Route` stores the method as it was written. An absent `via`
+  still means GET, which is this router's own safer choice.
 
 ## A feature ported ahead of the thing it serves
 

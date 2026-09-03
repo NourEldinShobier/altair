@@ -11,6 +11,7 @@
  * assembled at render time.
  */
 
+import { checkVia } from "./route_declaration.js";
 import { camelize, pluralize, singularize } from "@altair/support/inflector";
 import { type HttpMethod, Route, type RouteOptions } from "./route.js";
 
@@ -233,6 +234,18 @@ export class Mapper {
         : options.as
           ? joinName([...scope.as, options.as])
           : undefined;
+
+    // An explicit `via` has to name something. `via: []` draws a route that
+    // exists and answers no method at all — it is in the table, `url_for`
+    // finds it, and every request for it is a 404 with nothing to say why.
+    // An *absent* `via` still means GET, which is this router's own choice:
+    // Rails refuses that too, because a `match` with no methods there answers
+    // all of them, and here it does not.
+    //
+    // Only the refusal is taken from `checkVia`. Its lowercasing is for the
+    // symbols Rails' `via:` accepts, and `Route` stores the method as it was
+    // written.
+    if (options.via !== undefined) checkVia(toArray(options.via));
 
     const methods = toArray(options.via ?? "GET");
 
