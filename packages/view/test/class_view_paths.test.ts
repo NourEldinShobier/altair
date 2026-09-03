@@ -15,7 +15,9 @@
 
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+  appendViewPath,
   getViewPaths,
+  prependViewPath,
   resetViewPaths,
   setViewPaths,
   TemplateResolver,
@@ -112,6 +114,57 @@ describe("a class with nothing above it either", () => {
     await withViewPaths([admin], async () => {
       expect(names(Users)).toEqual(["reports"]);
     });
+  });
+});
+
+describe("adding to a class's own", () => {
+  /**
+   * Starting from what it inherits, which is the difference between this and
+   * `setViewPaths(klass, …)`. Building the list by hand is three chances to
+   * drop what the parent gave.
+   */
+  it("appends after what it inherits", () => {
+    setViewPaths(AdminBase, [admin]);
+    appendViewPath(Users, reports);
+
+    expect(names(Users)).toEqual(["admin", "reports"]);
+    expect(names(AdminBase)).toEqual(["admin"]);
+  });
+
+  /** In front, which is how a controller overrides a template it inherits. */
+  it("prepends before what it inherits", () => {
+    setViewPaths(AdminBase, [admin]);
+    prependViewPath(Users, reports);
+
+    expect(names(Users)).toEqual(["reports", "admin"]);
+  });
+
+  it("takes several at once, in order", () => {
+    setViewPaths(AdminBase, [admin]);
+    appendViewPath(Users, reports, app);
+
+    expect(names(Users)).toEqual(["admin", "reports", "app"]);
+  });
+
+  it("starts from the process's paths when it inherits none", () => {
+    setViewPaths([app]);
+    appendViewPath(Users, reports);
+
+    expect(names(Users)).toEqual(["app", "reports"]);
+  });
+
+  it("adds to what it already had of its own", () => {
+    setViewPaths(Users, [reports]);
+    appendViewPath(Users, admin);
+
+    expect(names(Users)).toEqual(["reports", "admin"]);
+  });
+
+  it("does not reach a sibling", () => {
+    setViewPaths(AdminBase, [admin]);
+    appendViewPath(Users, reports);
+
+    expect(names(Reports)).toEqual(["admin"]);
   });
 });
 
