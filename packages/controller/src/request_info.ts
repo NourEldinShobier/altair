@@ -16,6 +16,8 @@ const PUBLIC_SUFFIXES = new Set(["co.uk", "com.au", "co.nz", "co.jp", "com.br", 
  * Getting this wrong is how a cookie set for `.co.uk` reaches every site in
  * the country, which browsers refuse but applications still try.
  */
+
+import { clientIp, type ClientIpOptions } from "./client_ip.js";
 export function extractDomain(host: string, levels?: number): string {
   const labels = host.split(".").filter(Boolean);
 
@@ -89,39 +91,35 @@ export function requestFormat(request: Request): string | null {
   return accepted.split("/")[1]?.replace(/^.*\+/, "") ?? null;
 }
 
-export interface AddressOptions {
-  /**
-   * How many proxies of your own sit in front of this.
-   *
-   * The client's address is the last entry a proxy you control did *not* add,
-   * and only you know how many those are. Taking the first entry trusts a
-   * header anybody can send; taking the last trusts your own proxy and nobody
-   * else, which is why this counts from the right.
-   */
-  trustedProxies?: number;
-}
+/**
+ * How many proxies of your own sit in front of this. See `client_ip.ts`.
+ *
+ * Re-exported rather than redeclared: two option types for one question end up
+ * documenting two different answers, which is how this file came to have its
+ * own.
+ */
+export type { ClientIpOptions as AddressOptions };
 
 /**
  * The address a request appears to come from. Rails' `remote_ip`.
  *
- * Defaults to the last entry, which is your own proxy's opinion. Say how many
- * hops you control and it walks back that far.
+ * Delegates. This had its own implementation and the two disagreed twice over,
+ * both times in the direction that matters.
+ *
+ * With nothing configured it read the last entry of `X-Forwarded-For`. Behind
+ * a proxy that is the proxy's opinion and correct; in front of nothing it is
+ * whatever the client typed, so anyone sending `X-Forwarded-For: 1.2.3.4` was
+ * 1.2.3.4 here — the spoof `client_ip.ts` exists to prevent, reintroduced by a
+ * second copy of the same feature.
+ *
+ * And the two counted hops differently. `trustedProxies: 1` landed on the last
+ * entry there and the second-to-last here, so an application that rate-limited
+ * through one and logged through the other throttled one address and recorded
+ * another. `remoteIp` already says why that is worse than having no answer at
+ * all; it was true while this function sat two files away doing it.
  */
-export function remoteAddress(request: Request, options: AddressOptions = {}): string | null {
-  const forwarded = request.headers.get("x-forwarded-for");
-
-  if (forwarded) {
-    const chain = forwarded
-      .split(",")
-      .map((one) => one.trim())
-      .filter(Boolean);
-    const hops = options.trustedProxies ?? 0;
-    const index = Math.max(0, chain.length - 1 - hops);
-
-    return chain[index] ?? null;
-  }
-
-  return request.headers.get("x-real-ip");
+export function remoteAddress(request: Request, options: ClientIpOptions = {}): string | null {
+  return clientIp(request, options) ?? request.headers.get("x-real-ip");
 }
 
 /** Whether this looks like a fetch rather than a page load. Rails' `xhr?`. */
