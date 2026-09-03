@@ -10,6 +10,20 @@
 import { describe, expect, it } from "bun:test";
 import { MessageVerifier } from "../src/messages.js";
 
+/**
+ * The same message with its last few characters changed.
+ *
+ * Each character is flipped rather than replaced by a fixed string, which is
+ * not fussiness: a signature is hex, and `slice(0, -3) + "aaa"` leaves a
+ * signature ending in `aaa` untouched. That is one run in 4096, and it came
+ * back as a test that failed once and then passed seven times.
+ */
+function edited(message: string, count = 3): string {
+  const tail = message.slice(-count).replaceAll(/./g, (one) => (one === "a" ? "b" : "a"));
+
+  return message.slice(0, -count) + tail;
+}
+
 const OLD = "old-secret-".repeat(4);
 const NEW = "new-secret-".repeat(4);
 const OLDER = "older-secret-".repeat(3);
@@ -50,7 +64,7 @@ describe("a rotated secret", () => {
     const now = new MessageVerifier(NEW).rotate(OLD);
     const signed = now.generate("x");
 
-    expect(now.verified(`${signed.slice(0, -4)}AAAA`)).toBeNull();
+    expect(now.verified(edited(signed))).toBeNull();
   });
 
   // A message signed for one purpose must not be accepted for another, and a
