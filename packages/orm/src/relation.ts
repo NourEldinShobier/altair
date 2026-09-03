@@ -372,6 +372,7 @@ export class Relation<T> implements PromiseLike<T[]> {
   #withs: CommonTableExpression[] = [];
   /** What to select from instead of the model's table. Rails' `from`. */
   #from: string | undefined;
+  #createWith: Record<string, unknown> = {};
   /**
    * Records handed over by `includes`. Chaining clears this — `#clone` does not
    * copy it — so adding a condition re-queries rather than filtering a stale
@@ -400,6 +401,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     next.#joins = [...this.#joins];
     next.#withs = [...this.#withs];
     next.#from = this.#from;
+    next.#createWith = { ...this.#createWith };
     return next;
   }
 
@@ -1574,7 +1576,33 @@ export class Relation<T> implements PromiseLike<T[]> {
       if (clause.column !== undefined && "value" in clause) seed[clause.column] = clause.value;
     }
 
-    return seed;
+    // Last, so an attribute named both ways is the one the caller asked to
+    // create with rather than the one they asked to filter by. Those are
+    // different questions and `createWith` is the one about the new record.
+    return { ...seed, ...this.#createWith };
+  }
+
+  /**
+   * Attributes a record built here starts with. Rails' `create_with`.
+   *
+   * The conditions already seed a `build`, which covers most of it: a
+   * `where({ published: true })` builds a published post. What it cannot cover
+   * is an attribute that is not a condition — `createWith({ authorId: me })`
+   * on a relation that is *not* filtered by author, which is every "new post
+   * in this list, by me".
+   *
+   * Without it the attribute goes at every call site, and the one that forgets
+   * writes a row with a null where a foreign key should be.
+   *
+   * Passing nothing clears it, as Rails' `create_with(nil)` does, so a scope
+   * can undo what a scope above it set.
+   */
+  createWith(values?: Partial<T>): Relation<T> {
+    const next = this.#clone();
+
+    next.#createWith = values === undefined ? {} : { ...next.#createWith, ...values };
+
+    return next;
   }
 
   /**
