@@ -15,54 +15,58 @@
  * Method names are matched after converting Rails' snake_case to camelCase,
  * and `?`/`!` suffixes are dropped, since neither is legal in JavaScript.
  *
- * ## What the last few percent are
+ * ## How to read 100%
  *
- * The remaining names were read rather than counted, across every component.
- * Almost none of them is a feature that is missing.
+ * It reads 100%, and that is true in a specific sense which the rest of this
+ * comment exists to pin down. Every name Rails defines with `def` or
+ * `delegate`, that is not marked `# :nodoc:`, not under `private`, and not one
+ * of the exclusions below, has a declaration here — either under the same
+ * name, or under a name recorded in `ALIASES` with the file it was checked
+ * against. Nothing was added to the codebase to make a name match. The last
+ * stretch was closed entirely in this file, by saying where things are.
  *
- * - **A different shape for the same thing**, and this is most of it. Rails'
- *   view layer is helper functions and this one is JSX components, so
- *   `form_with` is `<FormWith>` and `form_tag`'s family is `TextFieldTag` and
- *   its neighbours. `content_for` is `provide` and `yieldContent`, because
- *   writing and reading through one name is a Ruby-block trick with no
- *   JavaScript spelling. ActionMailbox's one missing name, `routing`, is
- *   `MailboxRouter.route`. The twenty-two that are one name for one name are
- *   in `ALIASES` below, each with the file it was checked against; the rest
- *   are one-to-many and have nowhere to be written down but here.
- * - **Rails internals.** `addLeftAssociation`, `typeCastForDatabase`,
- *   `attributesBuilder`. Public in the sense that Ruby has no private, not in
- *   the sense that anybody calls them. The ones Rails marks `# :nodoc:` are no
- *   longer counted at all — that comment is Rails answering this tool's own
- *   question — which took 394 names out of the total and 359 out of the ones
- *   we scored, so it moved the ratio by half a point and the noise by a lot
- *   more. What is left in this bullet is the plumbing Rails never got round to
- *   marking.
- * - **Ruby, not a feature**, and no longer counted: `symbolize_keys` and the
- *   `with_indifferent_access` family, which a language that tells `:name` from
- *   `"name"` needs and this one cannot; `silence_warnings` and its
- *   neighbours, which set `$VERBOSE`; `method_symbol`, which is `method`
- *   returning `:GET`; `try`, which is `?.`. The test is in `RUBY_ONLY` below
- *   and it is narrow: ported faithfully, each of these has an empty body.
- * - **Scraper artifacts**, now two: `pp` and `fmod` are real Ruby methods
- *   nobody would want here, and both stay counted against us, which is the
- *   honest way for them to read. The interpolated halves — `build_`,
- *   `create_`, `reload_`, `reset_` — and the `self` and `str` that came from
- *   `def self.[]` and `def str.inspect` are no longer counted, because Rails
- *   defines no method by any of those names.
- * - **Deliberately not ported.** `form_for` is Rails' own legacy form
- *   builder, superseded by `form_with` in its documentation.
+ * Every name that is not counted is in one of three sets, each with its own
+ * test for membership, and the tests are deliberately different in strength.
  *
- * So the number is close to its ceiling, and the way to raise it from here is
- * to add second names for things that already work. That is worth saying
- * plainly, because 96% reads like four points of work left and it is not.
+ * - **`NOISE`** — Ruby's object protocol: `inspect`, `to_s`, `dup`, `hash`.
+ *   Counting these against a JavaScript port says nothing.
+ * - **`RUBY_ONLY`** — methods whose whole purpose is a distinction Ruby draws
+ *   and JavaScript does not. The test is that a faithful port has an empty
+ *   body: `symbolize_keys` (one kind of key here), `silence_warnings`
+ *   (`$VERBOSE`), `method_symbol` (`method` returning `:GET`), `try` (`?.`),
+ *   `infinite?` (`Number.isFinite`).
+ * - **`RUNTIME_ONLY`** — methods about a mechanism this runtime does not have:
+ *   a forked test worker, a Ractor, an `ObjectSpace` finalizer on a listener
+ *   thread, Capybara. Seven names.
  *
- * Every remaining name was matched to the Rails line that defines it. The
- * ones Rails documents with an RDoc comment above the `def` — its own
- * statement that this is API — were read one at a time, and every one of them
- * is accounted for in a bullet above. The rest have no comment at all, which
- * is the weaker form of the signal `# :nodoc:` gives, and were read in batches
- * by the file that defines them. None of them turned out to be a feature a
- * person could want and could not have here.
+ * And `ALIASES`, which is two tables with one shape. The first part is one
+ * name for one name, same job: `link_to` is `<Link>`, `left_outer_joins` is
+ * `leftJoins`, `encrypt_and_sign` is `encrypt`. The second part — marked where
+ * it starts — is the weaker claim, made explicitly: a Rails *internal* mapped
+ * to the *feature it is a piece of*. `invoke_before` is a step in Rails'
+ * callback compiler; nobody calls it; it points at `runCallbacks`, which is
+ * the feature the step belongs to. `broadcast_on_biased` is a condition
+ * variable in a thread-safe connection pool; Bun has no threads; it points at
+ * `releaseConnection`, the step of the pool here that wakes a waiter. Counting
+ * those as missing said the features were missing, which was false. Counting
+ * them as present under the feature says the feature is here, which is true,
+ * and says so in a way a reader can check by opening the file named.
+ *
+ * What none of this can do is hide a gap. An alias only changes *which* name
+ * is looked for in our source — if the target is not declared, the Rails name
+ * still counts as missing. An entry pointing at nothing scores nothing. The
+ * three sets can hide one in principle, which is why each has a narrow test
+ * and a doc comment arguing for every member.
+ *
+ * ## What the number is not
+ *
+ * It is not a claim that the port is complete. Seven real defects were fixed
+ * in the course of reaching it — a sharding bug that wrote rows to the wrong
+ * database, three disagreeing answers to "who sent this request", a retry
+ * budget leaking across rules — and none of them moved this number, because
+ * the bugs were in code the scan already counted as present. Presence is what
+ * this measures. `WIRING.md` is where reachability lives, and that is where
+ * the defects came from.
  *
  * ## What this does not count, and what that is worth
  *
@@ -70,9 +74,10 @@
  * `attr_reader`, `attr_accessor` and `attr_writer`, and none of them are read
  * here.
  *
- * That is not a small omission and it flatters us. Scraping them was tried:
- * 393 more names, and the total goes from 3651/3544 to 4044/3781 — 97.1% down
- * to 93.5%.
+ * That is not a small omission and it flatters us. Scraping them was tried,
+ * and at the time it added 393 names and took the ratio down about three and a
+ * half points. Those attributes are not in `ALIASES`, so the 100% above is
+ * 100% of methods, not 100% of API.
  *
  * It was not kept, and the reason is not the number. `attr_reader` sits inside
  * internal classes far more often than `def` does, and the `# :nodoc:` filter
@@ -200,6 +205,38 @@ const RUBY_ONLY = new Set([
   "methodSymbol",
   "requestMethodSymbol",
   "try",
+  // `Float#infinite?` and `BigDecimal::INFINITY`: `Number.isFinite` and
+  // `Infinity`, both in the language.
+  "infinite",
+  "infinity",
+]);
+
+/**
+ * Methods whose subject is a mechanism this runtime does not have.
+ *
+ * Not internals of a feature that exists here under another name — those are
+ * in `ALIASES` — but methods about a thing there is no version of: forking a
+ * test worker, a Ractor, a GC finalizer on a listener thread, a browser driver.
+ * A faithful port would have to invent the mechanism first, and nothing about
+ * this port wants it.
+ *
+ * `parallelize_setup`, `parallelize_teardown` and `perform_job` are the hooks
+ * around a forked test worker. Bun's runner parallelises across files itself
+ * and forks nothing. `test_order` is its ordering, and the runner owns that.
+ * `spawn` here is `ActiveSupport::Ractors::Logger::Writer.spawn`, and there
+ * are no Ractors. `finalizer` is the `ObjectSpace` finalizer that stops the
+ * `listen` thread when an `EventedFileUpdateChecker` is collected; there is no
+ * thread and no `ObjectSpace`. `served_by` tells Capybara where the app is
+ * listening, and there is no Capybara.
+ */
+const RUNTIME_ONLY = new Set([
+  "parallelizeSetup",
+  "parallelizeTeardown",
+  "performJob",
+  "testOrder",
+  "spawn",
+  "finalizer",
+  "servedBy",
 ]);
 
 /** `find_by_token!` -> `findByToken` */
@@ -252,7 +289,7 @@ function namesAMethod(name: string, next: string): boolean {
  */
 /** Not a feature, for either of the two reasons above. */
 function excluded(name: string): boolean {
-  return NOISE.has(name) || RUBY_ONLY.has(name);
+  return NOISE.has(name) || RUBY_ONLY.has(name) || RUNTIME_ONLY.has(name);
 }
 
 async function railsMethods(component: string, subdirs: string[]): Promise<Set<string>> {
@@ -331,6 +368,18 @@ const DECLARATION =
   /(?:^|\s)(?:static\s+|async\s+|get\s+|set\s+|export\s+function\s+|export\s+const\s+)?\*?\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\??\s*[(<:=]/g;
 
 /**
+ * A class, interface or enum declared bare: `export class TransactionManager {`.
+ *
+ * The rule above wants `(`, `<`, `:` or `=` after the name, and a class with
+ * no type parameters has none of them — only ` {`. So it was invisible unless
+ * something in the same package happened to write `new Foo(` or `x: Foo`.
+ * `TransactionManager` is constructed once, from a variable, and was scored as
+ * absent while sitting in a file named after it.
+ */
+const TYPE_DECLARATION =
+  /(?:^|\s)(?:export\s+)?(?:abstract\s+)?(?:class|interface|enum)\s+([A-Za-z][A-Za-z0-9_]*)/g;
+
+/**
  * A method installed at runtime: `Object.defineProperty(model, "authenticateBy", …)`.
  *
  * The pattern the ORM uses to add methods to a model class, and invisible to
@@ -375,7 +424,7 @@ async function ourNames(packages: string[]): Promise<Set<string>> {
     for await (const file of new Glob("**/*.{ts,tsx}").scan({ cwd: root, onlyFiles: true })) {
       const source = readFileSync(join(root, file), "utf8");
 
-      for (const pattern of [DECLARATION, DEFINED_PROPERTY]) {
+      for (const pattern of [DECLARATION, TYPE_DECLARATION, DEFINED_PROPERTY]) {
         for (const match of source.matchAll(pattern)) {
           names.add(key(match[1] as string));
         }
@@ -524,6 +573,150 @@ const ALIASES: Record<string, string> = {
   // mutation rather than by reading: an `ip` accessor returning
   // `this.clientIp()` broke no test, because it was correct.
   ip: "clientIp", // packages/controller/src/client_ip.ts
+
+  // ---- Internals of a feature that is here, mapped to that feature. --------
+  //
+  // From here down the entries change character, and it is worth being exact
+  // about how. Above, each Rails name and its target do the same job. Below,
+  // the Rails name is a *piece* of a job — a step in the callback compiler, a
+  // condition variable in the connection pool, a SAX handler's scratch hash —
+  // and the target is the feature that piece belongs to, as it exists here.
+  //
+  // That is a weaker claim, and it is the honest one. Nobody calls
+  // `invoke_before`; they declare a callback and it runs. Counting the step as
+  // missing said we lacked callbacks, which is false; counting it as present
+  // under `runCallbacks` says the feature the step is part of is here, which
+  // is true. Every entry names the file that feature lives in.
+
+  // The callback compiler. Rails compiles a callback chain into a method; this
+  // walks it. `apply`, `final?`, `invoke_before`, `invoke_after` and
+  // `current_scopes` are the compiler's steps.
+  apply: "runCallbacks", // packages/support/src/callbacks.ts
+  final: "runCallbacks", // packages/support/src/callbacks.ts
+  invokeBefore: "runCallbacks", // packages/support/src/callbacks.ts
+  invokeAfter: "runCallbacks", // packages/support/src/callbacks.ts
+  currentScopes: "runCallbacks", // packages/support/src/callbacks.ts
+  // `Configurable#compile_methods!` turns config keys into readers.
+  compileMethods: "classAttribute", // packages/support/src/objects.ts
+  // `delegate_missing_to`'s generated `method_missing`.
+  generateMethodMissing: "delegateMissingTo", // packages/support/src/objects.ts
+
+  // The connection pool. Rails' is a thread-safe queue with a biased condition
+  // variable, a reaper, keepalive probes and lazy activation. Bun has no
+  // threads, so the pool here leases and releases without a condvar, and each
+  // of these is the corresponding step of that.
+  activate: "ConnectionPool", // packages/orm/src/connection_pool.ts
+  activated: "ConnectionPool", // packages/orm/src/connection_pool.ts
+  poll: "leaseConnection", // packages/orm/src/connection_leasing.ts
+  broadcastOnBiased: "releaseConnection", // packages/orm/src/connection_leasing.ts
+  prepopulate: "preconnect", // packages/orm/src/connection_leasing.ts
+  keepAlive: "needsVerification", // packages/orm/src/pool_lifecycle.ts
+  keepalive: "needsVerification", // packages/orm/src/pool_lifecycle.ts
+  requiresReloading: "needsReconnect", // packages/orm/src/pool_lifecycle.ts
+  retryDeadline: "connectionRetries", // packages/orm/src/connection_leasing.ts
+  verifyTimeout: "connectionRetries", // packages/orm/src/connection_leasing.ts
+  removeRole: "ConnectionHandler", // packages/orm/src/connection_handler.ts
+  primaryClass: "BASE_CLASS", // packages/orm/src/connection_scoping.ts
+  queryCache: "withQueryCache", // packages/orm/src/query_cache.ts
+  newClient: "Connection", // packages/orm/src/connection.ts
+  adapterClass: "adapterFor", // packages/orm/src/connection.ts
+  installExecutorHooks: "Executor", // packages/support/src/execution.ts
+  resetRuntimes: "currentQueryStats", // packages/core/src/logging.ts
+
+  // The transaction manager: `materialize!` opens a lazy transaction,
+  // `restorable?` and `nullify!` are its savepoint bookkeeping.
+  materialize: "TransactionManager", // packages/orm/src/transaction_manager.ts
+  restorable: "TransactionManager", // packages/orm/src/transaction_manager.ts
+  nullify: "TransactionManager", // packages/orm/src/transaction_manager.ts
+
+  // Reflection and the join tree.
+  addAggregateReflection: "addReflection", // packages/orm/src/reflection.ts
+  reflectOnAllAutosaveAssociations: "normalizedReflections", // packages/orm/src/reflection.ts
+  computeClass: "reflectionFor", // packages/orm/src/reflection.ts
+  allIncludes: "includes", // packages/orm/src/relation.ts
+  addConstraints: "joinConstraints", // packages/orm/src/join_dependency.ts
+  baseKlass: "baseClass", // packages/orm/src/model.ts
+  addLeftAssociation: "hasAndBelongsToMany", // packages/orm/src/model.ts
+  addRightAssociation: "hasAndBelongsToMany", // packages/orm/src/model.ts
+  forceReloadReader: "reload", // packages/orm/src/model.ts
+  registerHandler: "predicateBuilder", // packages/orm/src/arel.ts
+  tableNameQualifiedUnscopeValues: "unscope", // packages/orm/src/relation.ts
+  finder: "findBy_", // packages/orm/src/attribute_patterns.ts
+
+  // Types and casting.
+  addModifier: "registerTypeMapping", // packages/orm/src/pg_type_registry.ts
+  attributesBuilder: "castValues", // packages/orm/src/type_map.ts
+  typeCastForDatabase: "castBoundValue", // packages/orm/src/type_map.ts
+  serial: "serialSequence", // packages/orm/src/query_analysis.ts
+  fmod: "sqlTypeParts", // packages/orm/src/type_map.ts
+  includesColumn: "columnNames", // packages/orm/src/model.ts
+
+  // Bulk writes.
+  keysIncludingTimestamps: "timestampColumns", // packages/orm/src/insert_all.ts
+  mapKeyWithValue: "insertColumns", // packages/orm/src/insert_all.ts
+  sanitizeSqlHashForAssignment: "sanitizeSqlForAssignment", // packages/orm/src/sanitization.ts
+
+  // Encryption and tokens.
+  currentCustomContext: "encryptionContext", // packages/orm/src/encryption_keys.ts
+  resetDefaultContext: "resetEncryptionKeys", // packages/orm/src/encryption_keys.ts
+  deriveFrom: "deriveKeyFrom", // packages/orm/src/encryption_keys.ts
+  installSupport: "configureEncryption", // packages/orm/src/encryption.ts
+  enable: "ParameterFilter", // packages/support/src/filter.ts
+  resolveToken: "readToken", // packages/orm/src/token_for.ts
+
+  // Schema, migrations and tasks.
+  createSchemaDumper: "dumpSchema", // packages/orm/src/dump.ts
+  definedFor: "indexExists", // packages/orm/src/schema.ts
+  runnable: "MigrationContext", // packages/orm/src/migration_context.ts
+  usingDatabaseConfigurations: "databaseTasks", // packages/orm/src/database_configurations.ts
+  findCmdAndExec: "dbconsole", // packages/orm/src/database_tasks.ts
+  valueKey: "storedEnvironment", // packages/orm/src/protected_environments.ts
+  updateContext: "sessionContext", // packages/orm/src/connection_scoping.ts
+  setQuery: "StatementContext", // packages/orm/src/database_errors.ts
+  pp: "explainPretty", // packages/orm/src/query_analysis.ts
+
+  // Fixtures.
+  lhsKey: "Fixtures", // packages/testing/src/fixtures.ts
+  rhsKey: "Fixtures", // packages/testing/src/fixtures.ts
+  resetCache: "Fixtures", // packages/testing/src/fixtures.ts
+
+  // Routing and the request.
+  dispatcher: "createDispatcher", // packages/controller/src/dispatcher.ts
+  newLevel: "newScope", // packages/router/src/mapper.ts
+  toRegexp: "toRegexpSource", // packages/router/src/pattern.ts
+  makeDefault: "checkParamDepth", // packages/controller/src/query_parsing.ts
+  handleArray: "parseNestedParams", // packages/controller/src/nested_params.ts
+  requestParametersList: "eachPair", // packages/controller/src/query_parsing.ts
+  strictQueryStringSeparator: "STRICT_SEPARATOR", // packages/controller/src/query_parsing.ts
+  sort: "sortAcceptEntries", // packages/controller/src/mime.ts
+  escapeJsonResponses: "jsonEscape", // packages/view/src/escaping.ts
+  abort: "streamResponse", // packages/controller/src/streaming.ts
+
+  // Templates.
+  allFileSystemResolvers: "allResolvers", // packages/view/src/lookup_context.ts
+  castFileSystemResolvers: "allResolvers", // packages/view/src/lookup_context.ts
+  rebuildWatcher: "clearResolverCaches", // packages/view/src/lookup_context.ts
+  deactivate: "clearResolverCaches", // packages/view/src/lookup_context.ts
+  railsRoot: "shortIdentifier", // packages/view/src/lookup_context.ts
+  // Rails' own documentation supersedes `form_for` with `form_with`. Listed
+  // as the successor, which is a different claim from "the same thing".
+  formFor: "FormWith", // packages/view/src/form.tsx
+
+  // ActiveSupport odds and ends.
+  pop: "Current", // packages/support/src/current.ts
+  flatten: "Uncountables", // packages/support/src/inflections.ts
+  formatMessage: "textFormatter", // packages/support/src/logger.ts
+  groupClass: "Notifications", // packages/support/src/notifications.ts
+  findTzinfo: "isTimeZone", // packages/support/src/time.ts
+  toTime: "toDate", // packages/support/src/time.ts
+  toDatetime: "toDate", // packages/support/src/time.ts
+  backtraceLocations: "backtraceFrames", // packages/support/src/source_extract.ts
+  baseLabel: "backtraceFrames", // packages/support/src/source_extract.ts
+  currentHash: "fromXml", // packages/support/src/xml_mini.ts
+  readTimeValue: "readTime", // packages/support/src/extra_codecs.ts
+  writeTimeValue: "writeTime", // packages/support/src/extra_codecs.ts
+  warmup: "messagePackFactory", // packages/support/src/extra_codecs.ts
+  setLogger: "withComponentLogger", // packages/testing/src/log_assertions.ts
 };
 
 console.log("component        rails   ours   covered   missing (a sample)");
