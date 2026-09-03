@@ -8,3 +8,10 @@ coverage/
 .DS_Store
 *.tsbuildinfo
 research/
+
+# Databases a test opened by URL. `sqlite://x.db` makes a real file, and one
+# reached a commit before this line existed.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
