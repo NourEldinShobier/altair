@@ -24,6 +24,7 @@ import {
   Callbacks,
   callbackDecorators,
   currentEnvironment,
+  errors,
   type Environment,
 } from "@altair/support";
 import { InlineQueue, MemoryQueue } from "./worker.js";
@@ -56,6 +57,26 @@ const {
 export { beforePerform, aroundPerform, afterPerform };
 export { beforeEnqueue, aroundEnqueue, afterEnqueue };
 
+/**
+ * An adapter refusing a job, as opposed to failing at one. Rails'
+ * `ActiveJob::EnqueueError`.
+ *
+ * The distinction is the whole feature. A queue that is full, is read-only, or
+ * has rejected the payload has *answered*; a driver that threw a TypeError has
+ * not. Rails hands the first back to the caller as a job that did not enqueue
+ * and lets the second escape, because one of them is a condition an
+ * application can be written to expect and the other is a bug.
+ *
+ * An adapter raises this to say "I did not take it". Anything else it throws
+ * still reaches the caller unchanged.
+ */
+export class EnqueueError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "EnqueueError";
+  }
+}
+
 export interface JobPayload {
   id: string;
   /** The registered name of the job class. */
@@ -75,6 +96,20 @@ export interface JobPayload {
    * in.
    */
   priority: number;
+  /**
+   * Whether the adapter took it. Rails' `successfully_enqueued?`.
+   *
+   * False only where the adapter refused with an `EnqueueError`; a job that
+   * fails for any other reason throws instead of answering.
+   *
+   * Rails returns `false` from `perform_later` for this. Returning the payload
+   * either way and putting the answer on it says the same thing without a
+   * union return type, and leaves the reason attached to the thing it is about
+   * rather than needing a second call to find it.
+   */
+  successfullyEnqueued?: boolean;
+  /** Why the adapter refused, when it did. Rails' `enqueue_error`. */
+  enqueueError?: EnqueueError;
   /**
    * What a continuable job finished before it was interrupted.
    *
@@ -538,6 +573,9 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       attempts: 0,
       enqueuedAt: Date.now(),
       priority: options.priority ?? this.priority,
+      // False until the adapter has taken it, so a payload that never reached
+      // an adapter at all reads the same as one that was refused.
+      successfullyEnqueued: false,
     };
   }
 
@@ -567,9 +605,22 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
       const job = new this() as unknown as { payload: JobPayload };
       job.payload = payload;
 
-      await runCallbacks(job, "enqueue", async () => {
-        await this.queue.enqueue(payload);
-      });
+      try {
+        await runCallbacks(job, "enqueue", async () => {
+          await this.queue.enqueue(payload);
+        });
+      } catch (error) {
+        // Only a refusal. Anything else is a bug in the adapter or the
+        // callbacks, and swallowing it here would turn a broken queue into a
+        // queue that quietly accepts nothing.
+        if (!(error instanceof EnqueueError)) throw error;
+
+        payload.enqueueError = error;
+
+        return;
+      }
+
+      payload.successfullyEnqueued = true;
 
       // After the adapter took it, so nothing announces work that was never
       // queued. A scheduled job is announced separately: how much work is
@@ -580,7 +631,17 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
     };
 
     if ((options.enqueueAfterCommit ?? true) && isDeferring()) {
-      await afterCommit(enqueue);
+      await afterCommit(async () => {
+        await enqueue();
+
+        // Nobody is left to read the payload: the caller returned when the
+        // transaction was still open. A refusal that only sets a field would
+        // be a job that vanished, so out here it is reported like any other
+        // failure the caller cannot be told about.
+        if (payload.enqueueError) {
+          errors.report(payload.enqueueError, { handled: false, source: "jobs" });
+        }
+      });
 
       return payload;
     }
