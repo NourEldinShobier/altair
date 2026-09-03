@@ -7,7 +7,7 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 106 of
+does anything else in `src` name any of its exports? As of this writing, 105 of
 336 modules do not.
 
 That number is not a defect count. Three different things land in the list.
@@ -38,7 +38,7 @@ what runs and the other is what gets maintained.
 | `orm/preloader.ts`, `orm/preload_batching.ts`               | `preloadAssociation` in `orm/associations.ts` |
 | `orm/binds.ts`, `orm/select_statements.ts`, `orm/arel.ts`\* | `relation.ts` builds SQL strings directly     |
 | `orm/generated_methods.ts`                                  | nothing generates methods through it          |
-| `orm/attribute_patterns.ts`, `orm/attribute_methods.ts`     | attribute handling inside `model.ts`          |
+| `orm/attribute_methods.ts`                                  | attribute handling inside `model.ts`          |
 
 None of these is wrong. Each was ported against its Rails counterpart and each
 has its own tests. The question they raise is which one should survive, and
@@ -89,6 +89,13 @@ that is a decision rather than a bug.
   request — because the lowercasing there is for the symbols Rails' `via:`
   accepts and `Route` stores the method as it was written. An absent `via`
   still means GET, which is this router's own safer choice.
+- **`orm/attribute_patterns.ts`** was filed as a duplicate of `model.ts` and is
+  not one. It holds several unrelated things, and they are in different
+  buckets: `applySecondsPrecision` was a gap and is wired now, `findBy_` parses
+  dynamic finders that `findBy({ … })` supersedes deliberately — an untyped
+  API for something already typed — and the rest is still unread. A module
+  that collects unrelated helpers cannot be classified as a whole, which is
+  the argument for splitting it.
 
 ## A feature ported ahead of the thing it serves
 

@@ -22,6 +22,8 @@
  * database is what catches it.
  */
 
+import { applySecondsPrecision } from "./attribute_patterns.js";
+
 /** How a type reports itself. */
 export type TypeName =
   | "string"
@@ -303,7 +305,15 @@ export class DateTimeType extends Type {
 
     const date = value instanceof Date ? value : new Date(String(value));
 
-    return Number.isNaN(date.getTime()) ? null : date;
+    if (Number.isNaN(date.getTime())) return null;
+
+    // Cut to what the column can hold, in memory as well as on the way out.
+    // A `datetime(0)` — MySQL's default — stores whole seconds, so a record
+    // written at 12:00:00.523 comes back as 12:00:00 while the object in hand
+    // still says .523. Everything that compares the two then disagrees: a test
+    // that reloads, a cache key, a `changed` check. The record differs from
+    // itself, and nothing says why.
+    return applySecondsPrecision(date, this.precision);
   }
 
   override serialize(value: unknown): unknown {
