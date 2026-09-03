@@ -8,7 +8,7 @@
  * placeholders are numbered, and how an inserted row's id comes back.
  */
 
-import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
+import { Mutex, componentLogger, setComponentLogger, type Logger } from "@altair/support";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
@@ -49,6 +49,55 @@ export function adapterFor(url: string): Adapter {
   return "postgres";
 }
 
+/**
+ * Rails' `DEFAULT_PRAGMAS`, in the order it applies them, plus the busy
+ * timeout it takes from `timeout:` in `database.yml`.
+ *
+ * `mmap_size` is 128 MB and `journal_size_limit` 64 MB, as there. `cache_size`
+ * is 2000 pages. `busy_timeout` is milliseconds, and 5000 is what the
+ * generated `database.yml` says — the value nearly every Rails application
+ * runs with without knowing it.
+ */
+const SQLITE_DEFAULT_PRAGMAS: readonly (readonly [string, string])[] = [
+  ["foreign_keys", "ON"],
+  ["journal_mode", "WAL"],
+  ["synchronous", "NORMAL"],
+  ["mmap_size", "134217728"],
+  ["journal_size_limit", "67108864"],
+  ["cache_size", "2000"],
+  ["busy_timeout", "5000"],
+];
+
+/**
+ * The pragmas a SQLite URL asks for: Rails' defaults, overridden by the
+ * query string. `sqlite://app.db?journal_mode=delete` is Rails'
+ * `pragmas: { journal_mode: :delete }`.
+ *
+ * A pragma is interpolated into a statement, so an override is accepted only
+ * if it looks like a pragma value — a word, a number, a negative number.
+ * Anything else in a URL is somebody's attempt to write SQL through it.
+ */
+export function sqlitePragmas(url: string): (readonly [string, string])[] {
+  const query = url.includes("?") ? (url.split("?")[1] ?? "") : "";
+  const overrides = new Map<string, string>();
+
+  for (const [name, value] of new URLSearchParams(query)) {
+    if (!/^[a-z_]+$/.test(name) || !/^-?[A-Za-z0-9_]+$/.test(value)) {
+      throw new Error(
+        `"${name}=${value}" in the SQLite URL is not a pragma this will pass through.`,
+      );
+    }
+
+    overrides.set(name, value);
+  }
+
+  const merged = new Map<string, string>(SQLITE_DEFAULT_PRAGMAS);
+
+  for (const [name, value] of overrides) merged.set(name, value);
+
+  return [...merged];
+}
+
 /** PostgreSQL's complaint that a prepared statement outlived its table's shape. */
 function isStalePlan(error: unknown): boolean {
   return (
@@ -66,6 +115,16 @@ export class Connection {
   #savepoints = 0;
   #reserved: ReservedConnection | undefined;
   #prepared = false;
+  /**
+   * SQLite's one-writer-at-a-time, enforced here. Bun's `begin` does not
+   * queue on the shared handle, so without this a second concurrent
+   * transaction is "cannot start a transaction within a transaction". Held
+   * for the whole of `transaction()`, and from `beginTransaction` to the
+   * matching commit or rollback on the manual path.
+   */
+  readonly #writers = new Mutex();
+  /** Releases the writer lock a manual `beginTransaction` took. */
+  #releaseWriter: (() => void) | undefined;
 
   /**
    * The handle statements run on.
@@ -213,30 +272,72 @@ export class Connection {
     // Deferred work is collected around the whole transaction, not inside the
     // driver's block: `after_commit` has to run once the COMMIT has landed,
     // and the block returns before that.
+    const run = async (tx: SQL): Promise<T> => {
+      const scoped = new Connection(this.url, tx);
+      scoped.#inTransaction = true;
+      // The handle underneath is this connection's, already prepared. A fresh
+      // object would run the session pragmas again on its first statement —
+      // inside the transaction, where SQLite refuses to change `synchronous`.
+      scoped.#prepared = true;
+
+      // Everything the block reaches, not just the caller, has to run on the
+      // transaction's connection. On SQLite the pool is one connection so it
+      // happened anyway; on a pooled adapter the second model in a block would
+      // quietly write outside the transaction, and its writes would survive a
+      // rollback. The scope follows the async call chain, so concurrent
+      // requests each see their own.
+      return await inTransaction.run(scoped, async () => {
+        const value = await body(scoped);
+
+        // Inside the block, so a callback that throws leaves through
+        // `begin` and the driver rolls back. Outside it, this would run
+        // after the COMMIT and could only report a problem it was supposed
+        // to prevent.
+        await runBeforeCommitCallbacks();
+
+        return value;
+      });
+    };
+
+    // IMMEDIATE on SQLite, as Rails' `begin_db_transaction` does. A deferred
+    // BEGIN takes a read snapshot and no lock; if another writer commits
+    // before this transaction's first write, that write fails with a stale
+    // snapshot and cannot be retried inside the transaction. IMMEDIATE takes
+    // the write lock at BEGIN — waiting its turn under the busy timeout — so
+    // the snapshot it reads is the one it writes against.
+    //
+    // And one at a time on SQLite. Bun's `begin` does not queue: a second
+    // transaction opened on the shared handle while the first is open is
+    // "cannot start a transaction within a transaction", not a wait. Rails
+    // gets its queue from a pool of one connection that threads block on;
+    // this is that queue. Sixty-four concurrent single-row writes went from
+    // sixteen a second to the hundreds with this and the session pragmas.
+    //
+    // Not `sql.begin` on SQLite. Bun accepts a mode there and ignores it —
+    // `begin("IMMEDIATE", fn)` opens a deferred transaction, which a probe
+    // showed by letting another process take the write lock 41 ms into one.
+    // The statements are sent by hand instead, on the one handle SQLite has,
+    // which is what the manual `beginTransaction` path was already doing.
+    const sqlite = async (): Promise<T> => {
+      await this.execute("BEGIN IMMEDIATE");
+
+      try {
+        const value = await run(this.sql);
+
+        await this.execute("COMMIT");
+
+        return value;
+      } catch (error) {
+        await this.execute("ROLLBACK");
+        throw error;
+      }
+    };
+
     return await collectingCommitCallbacks(
       async () =>
-        (await this.sql.begin(async (tx: SQL) => {
-          const scoped = new Connection(this.url, tx);
-          scoped.#inTransaction = true;
-
-          // Everything the block reaches, not just the caller, has to run on the
-          // transaction's connection. On SQLite the pool is one connection so it
-          // happened anyway; on a pooled adapter the second model in a block would
-          // quietly write outside the transaction, and its writes would survive a
-          // rollback. The scope follows the async call chain, so concurrent
-          // requests each see their own.
-          return await inTransaction.run(scoped, async () => {
-            const value = await body(scoped);
-
-            // Inside the block, so a callback that throws leaves through
-            // `begin` and the driver rolls back. Outside it, this would run
-            // after the COMMIT and could only report a problem it was supposed
-            // to prevent.
-            await runBeforeCommitCallbacks();
-
-            return value;
-          });
-        })) as T,
+        (await (this.adapter === "sqlite"
+          ? this.#writers.synchronize(sqlite)
+          : this.sql.begin(run))) as T,
     );
   }
 
@@ -267,9 +368,29 @@ export class Connection {
     // nothing to reserve. Every pooled adapter does.
     if (this.adapter !== "sqlite") {
       this.#reserved = await (this.sql as unknown as PoolWithReserve).reserve();
+    } else {
+      // Take the writer lock and keep it until `#finishTransaction`. The lock
+      // only knows `synchronize`, so the acquisition is a body that stays
+      // open until the release it hands back is called.
+      await new Promise<void>((acquired) => {
+        void this.#writers.synchronize(
+          () =>
+            new Promise<void>((release) => {
+              this.#releaseWriter = release;
+              acquired();
+            }),
+        );
+      });
     }
 
-    await this.execute("BEGIN");
+    // IMMEDIATE on SQLite, as Rails' `begin_db_transaction` does
+    // (`internal_begin_transaction(:immediate)`). A deferred BEGIN takes no
+    // lock until the first write, and SQLite cannot upgrade a read lock to a
+    // write lock while another writer holds it — it answers `SQLITE_BUSY` at
+    // once, and the busy timeout does not apply to that upgrade. IMMEDIATE
+    // takes the write lock at BEGIN, where the timeout does apply, so a
+    // second writer waits its turn instead of failing.
+    await this.execute(this.adapter === "sqlite" ? "BEGIN IMMEDIATE" : "BEGIN");
     this.#inTransaction = true;
   }
 
@@ -355,21 +476,46 @@ export class Connection {
       const reserved = this.#reserved;
       this.#reserved = undefined;
       await reserved?.release?.();
+
+      // The SQLite writer lock, whether the statement succeeded or not — a
+      // failed COMMIT that kept the lock would stall every later transaction.
+      const release = this.#releaseWriter;
+      this.#releaseWriter = undefined;
+      release?.();
     }
   }
 
   /**
    * Settings a connection needs before its first statement.
    *
-   * SQLite enforces foreign keys only when a connection asks it to, and the
-   * default is off — a declared constraint that is never enforced is worse
-   * than no constraint, because it reads as protection.
+   * For SQLite these are Rails' `DEFAULT_PRAGMAS` from
+   * `activerecord/lib/active_record/connection_adapters/sqlite3_adapter.rb`,
+   * applied the way its `configure_connection` applies them, plus the busy
+   * timeout Rails takes from `timeout:` in `database.yml` — 5000 in the file
+   * every new application is generated with.
+   *
+   * Only `foreign_keys` was set here before, and the other six are what make
+   * SQLite usable under more than one writer at a time. Without a busy timeout
+   * a second transaction gets `SQLITE_BUSY` at once rather than waiting; with
+   * the default rollback journal and `synchronous=FULL`, every commit syncs
+   * the disk twice. Measured: sixty-four concurrent single-row writes took
+   * five to seven seconds *each* — sixteen a second, against four hundred for
+   * Rails on the same file — and the whole difference was this method.
+   *
+   * Overridable through the URL, which is where the rest of this adapter's
+   * configuration lives: `sqlite://app.db?busy_timeout=1000&journal_mode=delete`.
+   * `:memory:` databases report `journal_mode = memory` whatever is asked, as
+   * SQLite documents, and the setting is harmless there.
    */
   async #prepareSession(): Promise<void> {
     if (this.#prepared) return;
     this.#prepared = true;
 
-    if (this.adapter === "sqlite") await this.sql.unsafe("PRAGMA foreign_keys = ON");
+    if (this.adapter !== "sqlite") return;
+
+    for (const [pragma, value] of sqlitePragmas(this.url)) {
+      await this.sql.unsafe(`PRAGMA ${pragma} = ${value}`);
+    }
   }
 
   get isInTransaction(): boolean {
