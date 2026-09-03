@@ -17,6 +17,17 @@ The ORM suite runs against SQLite, PostgreSQL and MySQL/MariaDB on every push.
 Anything marked done for ActiveRecord has passed on all three, not just on the
 one that needs no server.
 
+Two other numbers answer questions this one does not, and both are worth
+reading before quoting any of the three:
+
+- `bun run tools/feature-coverage.ts` — of the methods Rails documents as
+  public, how many can a person call here. Its header says what the last few
+  percent turn out to be, which is mostly the same features under different
+  names.
+- [`WIRING.md`](WIRING.md) — whether the code that exists is reachable. A
+  module can be complete, correct and thoroughly tested while no code path in
+  the framework routes through it, and neither of the other numbers can tell.
+
 ---
 
 ## Shipped

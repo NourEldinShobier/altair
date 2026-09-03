@@ -14,6 +14,35 @@
  *
  * Method names are matched after converting Rails' snake_case to camelCase,
  * and `?`/`!` suffixes are dropped, since neither is legal in JavaScript.
+ *
+ * ## What the last few percent are
+ *
+ * At 95.0% the remaining 198 names were read rather than counted, across
+ * every component. Almost none of them is a feature that is missing.
+ *
+ * - **A different shape for the same thing**, and this is most of it. Rails'
+ *   view layer is helper functions and this one is JSX components, so
+ *   `link_to` is `<Link>`, `form_with` is `<FormWith>`, and `form_tag`'s
+ *   family is `TextFieldTag` and its neighbours. `content_for` is `provide`
+ *   and `yieldContent`, because writing and reading through one name is a
+ *   Ruby-block trick with no JavaScript spelling. `left_outer_joins` is
+ *   `leftJoins`. `establish_connection` and `configurations` are
+ *   `configureDatabases`. ActionMailbox's one missing name, `routing`, is
+ *   `MailboxRouter.route`.
+ * - **Rails internals.** `numWaitingInQueue`, `reaperLock`,
+ *   `addLeftAssociation`, `nearestDelegate`, `typeCastForDatabase`. Public in
+ *   the sense that Ruby has no private, not in the sense that anybody calls
+ *   them.
+ * - **Scraper artifacts**, about a dozen: `build_`, `create_`, `reload_` and
+ *   `reset_` are the halves of interpolated method names, and `pp`, `self`,
+ *   `str` and `fmod` are Ruby.
+ * - **Deliberately not ported.** `form_for` is Rails' own legacy form
+ *   builder, superseded by `form_with` in its documentation.
+ *
+ * So the number is close to its ceiling, and the way to raise it from here is
+ * to add second names for things that already work. That is worth saying
+ * plainly, because 95% reads like five points of work left and it is not.
+ * What is left is in `WIRING.md`: whether the code that exists is reachable.
  */
 
 import { Glob } from "bun";
