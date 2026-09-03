@@ -145,24 +145,40 @@ export function javascriptCdataSection(value: unknown): Node {
  * Escapes a string for inclusion in a JavaScript string literal. Rails'
  * `escape_javascript`.
  *
- * Line separators are in the list for a reason that looks obscure and is not:
- * U+2028 and U+2029 are legal inside a JSON string and terminate a JavaScript
- * line, so a value carrying one produces a syntax error in a script that
- * embeds it.
+ * Three of these look decorative and are not.
+ *
+ * `</` is the one that matters. A browser looks for `</script` in the raw
+ * bytes of a script block without parsing the JavaScript around it, so a value
+ * holding it ends the tag from inside a string literal and everything after it
+ * is markup. `javascriptTag` refuses such a body outright; this is the other
+ * half, for a value going into a script somebody else wrote.
+ *
+ * `$` is literal in a JavaScript string and not in a template one, so a value
+ * written into a backtick string carries `${\u2026}` into an expression its author
+ * never wrote.
+ *
+ * U+2028 and U+2029 are legal inside a JSON string and both terminate a
+ * JavaScript line, so a value carrying one is a syntax error in the script
+ * that embeds it.
  */
 const JS_ESCAPES: Record<string, string> = {
   "\\": "\\\\",
+  "</": "<\\/",
+  // Before the single characters, so a CRLF becomes one newline rather than
+  // two. Rails orders it the same way for the same reason.
+  "\r\n": "\\n",
   "\r": "\\n",
   "\n": "\\n",
   '"': '\\"',
   "'": "\\'",
   "`": "\\`",
+  $: "\\$",
   "\u2028": "&#x2028;",
   "\u2029": "&#x2029;",
 };
 
 export function escapeJavascript(value: string): string {
-  return value.replace(/[\\\r\n"'`\u2028\u2029]/g, (one) => JS_ESCAPES[one] as string);
+  return value.replace(/\\|<\/|\r\n|[\r\n"'`$\u2028\u2029]/g, (one) => JS_ESCAPES[one] as string);
 }
 
 /**
