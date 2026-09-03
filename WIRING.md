@@ -7,8 +7,18 @@ code path in the framework routes through it, and the coverage number cannot
 tell the difference.
 
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
-does anything else in `src` name any of its exports? As of this writing, 105 of
-336 modules do not.
+does anything else in `src` use it? Inside a package that is read from the
+relative imports and is exact; across packages, where a caller reaches through
+the package index, it falls back to the name. As of this writing 199 of 336
+modules are used by nothing, and `--exports` finds 448 more exports sitting
+unused inside modules that _are_ used.
+
+That second number is the more useful one, and it exists because the first was
+hiding things. `predicate_builder.ts` never appeared in the module list: one of
+its exports was called, and `rangePredicateFor` and `arrayPredicateFor` sat
+unused beside it. A `where` given a range bound it as an object and matched
+nothing; a `where` given `[1, null]` dropped the null rows. One wired export
+hid both.
 
 That number is not a defect count. Three different things land in the list.
 
