@@ -92,6 +92,13 @@ step "format check" bunx oxfmt --threads=1 --check .
 # `String(unknown)` coercions around the one that mattered, `await-thenable`
 # is 347 `await expect(...)` in tests, and `require-array-sort-compare` found
 # nothing it could tell apart from a string sort.
+#
+# `switch-exhaustiveness-check` was tried after a `dependent:` option fell
+# past a pair of `if`s and nullified rows it had been asked to delete. It
+# reports 21 switches and every one is the same deliberate idiom: `default`
+# is the remaining adapter, or the remaining column type, and each says so
+# in a comment beside it. Enabling it would rewrite 21 correct switches to
+# catch a union member nobody has added yet.
 step "typecheck (type-aware lint)" bunx oxlint --type-aware --deny-warnings
 
 OUT=$(bun test 2>&1)
