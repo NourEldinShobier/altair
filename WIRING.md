@@ -9,13 +9,13 @@ tell the difference.
 `bun run tools/unwired-modules.ts` asks the other question: for each module,
 does anything else in `src` use it? Inside a package that is read from the
 relative imports and is exact; across packages, where a caller reaches through
-the package index, it falls back to the name. As of this writing 127 of 336
-modules are used by nothing, and `--exports` finds 2179 more exports sitting
+the package index, it falls back to the name. As of this writing 126 of 336
+modules are used by nothing, and `--exports` finds 2167 more exports sitting
 unused inside modules that _are_ used.
 
 That last number is too big to read, and most of it is not a problem: an
 exported helper called all over its own file is public API, not a loose end.
-`--dead` drops those and keeps the 1027 that nothing uses at all, not even the
+`--dead` drops those and keeps the 1020 that nothing uses at all, not even the
 file that declares them. `model_naming.ts` is 25 of them in one module — a
 whole second answer to what a table is called, sitting beside the one `model.ts`
 actually uses.
@@ -181,6 +181,17 @@ an `introspect` and every file importing anything from it carries the string
 `"./introspect.js"`. And a name the other module declares for itself is
 discounted, because `relation.ts` has its own `WhereClause` interface and
 `arel.ts` exports one too.
+
+The import clause is read with `[^;"]*?` rather than `[\s\S]*?`, and that is
+not tidying. Lazy or not, `[\s\S]*?` let a match begin at an *earlier* import
+and run to this one's specifier, so the names captured belonged to the wrong
+statement: `job.ts` imports `InlineQueue` from `./worker.js` and the clause
+read for it was the tail of the `@altair/support` import above it. Every
+import with another one before it was attributed wrongly, which is nearly all
+of them. The cross-package name fallback covered for it well enough that the
+totals barely moved when it was fixed — which is the reason it went unseen,
+and the reason a number from this tool is worth spot-checking against `--why`
+before it is believed.
 
 \* One mode is left. A _method_ of the same name still reads as a call:
 `relation.ts` has a `toSql()` method and `arel.ts` exports a `toSql`, so
