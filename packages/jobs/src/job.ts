@@ -111,6 +111,19 @@ export interface JobPayload {
   /** Why the adapter refused, when it did. Rails' `enqueue_error`. */
   enqueueError?: EnqueueError;
   /**
+   * How many times each retry rule has caught something. Rails'
+   * `exception_executions`.
+   *
+   * One budget per rule rather than one for the job, which is the only reading
+   * of `retryOn(Timeout, { attempts: 3 })` that means what it says. Shared, the
+   * three tries written against `Timeout` are spent by whatever failed first,
+   * and the job gives up on the failure that would have come right.
+   *
+   * Absent on a job that has never failed, and on one whose failure matched no
+   * rule — there is no budget to name, so the total is what counts.
+   */
+  exceptionExecutions?: Record<string, number>;
+  /**
    * What a continuable job finished before it was interrupted.
    *
    * Absent on a job that has never been interrupted, which is nearly all of
@@ -162,6 +175,30 @@ export interface ErrorRule {
   matches: ErrorMatcher;
   /** Absent for a discard: there is nothing to wait for. */
   policy?: RetryPolicy;
+  /**
+   * Which budget this rule spends, carried in the payload between attempts.
+   *
+   * Named after the error rather than numbered by declaration order, so
+   * inserting a rule above another does not hand a running job the wrong
+   * count. Rails keys on the exception list for the same reason.
+   */
+  key: string;
+}
+
+/**
+ * A name for the budget a rule spends.
+ *
+ * A class matcher has one already. A predicate usually does not — an arrow
+ * function assigned to nothing is anonymous — so it falls back to its position,
+ * which is stable for as long as the rules are.
+ */
+function ruleKey(matches: ErrorMatcher, existing: readonly ErrorRule[]): string {
+  const name = matches.name !== "" ? matches.name : `rule${String(existing.length)}`;
+  const taken = existing.filter((rule) => rule.key === name || rule.key.startsWith(`${name}#`));
+
+  // Two rules named the same are a mistake, but a silent shared budget is a
+  // worse one than a rule that is hard to read about in a log line.
+  return taken.length === 0 ? name : `${name}#${String(taken.length + 1)}`;
 }
 
 /**
@@ -376,8 +413,11 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
   ): void {
     const wait = options.wait ?? DEFAULT_RETRY.backoff;
 
-    rulesFor(this).push({
+    const rules = rulesFor(this);
+
+    rules.push({
       matches,
+      key: ruleKey(matches, rules),
       policy: {
         attempts: options.attempts ?? DEFAULT_RETRY.attempts,
         backoff: typeof wait === "function" ? wait : () => wait,
@@ -394,7 +434,9 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
    * tracker with work that was never going to succeed.
    */
   static discardOn(matches: ErrorMatcher): void {
-    rulesFor(this).push({ matches });
+    const rules = rulesFor(this);
+
+    rules.push({ matches, key: ruleKey(matches, rules) });
   }
 
   /**
@@ -404,11 +446,22 @@ export class Job<Args extends unknown[] = unknown[]> extends Callbacks {
    * behaviour every job had before rules existed.
    */
   static policyFor(error: unknown): RetryPolicy | null {
+    return this.ruleFor(error).policy;
+  }
+
+  /**
+   * What to do about this failure, and which budget it comes out of.
+   *
+   * A `key` of undefined means no rule matched and the class default applies,
+   * so there is nothing to keep a separate count for and the job's own total
+   * is the count.
+   */
+  static ruleFor(error: unknown): { policy: RetryPolicy | null; key?: string } {
     const rule = this.errorRules.find((candidate) => matchesError(candidate.matches, error));
 
-    if (rule) return rule.policy ?? null;
+    if (rule) return { policy: rule.policy ?? null, key: rule.key };
 
-    return this.retryPolicy ?? DEFAULT_RETRY;
+    return { policy: this.retryPolicy ?? DEFAULT_RETRY };
   }
 
   /** Runs the job now, in this process. Rails' `perform_now`. */
