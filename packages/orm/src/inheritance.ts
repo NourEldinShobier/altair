@@ -198,13 +198,25 @@ export const DEPENDENT_OPTIONS: readonly DependentOption[] = [
 export function validDependentOptions(
   macro: "belongsTo" | "hasOne" | "hasMany",
 ): readonly DependentOption[] {
+  // Narrower than `DEPENDENT_OPTIONS`, and the gap is the point. That set is
+  // what Rails has; this is what the destroy path here can actually do, which
+  // is the only list worth validating against. Accepting an option nothing
+  // acts on is the failure this function exists to prevent, and it used to
+  // commit it: `delete_all` passed the check and then nullified.
+  //
+  // `destroy_async` needs a job to enqueue and the ORM has no job to reach
+  // for, so it is refused where it is written rather than accepted and
+  // quietly turned into something else. `belongsTo` takes nothing because
+  // `handleDependents` skips it outright — destroying a parent from a child
+  // is a feature this does not have yet, and saying so at the declaration is
+  // better than saying nothing at the destroy.
   switch (macro) {
     case "belongsTo":
-      return ["destroy", "destroy_async", "delete"];
+      return [];
     case "hasOne":
-      return ["destroy", "destroy_async", "delete", "nullify", "restrict"];
+      return ["destroy", "delete", "nullify", "restrict"];
     case "hasMany":
-      return ["destroy", "destroy_async", "delete_all", "nullify", "restrict"];
+      return ["destroy", "delete_all", "nullify", "restrict"];
   }
 }
 

@@ -84,7 +84,7 @@ export interface AssociationOptions {
    * nothing will ever delete, and a foreign key constraint will refuse the
    * delete outright.
    */
-  dependent?: "destroy" | "nullify" | "restrict";
+  dependent?: "destroy" | "delete" | "delete_all" | "nullify" | "restrict";
 
   /**
    * The polymorphic association on the other side. Rails' `has_many :comments,

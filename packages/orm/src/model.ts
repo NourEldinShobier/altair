@@ -23,6 +23,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { didYouMean, secureToken } from "@altair/support";
 import { errors } from "@altair/support";
 import { lookupType, typeNames, typeRegistered, type Type, type TypeOptions } from "./types.js";
+import { checkDependentOptions, destroyAssociations, type DependentOption } from "./inheritance.js";
 import {
   composite,
   expectsMultipleIds,
@@ -2892,6 +2893,15 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     static defineAssociation(definition: AssociationDefinition): void {
+      // Checked here, which is the one place every association goes through.
+      // `association_builder.ts` has called this since it was written and
+      // nothing calls `association_builder.ts`, so no declaration was ever
+      // checked: `dependent: "delete_all"` was accepted and then nullified,
+      // which is the exact thing the check exists to refuse.
+      if (definition.dependent !== undefined) {
+        checkDependentOptions(definition.dependent, definition.kind);
+      }
+
       // Copy on write, so declaring on a subclass leaves the parent alone —
       // the same rule the callback chains follow.
       if (!Object.hasOwn(this, "associations")) {
@@ -5045,19 +5055,53 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     protected async handleDependents(): Promise<void> {
       const klass = this.constructor as typeof BaseModel;
 
-      for (const definition of Object.values(klass.associations)) {
-        if (!definition.dependent || definition.kind === "belongsTo") continue;
+      const declared = Object.values(klass.associations).filter(
+        (definition) => definition.dependent && definition.kind !== "belongsTo",
+      );
 
-        const children = await relationFor(this as unknown as InstanceLike, definition);
+      const byName = new Map(declared.map((definition) => [definition.name, definition]));
 
-        if (definition.dependent === "restrict") {
+      const keyFor = (definition: (typeof declared)[number]): string =>
+        definition.as
+          ? `${definition.as}_id`
+          : (definition.foreignKey ?? defaultForeignKey(klass.name));
+
+      // Through `inheritance.ts`, which owns two things this used to do
+      // itself and got wrong. It maps an option to an action, so `delete_all`
+      // is a delete rather than falling past a pair of `if`s into the nullify
+      // at the bottom — three of the six options did that, and the children
+      // survived with a null key where the caller asked for them to be gone.
+      //
+      // And it puts every `restrict` first. Declared after a `destroy`, a
+      // refusal used to arrive with the other association's children already
+      // destroyed: the caller sees the exception, assumes nothing happened,
+      // and the rows are not coming back.
+      const ordered = destroyAssociations(
+        declared.map((definition) => ({
+          name: definition.name,
+          dependent: definition.dependent as DependentOption,
+          foreignKey: keyFor(definition),
+        })),
+      );
+
+      for (const { name, action } of ordered) {
+        const definition = byName.get(name);
+
+        if (!definition) continue;
+
+        if (action.action === "refuse") {
+          const children = await relationFor(this as unknown as InstanceLike, definition);
+
           if (children.length > 0) {
             throw new DeleteRestricted(klass.name, definition.name, children.length);
           }
+
           continue;
         }
 
-        if (definition.dependent === "destroy") {
+        if (action.action === "destroy") {
+          const children = await relationFor(this as unknown as InstanceLike, definition);
+
           // One at a time, because destroying is what runs the child's own
           // callbacks and its own dependents. A bulk delete would skip both.
           for (const child of children) await (child as unknown as BaseModel).destroy();
@@ -5065,13 +5109,17 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
         }
 
         const target = definition.target();
-        const foreignKey = definition.as
-          ? `${definition.as}_id`
-          : (definition.foreignKey ?? defaultForeignKey(klass.name));
+        const owned = target.where({ [keyFor(definition)]: this[ATTRIBUTES][klass.primaryKey] });
 
-        await target.where({ [foreignKey]: this[ATTRIBUTES][klass.primaryKey] }).updateAll({
-          [foreignKey]: null,
-        });
+        if (action.action === "delete") {
+          // In one statement, and without the children's callbacks. That is
+          // what `delete_all` asks for and also its hazard, which is why it
+          // is a separate option rather than a speed setting on `destroy`.
+          await owned.deleteAll();
+          continue;
+        }
+
+        await owned.updateAll({ [keyFor(definition)]: null });
       }
     }
 
