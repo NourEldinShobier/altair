@@ -183,7 +183,7 @@ discounted, because `relation.ts` has its own `WhereClause` interface and
 `arel.ts` exports one too.
 
 The import clause is read with `[^;"]*?` rather than `[\s\S]*?`, and that is
-not tidying. Lazy or not, `[\s\S]*?` let a match begin at an *earlier* import
+not tidying. Lazy or not, `[\s\S]*?` let a match begin at an _earlier_ import
 and run to this one's specifier, so the names captured belonged to the wrong
 statement: `job.ts` imports `InlineQueue` from `./worker.js` and the clause
 read for it was the tail of the `@altair/support` import above it. Every
