@@ -65,7 +65,18 @@ import {
   originalAttributeName,
   type EncryptedAttributeOptions,
 } from "./encryption.js";
-import { checkWritable, currentScope, database, hasDatabases, type Role } from "./databases.js";
+import {
+  DEFAULT_SHARD,
+  PRIMARY,
+  checkWritable,
+  currentScope,
+  database,
+  hasDatabases,
+  redactUrl,
+  resolveDatabaseConfig,
+  type ResolvedDatabaseConfig,
+  type Role,
+} from "./databases.js";
 import {
   defineEnum,
   labelFor,
@@ -1588,13 +1599,64 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       this.databaseName = options.database;
     }
 
+    /**
+     * Where this class's connection actually points. Rails' `connection_db_config`.
+     *
+     * The first question asked during an incident, and until now the only way
+     * to answer it was to read the code and hope: with a replica, shards, and
+     * a `connectedTo` block somewhere up the call stack, "which database is
+     * this model reading from *right now*" is not something the class can be
+     * inspected for.
+     *
+     * Resolved through the same path `connection` takes, so the answer and the
+     * connection cannot disagree. Read the moment it is called, because the
+     * role in force is a property of the request rather than of the class.
+     *
+     * The URL comes back with its password replaced. This value belongs in a
+     * health endpoint, a log line and an error page, and a password must not
+     * be in any of the three.
+     */
+    static connectionDbConfig(): ResolvedDatabaseConfig {
+      const scoped = currentScope();
+      const role = scoped?.role ?? ("writing" as Role);
+
+      if (this.databaseName && hasDatabases()) {
+        return resolveDatabaseConfig(this.databaseName, role, scoped?.shard ?? DEFAULT_SHARD);
+      }
+
+      // A connection handed over directly — `setConnection`, or a test — has no
+      // configured name to report, so it describes itself instead.
+      const connection = this.connection;
+
+      return {
+        name: PRIMARY,
+        role,
+        shard: scoped?.shard ?? DEFAULT_SHARD,
+        adapter: connection.adapter,
+        url: redactUrl(connection.url),
+      };
+    }
+
     static get connection(): Connection {
       if (this.connectionOverride) return this.connectionOverride;
 
-      // A model pinned to a named database still follows the role in force, so
-      // a `connected_to({ role: "reading" })` block reaches its replica too.
+      // A model pinned to a named database still follows the role *and the
+      // shard* in force, so a `connectedTo({ role: "reading" })` block reaches
+      // its replica and a `connectedTo({ shard: "eu" })` block reaches EU.
+      //
+      // The shard was missing here, and it did not fail loudly: the call fell
+      // through to the default shard, so a model pinned to a database wrote to
+      // the unsharded server while every unpinned model in the same block
+      // wrote to the shard. Rows land in the wrong database and nothing says
+      // so until somebody goes looking for a customer who is not there.
       if (this.databaseName && hasDatabases()) {
-        return database(this.databaseName, currentScope()?.role ?? ("writing" as Role));
+        const scoped = currentScope();
+
+        return database(
+          this.databaseName,
+          scoped?.role ?? ("writing" as Role),
+          scoped?.shard ?? DEFAULT_SHARD,
+        );
       }
 
       return defaultConnection();
@@ -6021,6 +6083,7 @@ export interface ModelClass<A extends object> {
   generateUniqueSecureToken(length?: number): string;
   attrReadonly(...names: string[]): void;
   readonlyAttributes: string[];
+  connectionDbConfig(): ResolvedDatabaseConfig;
   ignoreColumns(...names: string[]): void;
   ignoredColumns: string[];
   onlyColumns(...names: string[]): void;
