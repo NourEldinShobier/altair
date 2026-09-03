@@ -9,7 +9,14 @@
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, Model, SchemaStatements, setConnection } from "@altair/orm";
-import { Job, MemoryQueue, type JobPayload, type QueueAdapter } from "../src/index.js";
+import { errors } from "@altair/support";
+import {
+  EnqueueError,
+  Job,
+  MemoryQueue,
+  type JobPayload,
+  type QueueAdapter,
+} from "../src/index.js";
 
 interface OrderRow {
   id: number;
@@ -95,6 +102,54 @@ describe("inside a transaction that commits", () => {
     });
 
     expect(queue.pending("urgent")[0]?.arguments).toEqual([1]);
+  });
+});
+
+describe("a refusal after the commit", () => {
+  /**
+   * The caller returned when the transaction was still open, so there is
+   * nobody left to read `enqueueError` off the payload. A refusal that only
+   * set a field here would be a job that vanished silently — which is exactly
+   * what `EnqueueError` exists to stop the adapter from doing.
+   */
+  it("is reported, because nobody is left to be told", async () => {
+    const seen: unknown[] = [];
+    const subscription = errors.subscribe((error) => seen.push(error));
+    const refusal = new EnqueueError("the queue is full");
+
+    Job.adapter = {
+      async enqueue() {
+        throw refusal;
+      },
+      async dequeue() {
+        return null;
+      },
+    } as unknown as QueueAdapter;
+
+    try {
+      await connection.transaction(async () => {
+        await ChargeCard.performLater(1);
+      });
+    } finally {
+      subscription.unsubscribe();
+    }
+
+    expect(seen).toEqual([refusal]);
+  });
+
+  it("does not report one the adapter took", async () => {
+    const seen: unknown[] = [];
+    const subscription = errors.subscribe((error) => seen.push(error));
+
+    try {
+      await connection.transaction(async () => {
+        await ChargeCard.performLater(1);
+      });
+    } finally {
+      subscription.unsubscribe();
+    }
+
+    expect(seen).toEqual([]);
   });
 });
 
