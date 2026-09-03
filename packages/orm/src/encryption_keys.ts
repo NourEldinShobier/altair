@@ -20,6 +20,7 @@
  * straight to the right key, and a wrong id is refused rather than guessed at.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { KeyGenerator } from "@altair/support";
 
@@ -158,62 +159,82 @@ export interface EncryptionContext {
   encrypting: boolean;
 }
 
-let context: EncryptionContext | undefined;
+/**
+ * The settings a boot puts in place, and the block that is overriding them.
+ *
+ * Two, not one, because they answer different questions. `setKeyProvider` is
+ * configuration and belongs to the process; `withEncryptionContext` is a block
+ * and belongs to the work inside it.
+ *
+ * A module-level variable served both and got the second one wrong twice. One
+ * request's `withoutEncryption` turned encryption off for every request
+ * running beside it — the setting the block's own comment calls "exactly the
+ * one you would least like to leave on by accident". And a body that returned
+ * a promise had its context restored the moment the promise was *created*, so
+ * `withoutEncryption(() => record.save())` restored before the save decided
+ * anything and the block silently did nothing.
+ *
+ * `AsyncLocalStorage` answers both: the store follows the work rather than the
+ * clock, and it follows it across an await.
+ */
+let base: EncryptionContext | undefined;
+const overlay = new AsyncLocalStorage<EncryptionContext>();
+
+/** The settings in force here: a block's if there is one, the process's if not. */
+function current(): EncryptionContext | undefined {
+  return overlay.getStore() ?? base;
+}
 
 export function setKeyProvider(provider: KeyProvider): void {
-  context = {
+  base = {
     keyProvider: provider,
-    supportUnencryptedData: context?.supportUnencryptedData ?? false,
+    supportUnencryptedData: base?.supportUnencryptedData ?? false,
     encrypting: true,
   };
 }
 
 /** The provider in force. Rails' `key_provider`. */
 export function keyProvider(): KeyProvider {
-  if (!context) {
+  const settings = current();
+
+  if (!settings) {
     throw new Error(
       "No encryption keys configured. Call setKeyProvider(derivedKeyProvider([secret])) first.",
     );
   }
 
-  return context.keyProvider;
+  return settings.keyProvider;
 }
 
 export function encryptionContext(): EncryptionContext {
-  if (!context) throw new Error("No encryption context. Call setKeyProvider first.");
+  const settings = current();
 
-  return { ...context };
+  if (!settings) throw new Error("No encryption context. Call setKeyProvider first.");
+
+  return { ...settings };
 }
 
 export function resetEncryptionKeys(): void {
-  context = undefined;
+  base = undefined;
 }
 
 export function supportUnencryptedData(): boolean {
-  return context?.supportUnencryptedData ?? false;
+  return current()?.supportUnencryptedData ?? false;
 }
 
 export function setSupportUnencryptedData(enabled: boolean): void {
-  if (context) context.supportUnencryptedData = enabled;
+  if (base) base.supportUnencryptedData = enabled;
 }
 
 /**
  * Runs something under different settings. Rails' `with_encryption_context`.
  *
- * Restored in a `finally`, because the alternative is that one throwing block
- * leaves the process reading plaintext — which is exactly the setting you
- * would least like to leave on by accident.
+ * Scoped rather than saved and restored. There is nothing to leave behind:
+ * the settings end when the work does, whether the body returns, throws, or
+ * hands back a promise that is still running.
  */
 export function withEncryptionContext<T>(changes: Partial<EncryptionContext>, body: () => T): T {
-  const previous = context;
-
-  context = { ...encryptionContext(), ...changes };
-
-  try {
-    return body();
-  } finally {
-    context = previous;
-  }
+  return overlay.run({ ...encryptionContext(), ...changes }, body);
 }
 
 /**

@@ -28,6 +28,8 @@
  * most casual thing anybody does with one.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { StaleObjectError } from "./model.js";
 import type { LockMode } from "./relation.js";
 
@@ -96,7 +98,9 @@ export function checkLockedUpdate(
   if (affectedRows === 0) throw new StaleObjectError(modelName, id, action);
 }
 
+/** The process-wide setting, and the block that is overriding it. */
 let preserveLockVersion = false;
+const preserving = new AsyncLocalStorage<boolean>();
 
 /**
  * Rails' `preserve_lock_version_on_touch`.
@@ -107,26 +111,25 @@ let preserveLockVersion = false;
  * parent while somebody has that parent's form open.
  */
 export function preserveLockVersionOnTouch(): boolean {
-  return preserveLockVersion;
+  return preserving.getStore() ?? preserveLockVersion;
 }
 
 export function setPreserveLockVersionOnTouch(preserve: boolean): void {
   preserveLockVersion = preserve;
 }
 
-/** Runs a body with the version preserved across touches, then restores. */
+/**
+ * Runs a body with the version preserved across touches.
+ *
+ * Scoped rather than saved and restored. Holding it in a module-level variable
+ * made one caller's block the setting for every request running beside it —
+ * and what it turns off is conflict detection, so a concurrent save that
+ * should have failed as stale would have succeeded and overwritten somebody's
+ * edit. Leaving the scope also restores what surrounded it, so nesting works
+ * and a body that throws leaves nothing behind.
+ */
 export async function preservingLockVersionOnTouch<T>(body: () => Promise<T> | T): Promise<T> {
-  const held = preserveLockVersion;
-  preserveLockVersion = true;
-
-  try {
-    return await body();
-  } finally {
-    // Restored rather than cleared: nested calls are ordinary, and leaving it
-    // on turns every later save in the process into one that cannot detect a
-    // conflict.
-    preserveLockVersion = held;
-  }
+  return await preserving.run(true, async () => await body());
 }
 
 // --- pessimistic locking -----------------------------------------------------------

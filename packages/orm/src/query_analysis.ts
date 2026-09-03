@@ -21,6 +21,8 @@
  * correctness in all three places at once.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /** Statements that only read. Everything else is treated as a write. */
 const READ_STATEMENTS = ["SELECT", "WITH", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "PRAGMA"];
 
@@ -96,7 +98,17 @@ export function cacheableStatement(sql: string): boolean {
 // --- the cache itself -------------------------------------------------------
 
 let cacheEnabled = false;
-let skipDepth = 0;
+
+/**
+ * Whether the current work is inside `uncached`.
+ *
+ * Scoped, because `uncached` is a block and a module-level counter made it one
+ * request's decision for every request running beside it. Only performance is
+ * at stake here — the wrong answer is a query that was not cached — but it is
+ * the same shape as the two in `connection_switching.ts` that were not only
+ * performance.
+ */
+const skipping = new AsyncLocalStorage<boolean>();
 
 /** Rails' `enable_query_cache!`. */
 export function enableQueryCache(): void {
@@ -109,24 +121,18 @@ export function disableQueryCache(): void {
 }
 
 export function queryCacheEnabled(): boolean {
-  return cacheEnabled && skipDepth === 0;
+  return cacheEnabled && skipping.getStore() !== true;
 }
 
 /**
  * Rails' `uncached` — runs a body with the cache off.
  *
- * Counted, so nesting works, and restored in a `finally`: a body that throws
- * must not leave the cache off for the rest of the request, which would turn
- * one error into a silent performance regression nobody connects to it.
+ * Scoped, so nesting works and there is nothing to restore: a body that throws
+ * cannot leave the cache off for the rest of the request, which would turn one
+ * error into a silent performance regression nobody connects to it.
  */
 export async function uncached<T>(body: () => Promise<T> | T): Promise<T> {
-  skipDepth += 1;
-
-  try {
-    return await body();
-  } finally {
-    skipDepth -= 1;
-  }
+  return await skipping.run(true, async () => await body());
 }
 
 /** Rails' `skip_query_cache!` for a single statement. */
@@ -160,7 +166,7 @@ export function cachedEntry(key: string): unknown {
 export function resetQueryCache(): void {
   entries.clear();
   cacheEnabled = false;
-  skipDepth = 0;
+  // Nothing for `uncached` to reset: its scope ends when its body does.
 }
 
 // --- annotating a statement -------------------------------------------------
@@ -223,33 +229,34 @@ export function buildExplainClause(
   return adapter === "mysql" ? `EXPLAIN ANALYZE ${sql}` : `EXPLAIN (ANALYZE, BUFFERS) ${sql}`;
 }
 
-/** Statements collected while a block runs, for one combined explain. */
-const collected: string[] = [];
-let collecting = false;
+/**
+ * Statements collected while a block runs, for one combined explain.
+ *
+ * The list is per-block, not per-process. Shared, it collected every
+ * concurrent request's statements and handed them back as the queries this
+ * block ran — an explain of somebody else's work, in an output whose whole
+ * purpose is to say what *this* code did.
+ */
+const collecting = new AsyncLocalStorage<string[]>();
 
 /** Rails' `collecting_queries_for_explain`. */
 export async function collectingQueriesForExplain<T>(
   body: () => Promise<T> | T,
 ): Promise<{ result: T; queries: string[] }> {
-  const held = collecting;
-  const heldQueries = collected.splice(0, collected.length);
-  collecting = true;
+  const collected: string[] = [];
 
-  try {
-    const result = await body();
+  const result = await collecting.run(collected, async () => await body());
 
-    return { result, queries: [...collected] };
-  } finally {
-    collecting = held;
-    collected.splice(0, collected.length, ...heldQueries);
-  }
+  return { result, queries: [...collected] };
 }
 
 /** Records a statement, if anything is collecting. */
 export function recordForExplain(sql: string): void {
   // Reads only. A write cannot be explained, so collecting one would produce a
   // list whose entries cannot all be used.
-  if (collecting && !writeQuery(sql)) collected.push(sql);
+  if (writeQuery(sql)) return;
+
+  collecting.getStore()?.push(sql);
 }
 
 /** Rails' `exec_explain` — the explains for everything collected. */
