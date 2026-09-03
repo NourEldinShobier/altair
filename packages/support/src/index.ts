@@ -26,6 +26,7 @@ export * from "./formats.js";
 export * from "./assertion.js";
 export * from "./backtrace_cleaner.js";
 export * from "./hash.js";
+export * from "./with_options.js";
 export * from "./strings.js";
 export * from "./objects.js";
 export * from "./deprecation.js";
