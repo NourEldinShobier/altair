@@ -69,6 +69,7 @@ what runs and the other is what gets maintained.
 | `orm/inheritance.ts`                                        | STI and touch inside `model.ts`                                     |
 | `orm/connection_leasing.ts`                                 | `capabilities.ts` for the `supports*` half                          |
 | `controller/security_headers.ts`                            | `csrf.ts`, `csp.ts`, `forceSsl()` in `middleware.ts`                |
+| `orm/query_analysis.ts`'s cache half                        | `query_cache.ts`, which `Connection.query` consults                 |
 
 None of these is wrong. Each was ported against its Rails counterpart and each
 has its own tests. The question they raise is which one should survive, and
@@ -86,6 +87,13 @@ The dangerous shape is the module that looks like a duplicate and is a missing
 piece. `composite_key.ts` read as a rival to `model.ts`'s `queryConstraints`
 and was the half `find` needed; the two disagreed for as long as nobody
 checked.
+
+The other dangerous shape is a live function pointing into a dead duplicate.
+`query_analysis.ts` holds a second query cache that nothing calls, and Rails'
+`uncached` gated _that_ one — so `uncached` did nothing, and reads inside the
+block were answered from the cache the caller had asked to bypass. Both caches
+were fine on their own. Only the wire between them was wrong, and a test on
+either module alone could not see it: the flag `uncached` flipped was real.
 
 ## Joined up since
 

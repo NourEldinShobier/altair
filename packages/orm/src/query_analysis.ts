@@ -22,6 +22,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { withoutQueryCache } from "./query_cache.js";
 
 /** Statements that only read. Everything else is treated as a write. */
 const READ_STATEMENTS = ["SELECT", "WITH", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "PRAGMA"];
@@ -125,14 +126,39 @@ export function queryCacheEnabled(): boolean {
 }
 
 /**
+ * The scope `uncached` used to open, kept for `skipQueryCache` below.
+ *
+ * Both belong to this file's own cache, which nothing calls. They are left
+ * here rather than deleted because which of the two caches survives is a
+ * decision, not a bug — the bug was `uncached` pointing at the wrong one.
+ * `WIRING.md` carries the pair.
+ */
+export async function skippingThisFilesCache<T>(body: () => Promise<T> | T): Promise<T> {
+  return await skipping.run(true, async () => await body());
+}
+
+/**
  * Rails' `uncached` — runs a body with the cache off.
+ *
+ * The cache it turns off is `query_cache.ts`'s, which is the one
+ * `Connection.query` consults and the one every request runs inside. This file
+ * holds a second, older cache that nothing calls, and `uncached` used to gate
+ * that one: a caller reaching for Rails' name got a function that did nothing,
+ * and reads inside the block were answered from the cache they had explicitly
+ * asked to bypass. Measured at zero statements executed inside an `uncached`
+ * block where two were expected.
+ *
+ * That is the worst direction for this particular function. It is called for a
+ * read that must be fresh — polling for a job to finish, re-reading a row
+ * something outside the process just wrote — so a stale answer is precisely
+ * what it was called to prevent.
  *
  * Scoped, so nesting works and there is nothing to restore: a body that throws
  * cannot leave the cache off for the rest of the request, which would turn one
  * error into a silent performance regression nobody connects to it.
  */
 export async function uncached<T>(body: () => Promise<T> | T): Promise<T> {
-  return await skipping.run(true, async () => await body());
+  return await withoutQueryCache(async () => await body());
 }
 
 /** Rails' `skip_query_cache!` for a single statement. */
