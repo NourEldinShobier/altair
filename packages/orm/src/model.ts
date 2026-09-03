@@ -2704,6 +2704,14 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     static ignoreColumns(...names: string[]): void {
+      if (this.allowedColumns.length > 0) {
+        throw new Error(
+          "You can not use both onlyColumns and ignoreColumns in the same model. " +
+            "An allow-list already answers what a deny-list answers, and the two " +
+            "disagree about every column neither of them names.",
+        );
+      }
+
       if (!Object.hasOwn(this, "ignoredColumns")) this.ignoredColumns = [...this.ignoredColumns];
 
       this.ignoredColumns.push(...names);
@@ -2711,6 +2719,42 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
     }
 
     static ignoredColumns: string[] = [];
+
+    /**
+     * The only columns this class will read or write. Rails' `only_columns`.
+     *
+     * The complement of `ignoreColumns`, and not the same tool pointed the
+     * other way. `ignoreColumns` is for a column on its way out: it is named
+     * once, dropped, and the list goes back to empty. An allow-list is for a
+     * table that is not going to change — the wide one another system owns,
+     * where this model is interested in six of its forty columns and the other
+     * thirty-four are somebody else's to add to.
+     *
+     * The difference that matters is what happens to a column nobody
+     * mentioned. Under `ignoreColumns` it arrives, gets an accessor, and joins
+     * every `SELECT`; under this it does not exist, which is the only one of
+     * the two that keeps holding once the other system ships a migration.
+     *
+     * The primary key is not exempt. Rails does not exempt it either, and a
+     * model that cannot select its own key cannot be found or updated — so
+     * name it, along with anything else the class needs.
+     */
+    static onlyColumns(...names: string[]): void {
+      if (this.ignoredColumns.length > 0) {
+        throw new Error(
+          "You can not use both onlyColumns and ignoreColumns in the same model. " +
+            "An allow-list already answers what a deny-list answers, and the two " +
+            "disagree about every column neither of them names.",
+        );
+      }
+
+      if (!Object.hasOwn(this, "allowedColumns")) this.allowedColumns = [...this.allowedColumns];
+
+      this.allowedColumns.push(...names);
+      this.resetColumnInformation();
+    }
+
+    static allowedColumns: string[] = [];
 
     /** The name a person sees. Rails' `model_name.human`. */
     static humanName(): string {
@@ -5267,9 +5311,16 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // What makes dropping a column safe: named here, the running
       // application stops selecting it, and only then does the migration
       // remove it. Without the gap the deploy and the migration race.
-      this.columnCache = this.ignoredColumns.length
-        ? columns.filter((column) => !this.ignoredColumns.includes(column))
-        : columns;
+      if (this.allowedColumns.length > 0) {
+        // An allow-list keeps the table's own order rather than the order the
+        // names were given in, so a column's position does not depend on how
+        // somebody happened to type the list.
+        this.columnCache = columns.filter((column) => this.allowedColumns.includes(column));
+      } else if (this.ignoredColumns.length > 0) {
+        this.columnCache = columns.filter((column) => !this.ignoredColumns.includes(column));
+      } else {
+        this.columnCache = columns;
+      }
 
       return this.columnCache;
     }
@@ -5972,6 +6023,8 @@ export interface ModelClass<A extends object> {
   readonlyAttributes: string[];
   ignoreColumns(...names: string[]): void;
   ignoredColumns: string[];
+  onlyColumns(...names: string[]): void;
+  allowedColumns: string[];
   humanName(): string;
   readonly baseClass: unknown;
   readonly i18nScope: string;
