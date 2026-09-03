@@ -42,8 +42,7 @@ afterEach(async () => {
 const modelWith = (declare: (klass: ReturnType<typeof subject>) => void) => {
   const Post = subject();
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
   declare(Post);
 
   return Post;
@@ -201,8 +200,7 @@ describe("a cache key and its version", () => {
       t.timestamps();
     });
 
-    Article.columnCache = undefined;
-    Article.columnTypeCache = undefined;
+    Article.resetColumnInformation();
   });
 
   it("has a version that moves when the record does", async () => {

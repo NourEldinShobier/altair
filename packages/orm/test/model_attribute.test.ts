@@ -30,8 +30,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Product.columnCache = undefined;
-  Product.columnTypeCache = undefined;
+  Product.resetColumnInformation();
   Product.declaredAttributes = {};
 
   await new SchemaStatements(connection).createTable("products", (t) => {

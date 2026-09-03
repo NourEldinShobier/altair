@@ -52,10 +52,8 @@ beforeEach(async () => {
     analytics: "sqlite://:memory:",
   });
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
-  Event.columnCache = undefined;
-  Event.columnTypeCache = undefined;
+  Post.resetColumnInformation();
+  Event.resetColumnInformation();
 
   await createPosts("primary");
   await createPosts("analytics");
@@ -311,8 +309,7 @@ describe("shards", () => {
 
   beforeEach(async () => {
     configureDatabases(shardedConfig);
-    Post.columnCache = undefined;
-    Post.columnTypeCache = undefined;
+    Post.resetColumnInformation();
 
     for (const shard of shardNames("primary")) {
       await new SchemaStatements(database("primary", "writing", shard)).createTable("posts", (t) =>

@@ -57,8 +57,7 @@ beforeEach(async () => {
   setConnection(connection);
   configureTokens("s".repeat(64));
 
-  User.columnCache = undefined;
-  User.columnTypeCache = undefined;
+  User.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
   await schema.dropTable("users", { ifExists: true });

@@ -59,8 +59,7 @@ function customerClass() {
   class Customer extends Model<CustomerRow>("customers") {
     declare address: Address | null;
   }
-  Customer.columnCache = undefined;
-  Customer.columnTypeCache = undefined;
+  Customer.resetColumnInformation();
   return Customer;
 }
 

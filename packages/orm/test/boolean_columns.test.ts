@@ -36,8 +36,7 @@ beforeEach(async () => {
     t.boolean("active");
   });
 
-  Flag.columnCache = undefined;
-  Flag.columnTypeCache = undefined;
+  Flag.resetColumnInformation();
 });
 
 afterEach(async () => {

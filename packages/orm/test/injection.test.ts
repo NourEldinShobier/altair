@@ -44,8 +44,7 @@ const PAYLOADS = [
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
   await schema.dropTable("posts", { ifExists: true });

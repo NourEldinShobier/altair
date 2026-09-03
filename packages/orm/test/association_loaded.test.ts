@@ -36,8 +36,7 @@ beforeEach(async () => {
   });
 
   for (const model of [Post, Comment]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   const post = await Post.create({ title: "A" });
@@ -159,8 +158,7 @@ describe("whether the last save was the one that created it", () => {
         });
       }
     }
-    Tracked.columnCache = undefined;
-    Tracked.columnTypeCache = undefined;
+    Tracked.resetColumnInformation();
 
     const record = await Tracked.create({ title: "One" });
     record.title = "Two";

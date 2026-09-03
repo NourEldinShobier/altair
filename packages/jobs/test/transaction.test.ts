@@ -35,8 +35,7 @@ beforeEach(async () => {
 
   connection = new Connection("sqlite://:memory:");
   setConnection(connection);
-  Order.columnCache = undefined;
-  Order.columnTypeCache = undefined;
+  Order.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("orders", (t) => {
     t.string("reference");

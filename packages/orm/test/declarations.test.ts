@@ -36,8 +36,7 @@ beforeEach(async () => {
   setConnection(connection);
 
   for (const model of [Post, RawPost]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   const schema = new SchemaStatements(connection);
@@ -108,8 +107,7 @@ describe("what a default scope does to a write", () => {
       }
     }
 
-    Archived.columnCache = undefined;
-    Archived.columnTypeCache = undefined;
+    Archived.resetColumnInformation();
 
     const created = await Archived.create({ deleted_at: null });
 
@@ -127,8 +125,7 @@ describe("what a default scope does to a write", () => {
       }
     }
 
-    Archived.columnCache = undefined;
-    Archived.columnTypeCache = undefined;
+    Archived.resetColumnInformation();
 
     // Outside its own scope, and deliberately so: the caller said what they
     // wanted and a default is only a default.
@@ -176,8 +173,7 @@ describe("a secure token", () => {
       }
     }
 
-    Short.columnCache = undefined;
-    Short.columnTypeCache = undefined;
+    Short.resetColumnInformation();
 
     const post = await Short.create({ title: "a" });
 

@@ -49,8 +49,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Event.columnCache = undefined;
-  Event.columnTypeCache = undefined;
+  Event.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("events", (t) => {
     t.string("name");

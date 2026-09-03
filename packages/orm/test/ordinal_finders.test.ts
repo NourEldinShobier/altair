@@ -23,8 +23,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Topic.columnCache = undefined;
-  Topic.columnTypeCache = undefined;
+  Topic.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("topics", (t) => {
     t.string("title");

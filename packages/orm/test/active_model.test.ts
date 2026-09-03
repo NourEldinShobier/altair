@@ -397,8 +397,7 @@ describe("a database-backed model has the same API", () => {
   const setup = async () => {
     const connection = await testConnection();
     setConnection(connection);
-    Article.columnCache = undefined;
-    Article.columnTypeCache = undefined;
+    Article.resetColumnInformation();
 
     await new SchemaStatements(connection).createTable("articles", (t) => {
       t.string("title");
@@ -444,8 +443,7 @@ describe("a database-backed model has the same API", () => {
   it("gives a cache key that carries its version", async () => {
     const connection = await testConnection();
     setConnection(connection);
-    Stamped.columnCache = undefined;
-    Stamped.columnTypeCache = undefined;
+    Stamped.resetColumnInformation();
 
     await new SchemaStatements(connection).createTable("stampeds", (t) => {
       t.string("title");

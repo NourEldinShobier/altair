@@ -38,10 +38,8 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
-  Comment.columnCache = undefined;
-  Comment.columnTypeCache = undefined;
+  Post.resetColumnInformation();
+  Comment.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
 

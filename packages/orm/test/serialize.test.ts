@@ -35,8 +35,7 @@ let connection: Connection;
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
-  User.columnCache = undefined;
-  User.columnTypeCache = undefined;
+  User.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
   await schema.dropTable("users", { ifExists: true });

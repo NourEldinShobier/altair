@@ -39,8 +39,7 @@ beforeEach(async () => {
   setConnection(connection);
 
   for (const model of [Post, Draft]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   await new SchemaStatements(connection).createTable("posts", (t) => {
@@ -109,8 +108,7 @@ describe("writing", () => {
         this.defaultScope((posts) => posts.where("state != ?", "archived"));
       }
     }
-    Recent.columnCache = undefined;
-    Recent.columnTypeCache = undefined;
+    Recent.resetColumnInformation();
 
     expect((await Recent.create({ title: "D" })).state).toBeNull();
   });

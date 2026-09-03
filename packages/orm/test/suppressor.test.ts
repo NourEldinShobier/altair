@@ -38,8 +38,7 @@ afterEach(async () => {
 
 function postClass() {
   class Post extends Model<PostRow>("posts") {}
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
   return Post;
 }
 
@@ -116,8 +115,7 @@ describe("suppress", () => {
     const Post = postClass();
 
     class Other extends Model<PostRow>("posts") {}
-    Other.columnCache = undefined;
-    Other.columnTypeCache = undefined;
+    Other.resetColumnInformation();
 
     await Post.suppress(async () => {
       await Other.build({ title: "a" }).save();

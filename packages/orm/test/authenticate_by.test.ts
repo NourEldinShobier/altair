@@ -46,8 +46,7 @@ beforeEach(async () => {
     t.boolean("active");
   });
 
-  User.columnCache = undefined;
-  User.columnTypeCache = undefined;
+  User.resetColumnInformation();
 
   const user = new User({ email: "martin@example.com", active: true });
   user.password = "correct horse battery staple";

@@ -25,8 +25,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
   Post.attributeAliases = {};
   Post.attributesForInspect = [];
   Post.enums = {};

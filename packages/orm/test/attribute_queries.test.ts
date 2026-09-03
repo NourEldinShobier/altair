@@ -30,8 +30,7 @@ beforeEach(async () => {
     t.boolean("published");
   });
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
 });
 
 afterEach(async () => {

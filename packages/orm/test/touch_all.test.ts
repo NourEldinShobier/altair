@@ -37,8 +37,7 @@ beforeEach(async () => {
     t.timestamps();
   });
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
 
   await Post.create({ title: "A" });
   await Post.create({ title: "B" });

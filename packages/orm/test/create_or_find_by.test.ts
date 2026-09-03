@@ -35,8 +35,7 @@ beforeEach(async () => {
   // catch and this is `create` with extra steps.
   await schema.addIndex("tags", ["name"], { unique: true });
 
-  Tag.columnCache = undefined;
-  Tag.columnTypeCache = undefined;
+  Tag.resetColumnInformation();
 });
 
 afterEach(async () => {

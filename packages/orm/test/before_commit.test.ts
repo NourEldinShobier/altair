@@ -34,8 +34,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Account.columnCache = undefined;
-  Account.columnTypeCache = undefined;
+  Account.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("accounts", (t) => {
     t.string("name");

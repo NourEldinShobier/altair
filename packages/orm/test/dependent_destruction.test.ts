@@ -74,8 +74,7 @@ beforeEach(async () => {
   setConnection(connection);
 
   for (const model of [Post, Comment, Lock]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   Post.associations = {};

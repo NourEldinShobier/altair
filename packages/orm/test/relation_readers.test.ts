@@ -49,8 +49,7 @@ const countingQueries = async <T>(body: () => Promise<T>): Promise<[T, number]> 
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
   destroyed = [];
 
   const schema = new SchemaStatements(connection);

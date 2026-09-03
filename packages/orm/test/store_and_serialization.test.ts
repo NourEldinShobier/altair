@@ -47,8 +47,7 @@ function userClass() {
     declare theme: string | undefined;
     declare locale: string | undefined;
   }
-  User.columnCache = undefined;
-  User.columnTypeCache = undefined;
+  User.resetColumnInformation();
   User.serialize("settings");
   User.serialize("preferences");
   return User;

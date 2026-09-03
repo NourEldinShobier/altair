@@ -116,8 +116,7 @@ describe("what it replaces", () => {
   beforeEach(async () => {
     const connection = new Connection("sqlite://:memory:");
     setConnection(connection);
-    Post.columnCache = undefined;
-    Post.columnTypeCache = undefined;
+    Post.resetColumnInformation();
 
     await new SchemaStatements(connection).createTable("posts", (t) => {
       t.string("title");

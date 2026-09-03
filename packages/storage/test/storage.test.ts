@@ -45,8 +45,7 @@ beforeEach(async () => {
 
   connection = await storageConnection();
   setConnection(connection);
-  StorageBlob.columnCache = undefined;
-  StorageBlob.columnTypeCache = undefined;
+  StorageBlob.resetColumnInformation();
 
   await createStorageTables(new SchemaStatements(connection));
 });

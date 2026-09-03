@@ -278,8 +278,7 @@ describe("the types the validators record", () => {
 
   function model() {
     class Entry extends Model<EntryRow>("entries") {}
-    Entry.columnCache = undefined;
-    Entry.columnTypeCache = undefined;
+    Entry.resetColumnInformation();
     return Entry;
   }
 

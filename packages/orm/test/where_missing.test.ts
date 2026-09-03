@@ -34,8 +34,7 @@ beforeEach(async () => {
   });
 
   for (const model of [Post, Comment]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   const discussed = await Post.create({ title: "Discussed" });
