@@ -236,6 +236,31 @@ export function setViewPaths(
   list.push(...(first as readonly TemplateResolver[]));
 }
 
+/**
+ * Adds to a class's own paths, starting from what it inherits. Rails'
+ * `append_view_path`.
+ *
+ * The singular is a different operation from the plural, not a shorter
+ * spelling of it, and Rails has both for the same reason: this one takes a
+ * class and `appendViewPaths` takes whatever is in force. A controller that
+ * appends a path means that controller and everything under it, and doing it
+ * with `setViewPaths(klass, [...getViewPaths(klass), extra])` is three chances
+ * to drop what was inherited.
+ */
+export function appendViewPath(klass: object, ...added: readonly TemplateResolver[]): void {
+  byClass.set(klass, [...getViewPaths(klass), ...added]);
+}
+
+/**
+ * The same, searched first. Rails' `prepend_view_path`.
+ *
+ * This is the one a controller reaches for: a lookup takes the first match, so
+ * in front of what it inherits is a template that overrides one.
+ */
+export function prependViewPath(klass: object, ...added: readonly TemplateResolver[]): void {
+  byClass.set(klass, [...added, ...getViewPaths(klass)]);
+}
+
 /** Forgets a class's own paths, so it inherits again. */
 export function resetViewPaths(klass: object): void {
   byClass.delete(klass);
