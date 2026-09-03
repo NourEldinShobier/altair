@@ -17,7 +17,7 @@ import {
   withEmptyTemplateCache,
 } from "../src/digestor.js";
 import {
-  getViewPaths,
+  viewPaths,
   LookupContext,
   setViewPaths,
   TemplateResolver,
@@ -36,7 +36,7 @@ const inner = new TemplateResolver("inner");
 
 /** The names of the paths in force, which is what a lookup would search. */
 function names(): string[] {
-  return getViewPaths().map((each) => each.name);
+  return viewPaths().map((each) => each.name);
 }
 
 describe("rendering from other view paths", () => {

@@ -140,29 +140,60 @@ export class TemplateResolver {
 
 /** The paths a boot installs, and the ones a block is rendering from. */
 const resolvers: TemplateResolver[] = [];
-const scoped = new AsyncLocalStorage<readonly TemplateResolver[]>();
 
-/** Rails' `PathRegistry.all_resolvers`. */
+/**
+ * A box rather than a list, because a block can append to its own paths.
+ *
+ * A store is fixed once the scope opens, and `appendViewPaths` inside a block
+ * has to reach what the block is rendering from. Holding the list in a box is
+ * what lets it: the box is per-block, the list inside it is the block's.
+ */
+const scoped = new AsyncLocalStorage<{ paths: TemplateResolver[] }>();
+
+/** The paths in force here: a block's if one is open, the process's if not. */
+function current(): TemplateResolver[] {
+  return scoped.getStore()?.paths ?? resolvers;
+}
+
+/** Rails' `PathRegistry.all_resolvers` — the process's, whatever a block is doing. */
 export function allResolvers(): TemplateResolver[] {
   return [...resolvers];
 }
 
-export function appendViewPath(resolver: TemplateResolver): void {
-  resolvers.push(resolver);
+/**
+ * Adds paths to search after the ones already there. Rails'
+ * `append_view_paths`.
+ *
+ * Into whatever is in force, which is the fix and not a detail. This used to
+ * write to the process's list even inside a `withViewPaths` block, so a plugin
+ * appending its templates mid-render did two wrong things at once: the block
+ * it was rendering in never saw the path, and every render after the block
+ * did, for the life of the process.
+ */
+export function appendViewPaths(...added: readonly TemplateResolver[]): void {
+  current().push(...added);
 }
 
-/** Rails' `prepend_view_path` — searched first, which is how an override wins. */
-export function prependViewPath(resolver: TemplateResolver): void {
-  resolvers.unshift(resolver);
+/**
+ * The same, searched first. Rails' `prepend_view_paths`.
+ *
+ * Which is how an override wins: lookup takes the first match, so a path in
+ * front of the application's is a template that replaces one.
+ */
+export function prependViewPaths(...added: readonly TemplateResolver[]): void {
+  current().unshift(...added);
 }
 
 export function setViewPaths(paths: readonly TemplateResolver[]): void {
-  resolvers.length = 0;
-  resolvers.push(...paths);
+  const list = current();
+
+  list.length = 0;
+  list.push(...paths);
 }
 
-export function getViewPaths(): TemplateResolver[] {
-  return [...(scoped.getStore() ?? resolvers)];
+/** Rails' `view_paths` — what a lookup will search, in the order it searches. */
+export function viewPaths(): TemplateResolver[] {
+  return [...current()];
 }
 
 /** Rails' `with_view_paths` — a scoped swap that always puts them back. */
@@ -175,7 +206,9 @@ export async function withViewPaths<T>(
   // inside a plugin's view paths could hand a concurrent request the plugin's
   // template instead of the application's — and there is nothing left to put
   // back when a body throws.
-  return await scoped.run(paths, async () => await body());
+  // A copy, so appending inside the block cannot reach back into the list the
+  // caller passed in.
+  return await scoped.run({ paths: [...paths] }, async () => await body());
 }
 
 export function clearResolverCaches(): void {
