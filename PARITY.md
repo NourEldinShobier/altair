@@ -6,18 +6,9 @@ measured from a clone of `rails/rails@main` (8.2.0.alpha), not estimated.
 **Totals to beat:** 206,760 lines of library code across 1,502 files, covered by
 **26,775 test methods across 1,871 files.**
 
-|              | Tests      | of Rails' |       |
-| ------------ | ---------- | --------- | ----- |
-| <<<<<<< HEAD |
-| <<<<<<< HEAD |
-| **Total**    | **11,243** | 26,775    | 42.0% |
-| =======      |
-| **Total**    | **11,218** | 26,775    | 41.9% |
-
-> > > > > > > 4ce9ed1 (feat(controller): reordering a middleware that is already in the stack)
-> > > > > > > \=======
-> > > > > > > | **Total** | **11,865** | 26,775 | 44.3% |
-> > > > > > > 4ff04b9 (feat(controller): telling the browser what to fetch before the page exists)
+|           | Tests      | of Rails' |       |
+| --------- | ---------- | --------- | ----- |
+| **Total** | **11,865** | 26,775    | 44.3% |
 
 Status key: **done** · **wip** · **next** · **todo** · **n/a** (Bun or the
 language already provides it)

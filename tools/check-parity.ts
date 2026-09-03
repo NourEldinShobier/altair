@@ -107,10 +107,29 @@ for (const [name, count] of counts) {
   source = source.replace(row, `| \`@altair/${name}\`$1| ${padded}|`);
 }
 
-const totalRow = /\| \*\*Total\*\* \| \*\*([\d,]+)\*\*(\s*)\| ([\d,]+)\s*\|\s*([\d.]+)% \|/;
-const foundTotal = totalRow.exec(source);
+/**
+ * The one row claiming a total.
+ *
+ * Whitespace-tolerant on both sides of `Total`, and that is not tidiness. The
+ * old pattern demanded exactly one space there, and the table's own row —
+ * padded to line up with the others — did not match it. A merge conflict had
+ * been committed to `PARITY.md` and reformatted into valid markdown, and the
+ * pattern quietly locked onto the total inside the wreckage instead. The
+ * document read 42.0% for thirty-seven commits while this reported green.
+ */
+const totalRow = /\| \*\*Total\*\*\s*\| \*\*([\d,]+)\*\*(\s*)\| ([\d,]+)\s*\|\s*([\d.]+)% \|/;
+const totalRows = [...source.matchAll(new RegExp(totalRow, "g"))];
+const foundTotal = totalRows[0];
 
-if (!foundTotal) {
+if (totalRows.length > 1) {
+  // Refused rather than resolved. Two rows means the document disagrees with
+  // itself, and picking one is how the wrong one came to be the checked one.
+  problems.push({
+    what: "total",
+    claimed: `${String(totalRows.length)} rows: ${totalRows.map((row) => row[1] as string).join(", ")}`,
+    actual: String(total),
+  });
+} else if (!foundTotal) {
   problems.push({ what: "total", claimed: "no row", actual: String(total) });
 } else {
   const claimed = (foundTotal[1] as string).replace(/,/g, "");
