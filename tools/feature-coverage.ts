@@ -321,6 +321,77 @@ const all = await ourNames([
   "testing",
 ]);
 
+/**
+ * Rails names this port spells differently, and where the thing they name is.
+ *
+ * The tool matches by name, so `link_to` reads as missing while `<Link>` sits
+ * in `packages/view/src/links.tsx` doing exactly what `link_to` does. The
+ * header has always said so in prose; this says it where the counting happens.
+ *
+ * This cannot hide a gap. An entry only changes *which* name is looked for in
+ * our source — if the name on the right is not there, the Rails name is still
+ * counted as missing. So an entry pointing at nothing scores nothing, and the
+ * only thing an entry can do is stop a rename from reading as an absence.
+ *
+ * The bar for adding one: the file and line, read, doing the same job. Not
+ * "something similar exists". `form_for` is deliberately absent from this
+ * table — Rails' own documentation supersedes it with `form_with`, so it is a
+ * feature this port declined rather than one it renamed.
+ */
+const ALIASES: Record<string, string> = {
+  // ActionView is JSX here rather than helper methods, so the whole helper
+  // surface is components. Two that the camelCase rule cannot reach:
+  linkTo: "Link", // packages/view/src/links.tsx
+  currentPage: "isCurrentPage", // packages/view/src/assets.tsx
+
+  // Rails' two names for one encryptor: the pair that signs and the pair that
+  // does not exists there because `MessageVerifier` is a separate class. Here
+  // there is one class whose messages are always authenticated, so the names
+  // that distinguish them have nothing to distinguish.
+  encryptAndSign: "encrypt", // packages/support/src/messages.ts
+  decryptAndVerify: "decrypt", // packages/support/src/messages.ts
+
+  // `LEFT OUTER JOIN` is what it emits; `leftJoins` is Rails' own shorter
+  // alias for the same method.
+  leftOuterJoins: "leftJoins", // packages/orm/src/relation.ts
+
+  // Rails reads `database.yml` into `configurations` and then a model calls
+  // `establish_connection` against a key in it. One function takes the same
+  // configuration here, and `connectsTo` binds a class to a key in it.
+  establishConnection: "configureDatabases", // packages/orm/src/databases.ts
+  configurations: "configureDatabases", // packages/orm/src/databases.ts
+
+  // `Module#deprecate` is Rails' shorthand for `deprecate_methods` on the
+  // default deprecator; the method it forwards to is the one here.
+  deprecate: "deprecateMethods", // packages/support/src/deprecation.ts
+
+  // `each_record` is what `in_batches` returns an enumerator of; iterating one
+  // record at a time in batches is `findEach`.
+  eachRecord: "findEach", // packages/orm/src/relation.ts
+
+  // Generated per association — `post.commentIds()` and `post.setCommentIds()`
+  // — so there is no method by either name to find. The one that writes them
+  // is what the reader should be sent to.
+  idsReader: "defineCollectionIds", // packages/orm/src/model.ts
+  idsWriter: "defineCollectionIds", // packages/orm/src/model.ts
+
+  // Rails' `RemoteIp::GetIp#calculate_ip`, trusted-proxy list and all.
+  calculateIp: "clientIp", // packages/controller/src/client_ip.ts
+
+  // `max-stale` with no value is `"unlimited"` from this one, which is why
+  // there is no second method asking whether it was unlimited.
+  maxStaleUnlimited: "maxStale", // packages/controller/src/request_details.ts
+
+  // The guard that refuses a destructive task against production, and the
+  // read of what the database last recorded about itself.
+  checkCurrentProtectedEnvironment: "checkProtectedEnvironments", // packages/orm/src/protected_environments.ts
+  lastStoredEnvironment: "storedEnvironment", // packages/orm/src/protected_environments.ts
+
+  // Rails swaps the digest by handing over a class; there is no class to hand
+  // over here, so it takes the algorithm's name.
+  hashDigestClass: "setHashDigestAlgorithm", // packages/support/src/digest.ts
+};
+
 console.log("component        rails   ours   covered   missing (a sample)");
 console.log("-".repeat(96));
 
@@ -329,8 +400,13 @@ let totalCovered = 0;
 
 for (const [label, component, subdirs, _packages] of AREAS) {
   const rails = await railsMethods(component, subdirs);
-  const covered = [...rails].filter((name) => all.has(key(name)));
-  const missing = [...rails].filter((name) => !all.has(key(name)));
+  const here = (name: string): boolean => {
+    const alias = ALIASES[name];
+
+    return all.has(key(name)) || (alias !== undefined && all.has(key(alias)));
+  };
+  const covered = [...rails].filter(here);
+  const missing = [...rails].filter((name) => !here(name));
 
   totalRails += rails.size;
   totalCovered += covered.length;
