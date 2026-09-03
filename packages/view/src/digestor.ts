@@ -22,6 +22,8 @@
  * that is wrong is a bug somebody can see.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { createHash } from "node:crypto";
 
 /** How to find what a template renders, so the digest can recurse. */
@@ -59,13 +61,21 @@ export function findDependencies(name: string): string[] {
 /** Digests computed so far, so a template rendered fifty times is hashed once. */
 const digests = new Map<string, string>();
 
+/** The cache a `withEmptyTemplateCache` block reads and writes instead. */
+const empty = new AsyncLocalStorage<Map<string, string>>();
+
+/** The cache in force here: a block's if there is one, the process's if not. */
+function cache(): Map<string, string> {
+  return empty.getStore() ?? digests;
+}
+
 export function digestCache(): Map<string, string> {
-  return digests;
+  return cache();
 }
 
 /** Rails' `digest_caches`, for a report of what has been computed. */
 export function digestCaches(): Record<string, string> {
-  return Object.fromEntries(digests);
+  return Object.fromEntries(cache());
 }
 
 export function clearCache(): void {
@@ -95,16 +105,12 @@ export function trackCaching(enabled: boolean): void {
 
 /** Runs something with no digests remembered. Rails' `with_empty_template_cache`. */
 export function withEmptyTemplateCache<T>(body: () => T): T {
-  const held = new Map(digests);
-  digests.clear();
-
-  try {
-    return body();
-  } finally {
-    digests.clear();
-
-    for (const [name, digest] of held) digests.set(name, digest);
-  }
+  // An empty cache of its own rather than emptying the shared one. Clearing
+  // and refilling made every concurrent render miss the cache for the length
+  // of the block, and threw away whatever those renders had computed in the
+  // meantime — so the block's own promise, that nothing is remembered, held
+  // for everybody instead of for the block.
+  return empty.run(new Map(), body);
 }
 
 /** Templates whose content cannot be digested, so nothing above them is cached. */
@@ -152,7 +158,7 @@ const sources = new Map<string, string>();
 export function registerTemplateSource(name: string, source: string): void {
   sources.set(name, source);
 
-  if (!caching) digests.delete(name);
+  if (!caching) cache().delete(name);
 }
 
 export function digestPathFromTemplate(name: string): string {
@@ -170,7 +176,7 @@ export function dependencyDigest(name: string, seen: Set<string> = new Set()): s
   // No `caching` check here: nothing is ever stored while caching is off —
   // `trackCaching(false)` clears the map and `registerTemplateSource` drops
   // any entry — so a hit is only possible when caching is on.
-  const held = digests.get(name);
+  const held = cache().get(name);
 
   if (held !== undefined) return held;
   if (seen.has(name)) return shortHash(`cycle:${name}`);
@@ -187,7 +193,7 @@ export function dependencyDigest(name: string, seen: Set<string> = new Set()): s
 
   const digest = shortHash(parts.join(""));
 
-  if (caching) digests.set(name, digest);
+  if (caching) cache().set(name, digest);
 
   return digest;
 }

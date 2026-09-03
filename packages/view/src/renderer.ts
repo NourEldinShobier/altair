@@ -23,6 +23,8 @@
  * the call site.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { LookupContext, type RegisteredTemplate, splitTemplatePath } from "./lookup_context.js";
 import { type Node, RawHtml, renderToString } from "./render.js";
 
@@ -237,42 +239,49 @@ interface RenderRecord {
   locals: Record<string, unknown>;
 }
 
-const renders: RenderRecord[] = [];
-let recording = false;
+/**
+ * What the current block has rendered, if anything is watching.
+ *
+ * Per-block rather than per-process. Shared, it collected every concurrent
+ * render into one list and handed them back as what *this* block rendered —
+ * and the flag beside it leaked the same way, so a request that opened one of
+ * these turned recording on for everything running beside it.
+ */
+const renders = new AsyncLocalStorage<RenderRecord[]>();
 
 /** Rails' `in_rendering_context` — collects what was rendered inside a block. */
 export async function inRenderingContext<T>(body: () => Promise<T>): Promise<{
   result: T;
   rendered: RenderRecord[];
 }> {
-  const held = renders.splice(0, renders.length);
-  const wasRecording = recording;
-  recording = true;
+  const recorded: RenderRecord[] = [];
 
-  try {
-    const result = await body();
+  // Nothing to restore: the scope ends when the body does, whether it returns
+  // or throws, so recording cannot be left on for the rest of the process.
+  const result = await renders.run(recorded, async () => await body());
 
-    return { result, rendered: [...renders] };
-  } finally {
-    // Restored in a `finally`: a throwing body would otherwise leave recording
-    // on for the rest of the process, and every later render would accumulate.
-    recording = wasRecording;
-    renders.splice(0, renders.length, ...held);
-  }
+  return { result, rendered: [...recorded] };
 }
 
-/** Rails' `rendered_views`. */
+/**
+ * Rails' `rendered_views` — what the enclosing `inRenderingContext` has seen.
+ *
+ * Empty outside one, which is the honest answer now that the list belongs to a
+ * block. It used to report whatever the process had rendered since the last
+ * time somebody cleared it, which in a server is every request's templates
+ * mixed together.
+ */
 export function renderedViews(): string[] {
-  return renders.map((each) => each.path);
+  return (renders.getStore() ?? []).map((each) => each.path);
 }
 
 /** Rails' `render_calls`. */
 export function renderCalls(): RenderRecord[] {
-  return [...renders];
+  return [...(renders.getStore() ?? [])];
 }
 
 function record(path: string, locals: Record<string, unknown>): void {
-  if (recording) renders.push({ path, locals });
+  renders.getStore()?.push({ path, locals });
 }
 
 /** Rails' `render_template` — one template, with its locals bound. */

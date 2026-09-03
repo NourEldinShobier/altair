@@ -24,6 +24,8 @@
  * the cache with, which is invisible in every test that runs one request.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { Component } from "./render.js";
 
 /** What a template was registered for. */
@@ -136,7 +138,9 @@ export class TemplateResolver {
   }
 }
 
+/** The paths a boot installs, and the ones a block is rendering from. */
 const resolvers: TemplateResolver[] = [];
+const scoped = new AsyncLocalStorage<readonly TemplateResolver[]>();
 
 /** Rails' `PathRegistry.all_resolvers`. */
 export function allResolvers(): TemplateResolver[] {
@@ -158,7 +162,7 @@ export function setViewPaths(paths: readonly TemplateResolver[]): void {
 }
 
 export function getViewPaths(): TemplateResolver[] {
-  return [...resolvers];
+  return [...(scoped.getStore() ?? resolvers)];
 }
 
 /** Rails' `with_view_paths` — a scoped swap that always puts them back. */
@@ -166,16 +170,12 @@ export async function withViewPaths<T>(
   paths: readonly TemplateResolver[],
   body: () => T | Promise<T>,
 ): Promise<T> {
-  const held = getViewPaths();
-  setViewPaths(paths);
-
-  try {
-    return await body();
-  } finally {
-    // In a `finally`: a body that throws would otherwise leave the process
-    // rendering from whatever paths that one test or request installed.
-    setViewPaths(held);
-  }
+  // Scoped rather than swapped. Swapping made one request's paths every
+  // concurrent request's paths for as long as the block ran, so a render
+  // inside a plugin's view paths could hand a concurrent request the plugin's
+  // template instead of the application's — and there is nothing left to put
+  // back when a body throws.
+  return await scoped.run(paths, async () => await body());
 }
 
 export function clearResolverCaches(): void {
