@@ -12,6 +12,7 @@
  * against the model's known columns.
  */
 
+import { isRangeCondition, rangePredicateFor } from "./predicate_builder.js";
 import { createHash } from "node:crypto";
 import type { Connection, Row } from "./connection.js";
 import { checkWritable } from "./databases.js";
@@ -417,6 +418,14 @@ export class Relation<T> implements PromiseLike<T[]> {
             column,
           });
         }
+      } else if (isRangeCondition(value)) {
+        // Without this a range falls through to `=` and is bound as an
+        // object, which the driver stringifies into a comparison nobody wrote:
+        // it matches nothing, and nothing says so. `predicate_builder` has
+        // known how to write one since it was added.
+        const predicate = rangePredicateFor(column, value, (name) => this.#quoteColumn(name));
+
+        next.#wheres.push({ sql: predicate.sql, bindings: predicate.binds, column });
       } else {
         next.#wheres.push({ sql: `${quoted} = ?`, bindings: [value], column, value });
       }
