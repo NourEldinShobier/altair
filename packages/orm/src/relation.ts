@@ -355,6 +355,18 @@ export class Relation<T> implements PromiseLike<T[]> {
   #source: RelationSource<T>;
   #wheres: WhereClause[] = [];
   #orders: { column: string; direction: Direction }[] = [];
+
+  /**
+   * An order a later `order` replaces rather than appends to.
+   *
+   * The distinction is the whole of it. `order` appends, so a scope that
+   * orders and a caller who also orders produce
+   * `ORDER BY created_at DESC, title` — the scope's wins and the caller's
+   * decides ties, which is not what either of them asked for. A default is
+   * what a scope wants: it holds when nobody says otherwise and gets out of
+   * the way when somebody does.
+   */
+  #defaultOrders: { column: string; direction: Direction }[] = [];
   #limit: number | undefined;
   /** Set by `none`: this relation matches nothing and knows it. */
   #none = false;
@@ -388,6 +400,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     const next = new Relation<T>(this.#source);
     next.#wheres = [...this.#wheres];
     next.#orders = [...this.#orders];
+    next.#defaultOrders = [...this.#defaultOrders];
     next.#limit = this.#limit;
     next.#none = this.#none;
     next.#offset = this.#offset;
@@ -604,6 +617,24 @@ export class Relation<T> implements PromiseLike<T[]> {
 
     const next = this.#clone();
     next.#orders.push({ column: this.#resolve(column), direction });
+    return next;
+  }
+
+  /**
+   * An order that holds unless a caller asks for one. Rails' `default_order`.
+   *
+   * Several `order` calls still build on each other; it is the pair of them
+   * together that replaces this. `Post.recent.order("title")` sorts by title
+   * alone, where `order` on both would have sorted by date and used the title
+   * to break ties — a list that ignores the sort somebody chose.
+   */
+  defaultOrder(column: string, direction: Direction = "asc"): Relation<T> {
+    if (direction !== "asc" && direction !== "desc") {
+      throw new Error(`Unknown sort direction "${String(direction)}". Use "asc" or "desc".`);
+    }
+
+    const next = this.#clone();
+    next.#defaultOrders.push({ column: this.#resolve(column), direction });
     return next;
   }
 
@@ -1036,8 +1067,10 @@ export class Relation<T> implements PromiseLike<T[]> {
       sql += ` HAVING ${clauses.join(" AND ")}`;
     }
 
-    if (this.#orders.length > 0) {
-      const clauses = this.#orders.map(
+    const ordering = this.#orders.length > 0 ? this.#orders : this.#defaultOrders;
+
+    if (ordering.length > 0) {
+      const clauses = ordering.map(
         (order) =>
           `${this.#quoteColumn(order.column)} ${order.direction === "desc" ? "DESC" : "ASC"}`,
       );
