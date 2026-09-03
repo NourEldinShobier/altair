@@ -17,8 +17,8 @@
  *
  * ## What the last few percent are
  *
- * At 95.0% the remaining 198 names were read rather than counted, across
- * every component. Almost none of them is a feature that is missing.
+ * The remaining names were read rather than counted, across every component.
+ * Almost none of them is a feature that is missing.
  *
  * - **A different shape for the same thing**, and this is most of it. Rails'
  *   view layer is helper functions and this one is JSX components, so
@@ -29,10 +29,14 @@
  *   `leftJoins`. `establish_connection` and `configurations` are
  *   `configureDatabases`. ActionMailbox's one missing name, `routing`, is
  *   `MailboxRouter.route`.
- * - **Rails internals.** `numWaitingInQueue`, `reaperLock`,
- *   `addLeftAssociation`, `nearestDelegate`, `typeCastForDatabase`. Public in
- *   the sense that Ruby has no private, not in the sense that anybody calls
- *   them.
+ * - **Rails internals.** `addLeftAssociation`, `typeCastForDatabase`,
+ *   `attributesBuilder`. Public in the sense that Ruby has no private, not in
+ *   the sense that anybody calls them. The ones Rails marks `# :nodoc:` are no
+ *   longer counted at all — that comment is Rails answering this tool's own
+ *   question — which took 394 names out of the total and 359 out of the ones
+ *   we scored, so it moved the ratio by half a point and the noise by a lot
+ *   more. What is left in this bullet is the plumbing Rails never got round to
+ *   marking.
  * - **Scraper artifacts**, about a dozen: `build_`, `create_`, `reload_` and
  *   `reset_` are the halves of interpolated method names, and `pp`, `self`,
  *   `str` and `fmod` are Ruby.
@@ -109,6 +113,18 @@ function camel(name: string): string {
 }
 
 /**
+ * Rails' own mark for "not part of the public API".
+ *
+ * RDoc reads it and leaves the method out of the documentation, which is the
+ * same question this tool asks. Ruby has no `private` that a subclass can
+ * still call, so a great deal of the framework's plumbing is public in the
+ * language and internal in fact, and this comment is the only place that
+ * difference is written down. The header above already counted these as a
+ * miscount; this stops counting them.
+ */
+const NODOC = /#\s*:nodoc:/;
+
+/**
  * Whether a `def` line names a method, given what follows the name.
  *
  * Two shapes read as one and are not, and both were being counted against us
@@ -151,7 +167,6 @@ async function railsMethods(component: string, subdirs: string[]): Promise<Set<s
 
       for (const line of source.split("\n")) {
         const trimmed = line.trim();
-
         if (trimmed === "private" || trimmed === "protected") visible = false;
         if (/^(public|def self\.|class |module )/.test(trimmed) && trimmed !== "private") {
           if (trimmed === "public") visible = true;
@@ -161,7 +176,11 @@ async function railsMethods(component: string, subdirs: string[]): Promise<Set<s
         if (!visible) continue;
 
         const method = /^def\s+(?:self\.)?([a-z_][a-zA-Z0-9_]*[?!=]?)(.?)/.exec(trimmed);
-        if (method && namesAMethod(method[1] as string, method[2] as string)) {
+        if (
+          method &&
+          !NODOC.test(trimmed) &&
+          namesAMethod(method[1] as string, method[2] as string)
+        ) {
           const name = method[1] as string;
           if (!name.startsWith("_") && !NOISE.has(camel(name))) names.add(camel(name));
         }
