@@ -22,6 +22,31 @@ export interface DatabaseConfig {
 export interface ServerConfig {
   port: number;
   hostname?: string;
+  /**
+   * How many processes serve requests. Rails' `WEB_CONCURRENCY`.
+   *
+   * One by default, which is what a single `Bun.serve` gives. Bun runs
+   * JavaScript on one thread, so one process uses one core however many the
+   * machine has — the same limit Ruby's GVL puts on a Rails process, and the
+   * reason Rails ships `WEB_CONCURRENCY` too.
+   *
+   * `"auto"` is one worker per core. A number is that many. Above one, the
+   * process that called `listen` becomes a supervisor that serves nothing and
+   * restarts workers that die.
+   *
+   * What does not scale with this: anything that must happen once. A scheduler,
+   * a cron, a migration on boot — four workers run four of them. Rails has the
+   * same rule and the same answer, which is to run those somewhere other than
+   * the web process.
+   *
+   * **Linux only, in practice.** `node:cluster` forks on every platform, but
+   * only Linux distributes connections across the workers. Measured with one
+   * file on both: four workers, thirty requests, separate connections — Linux
+   * spread them over all four processes, Windows sent all thirty to one and
+   * left the other three idle. Nothing errors on Windows; the workers simply
+   * never serve, so a developer there gets one process however this is set.
+   */
+  workers?: number | "auto";
 }
 
 export interface LogConfig {
@@ -95,6 +120,22 @@ export interface ApplicationConfig {
 }
 
 /**
+ * `WEB_CONCURRENCY` as a worker count.
+ *
+ * Unset or unreadable means one, rather than a guess: a variable that has been
+ * set to something meaningless is more likely a typo than a request to fan out,
+ * and starting eight processes because of one is worse than starting one.
+ */
+export function workersFrom(value: string | undefined): number | "auto" {
+  if (value === undefined || value.trim() === "") return 1;
+  if (value.trim() === "auto") return "auto";
+
+  const count = Number(value);
+
+  return Number.isInteger(count) && count > 0 ? count : 1;
+}
+
+/**
  * The defaults for an environment.
  *
  * Production defaults are the strict ones. A framework whose safe settings are
@@ -119,6 +160,10 @@ export function defaultsFor(
     server: {
       port: Number(process.env.PORT ?? 3000),
       hostname: process.env.HOST,
+      // Named `WEB_CONCURRENCY` because that is what it is called on every
+      // platform that already runs Rails, and a deployment moving across
+      // should not have to learn a second name for the same dial.
+      workers: workersFrom(process.env["WEB_CONCURRENCY"]),
     },
     showDetailedErrors: !production,
     forceSsl: production,
