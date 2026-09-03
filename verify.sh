@@ -50,6 +50,21 @@ fi
 # file verify had silently fixed. Green now says whether anything was touched.
 UNFORMATTED=$(bunx oxfmt --threads=1 --check . 2>&1 | grep -oE "[^ ]+\.(ts|tsx|md|json|css)" || true)
 
+# A merge conflict committed to a document. `PARITY.md` carried one for
+# thirty-seven commits: the formatter turned `>>>>>>> <sha>` into a markdown
+# blockquote and `=======` into an escaped `\=======`, so the file was valid
+# markdown, git had nothing to say, and the table a reader saw claimed 42.0%
+# while the suite was at 44.3%. Both spellings are checked, because after the
+# formatter has been over it only the second one is left.
+if CONFLICTED=$(grep -rlE '^(<{7} |>{7} |={7}$)|^(> ){7}[0-9a-f]{7} |^(> ){7}\={7}' \
+  --include='*.md' --include='*.ts' --include='*.tsx' --include='*.json' \
+  . --exclude-dir=node_modules --exclude-dir=.git 2>/dev/null); then
+  echo "FAILED: a merge conflict is committed"
+  echo "$CONFLICTED"
+  exit 1
+fi
+
+
 # State that belongs to a block, kept where the process can see it. Seventeen
 # of these were found and fixed, and every one had a comment explaining that
 # it was restored in a `finally` so a throwing body would not leave it set
