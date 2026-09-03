@@ -113,6 +113,37 @@ import {
   type AllowBrowserOptions,
 } from "./allow_browser.js";
 
+/**
+ * The caller's headers, with a content type filled in where they gave none.
+ *
+ * Built up rather than spread, because `HeadersInit` is three shapes and only
+ * one of them spreads. A `Headers` instance spreads to `{}` — every header the
+ * caller set, dropped without a word — and an array of pairs spreads to
+ * `{ "0": [...] }`, which writes a header named `0`. Both are types this
+ * signature accepts, so both were ordinary things to pass.
+ *
+ * Not `new Headers(given)` either: a record may hold `undefined` for a header
+ * the caller decided against, and the constructor writes that out as the
+ * five characters `undefined`.
+ */
+function withContentType(given: ResponseInit["headers"], fallback: string): Headers {
+  const headers = new Headers();
+
+  if (given instanceof Headers) for (const [name, value] of given) headers.set(name, value);
+  else if (Array.isArray(given)) for (const [name, value] of given) headers.set(name, value);
+  else if (given !== undefined) {
+    for (const [name, value] of Object.entries(given)) {
+      if (value !== undefined) headers.set(name, value);
+    }
+  }
+
+  // Only when the caller gave none: theirs won before this changed, and has to
+  // keep winning.
+  if (!headers.has("content-type")) headers.set("content-type", fallback);
+
+  return headers;
+}
+
 /** A copy of a response with extra headers. Response headers are immutable. */
 function withHeaders(response: Response, extra: Record<string, string>): Response {
   const headers = new Headers(response.headers);
@@ -475,7 +506,7 @@ export class Controller extends Callbacks {
         new Response(body, {
           status: 200,
           ...init,
-          headers: { "content-type": "text/plain; charset=utf-8", ...init.headers },
+          headers: withContentType(init.headers, "text/plain; charset=utf-8"),
         }),
       ),
 
@@ -484,7 +515,7 @@ export class Controller extends Callbacks {
         new Response(body, {
           status: 200,
           ...init,
-          headers: { "content-type": "text/html; charset=utf-8", ...init.headers },
+          headers: withContentType(init.headers, "text/html; charset=utf-8"),
         }),
       ),
 
@@ -522,7 +553,7 @@ export class Controller extends Callbacks {
         new Response(await renderDocument(node), {
           status: 200,
           ...init,
-          headers: { "content-type": "text/html; charset=utf-8", ...init.headers },
+          headers: withContentType(init.headers, "text/html; charset=utf-8"),
         }),
       ),
 
