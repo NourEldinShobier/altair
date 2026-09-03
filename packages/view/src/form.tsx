@@ -39,7 +39,7 @@ export interface FormOptions {
   /** Overrides the name fields are nested under. Rails' `scope:`. */
   scope?: string;
   url?: string;
-  method?: "get" | "post" | "patch" | "put" | "delete";
+  method?: FormMethod;
   /**
    * Rendered as a hidden input, which is how Rails ships CSRF tokens.
    *
@@ -441,8 +441,67 @@ function isTruthy(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
+/** What a form may say it does. Rails' `method:`. */
+export type FormMethod = "get" | "post" | "patch" | "put" | "delete";
+
 /** Verbs a browser form can actually send. */
 const NATIVE_METHODS = new Set(["get", "post"]);
+
+/**
+ * A form that is not for a record. Rails' `form_tag`.
+ *
+ *     <FormTag url="/search" method="get">
+ *       <SearchFieldTag name="q" />
+ *     </FormTag>
+ *
+ * The `*_tag` family already had every field and no way to open the form they
+ * go in, so the only way to use them was to write the element by hand. Two
+ * things go wrong when somebody does, and neither of them fails visibly at the
+ * time.
+ *
+ * The authenticity token: a hand-written POST without one fails its own
+ * submission with a 422, which is the check working exactly as intended
+ * against the application's own page. Not on a GET — it changes nothing, and a
+ * token in a query string is a token in browser history and server logs.
+ *
+ * The verb: a browser sends GET and POST and nothing else, so a hand-written
+ * `method="delete"` is sent as a GET. The form appears to work and deletes
+ * nothing, and on a crawler it deletes everything.
+ */
+export function FormTag(props: {
+  url?: string;
+  method?: FormMethod;
+  id?: string;
+  class?: string;
+  authenticityToken?: string | null;
+  attributes?: Attributes;
+  children?: Node;
+}): Node {
+  const intended = props.method ?? "post";
+  const sent = NATIVE_METHODS.has(intended) ? intended : "post";
+
+  const token =
+    props.authenticityToken === null || intended === "get"
+      ? undefined
+      : (props.authenticityToken ?? useCsrfToken());
+
+  return (
+    <>
+      {preventContentExfiltration()}
+      <form
+        action={props.url}
+        method={sent}
+        {...(props.id ? { id: props.id } : {})}
+        {...(props.class ? { class: props.class } : {})}
+        {...(props.attributes ?? {})}
+      >
+        {intended === sent ? null : <input type="hidden" name="_method" value={intended} />}
+        {token ? <input type="hidden" name="authenticity_token" value={token} /> : null}
+        {props.children}
+      </form>
+    </>
+  );
+}
 
 /**
  * Rails' `form_with`.
