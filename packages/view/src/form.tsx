@@ -348,10 +348,43 @@ export class FormBuilder {
     return first === undefined ? undefined : `${humanize(attribute)} ${first}`;
   }
 
-  submit(text?: string, attributes: Attributes = {}): Node {
-    const label = text ?? (this.record?.isNewRecord === false ? "Update" : "Create");
+  /**
+   * The form's submit control. Rails' `submit`.
+   *
+   * Takes a node rather than a string, so an icon beside the label does not
+   * mean hand-writing the element — and hand-writing it is where the escaping
+   * goes wrong.
+   */
+  submit(content?: Node, attributes: Attributes = {}): Node {
+    const label = content ?? (this.record?.isNewRecord === false ? "Update" : "Create");
     return (
       <button type="submit" {...attributes}>
+        {label}
+      </button>
+    );
+  }
+
+  /**
+   * A submit control that says which one was pressed. Rails' `button`.
+   *
+   * The difference from `submit` is the name it carries, not the element:
+   * naming an attribute scopes it to the record, so `button("Save as draft",
+   * { attribute: "draft", value: "true" })` posts `post[draft]=true` and a
+   * form can have two buttons that mean different things.
+   *
+   * Without it the alternatives are a hidden field flipped by script, which
+   * fails with JavaScript off, or two forms, which cannot share the fields.
+   */
+  button(content?: Node, attributes: Attributes & { attribute?: string } = {}): Node {
+    const { attribute, ...rest } = attributes;
+    const label = content ?? (this.record?.isNewRecord === false ? "Update" : "Create");
+
+    return (
+      <button
+        type="submit"
+        name={attribute === undefined ? undefined : this.name(attribute)}
+        {...rest}
+      >
         {label}
       </button>
     );
