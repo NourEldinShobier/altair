@@ -30,12 +30,25 @@ export async function withContentStore<T>(body: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Sets content for the layout to pick up. Rails' `content_for`.
+ * Sets content for the layout to pick up, or reads what was set. Rails'
+ * `content_for`.
  *
- * Appends rather than replaces, so a page and a partial inside it can both
- * add to the same slot — which is what `content_for :head` is for.
+ * Appends rather than replaces, so a page and a partial inside it can both add
+ * to the same slot — which is what `content_for :head` is for. `provide`
+ * beside it is the replacing form, and the two are named the way Rails names
+ * them: they used to be the other way round here, so a reader who knew Rails
+ * got appending from `provide` and had no way to ask for it by its own name.
+ *
+ * Reads with one argument, as Rails does, which is what makes it usable in the
+ * middle of a template:
+ *
+ *     {contentFor("title") ?? "Untitled"}
  */
-export function provide(name: string, content: Node): void {
+export function contentFor(name: string): Node | undefined;
+export function contentFor(name: string, content: Node): void;
+export function contentFor(name: string, content?: Node): Node | undefined | void {
+  if (content === undefined) return yieldContent(name);
+
   const held = store.getStore();
 
   // Outside a render there is nowhere to put it. Silent rather than throwing:
@@ -47,8 +60,13 @@ export function provide(name: string, content: Node): void {
   else held.set(name, [content]);
 }
 
-/** Replaces whatever was there, for the case where appending is wrong. */
-export function provideOnly(name: string, content: Node): void {
+/**
+ * Replaces whatever was there. Rails' `provide`.
+ *
+ * For the case where appending is wrong — a title, where two of them is not a
+ * longer title but a broken one.
+ */
+export function provide(name: string, content: Node): void {
   store.getStore()?.set(name, [content]);
 }
 

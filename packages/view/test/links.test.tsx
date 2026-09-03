@@ -13,8 +13,8 @@ import { renderToString } from "../src/render.js";
 import { ButtonTo, Link } from "../src/links.js";
 import {
   hasContentFor,
+  contentFor,
   provide,
-  provideOnly,
   renderWithLayout,
   withContentStore,
   yieldContent,
@@ -153,7 +153,7 @@ describe("a button that posts", () => {
 describe("content for a layout", () => {
   it("comes back out", async () => {
     await withContentStore(async () => {
-      provide("title", "All posts");
+      contentFor("title", "All posts");
 
       expect(yieldContent("title")).toBe("All posts");
       expect(hasContentFor("title")).toBe(true);
@@ -171,8 +171,8 @@ describe("content for a layout", () => {
   // is for.
   it("appends rather than replacing", async () => {
     await withContentStore(async () => {
-      provide("head", "a");
-      provide("head", "b");
+      contentFor("head", "a");
+      contentFor("head", "b");
 
       expect(yieldContent("head")).toEqual(["a", "b"]);
     });
@@ -180,8 +180,8 @@ describe("content for a layout", () => {
 
   it("can replace instead", async () => {
     await withContentStore(async () => {
-      provide("title", "first");
-      provideOnly("title", "second");
+      contentFor("title", "first");
+      provide("title", "second");
 
       expect(yieldContent("title")).toBe("second");
     });
@@ -189,7 +189,7 @@ describe("content for a layout", () => {
 
   // A component used in a test without a layout is not a bug.
   it("says nothing outside a render", () => {
-    expect(() => provide("title", "x")).not.toThrow();
+    expect(() => contentFor("title", "x")).not.toThrow();
     expect(yieldContent("title")).toBeUndefined();
   });
 
@@ -197,12 +197,12 @@ describe("content for a layout", () => {
   it("keeps concurrent renders apart", async () => {
     const [one, two] = await Promise.all([
       withContentStore(async () => {
-        provide("title", "slow");
+        contentFor("title", "slow");
         await new Promise((resolve) => setTimeout(resolve, 5));
         return yieldContent("title");
       }),
       withContentStore(async () => {
-        provide("title", "fast");
+        contentFor("title", "fast");
         return yieldContent("title");
       }),
     ]);
@@ -217,7 +217,7 @@ describe("content for a layout", () => {
 // a store the page has not filled in yet, and quietly renders nothing.
 describe("rendering a page inside a layout", () => {
   function Page() {
-    provide("title", "All posts");
+    contentFor("title", "All posts");
     return <p>body</p>;
   }
 
