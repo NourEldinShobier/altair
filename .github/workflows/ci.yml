@@ -137,6 +137,11 @@ jobs:
       - name: Lint
         run: bunx oxlint --deny-warnings
 
+      # A second pass, because these rules need a whole program rather than a
+      # file. Which rules and why is in `.oxlintrc.json` and `verify.sh`.
+      - name: Lint (type-aware)
+        run: bunx oxlint --type-aware --deny-warnings
+
       - name: Check formatting
         run: bunx oxfmt --check .
 
