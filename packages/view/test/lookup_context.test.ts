@@ -19,14 +19,14 @@ import {
   TemplateResolver,
   allResolvers,
   anyFormats,
-  appendViewPath,
+  appendViewPaths,
   clearResolverCaches,
   detailsCacheKey,
   detailsKey,
   detailsKeys,
-  getViewPaths,
+  viewPaths,
   normalizedFormats,
-  prependViewPath,
+  prependViewPaths,
   registerDetail,
   registeredDetails,
   setViewPaths,
@@ -88,12 +88,12 @@ describe("template paths", () => {
 
 describe("view paths", () => {
   it("starts with none", () => {
-    expect(getViewPaths()).toEqual([]);
+    expect(viewPaths()).toEqual([]);
   });
 
   it("appends one", () => {
     const resolver = resolverWith(template("post"));
-    appendViewPath(resolver);
+    appendViewPaths(resolver);
 
     expect(allResolvers()).toEqual([resolver]);
   });
@@ -102,10 +102,10 @@ describe("view paths", () => {
   it("puts a prepended one first", () => {
     const first = resolverWith(template("post"));
     const second = resolverWith(template("post"));
-    appendViewPath(second);
-    prependViewPath(first);
+    appendViewPaths(second);
+    prependViewPaths(first);
 
-    expect(getViewPaths()).toEqual([first, second]);
+    expect(viewPaths()).toEqual([first, second]);
   });
 
   it("swaps them for a block", async () => {
@@ -113,10 +113,10 @@ describe("view paths", () => {
     setViewPaths([original]);
     const other = resolverWith(template("post"));
 
-    const seen = await withViewPaths([other], () => getViewPaths());
+    const seen = await withViewPaths([other], () => viewPaths());
 
     expect(seen).toEqual([other]);
-    expect(getViewPaths()).toEqual([original]);
+    expect(viewPaths()).toEqual([original]);
   });
 
   /**
@@ -132,7 +132,7 @@ describe("view paths", () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
-    expect(getViewPaths()).toEqual([original]);
+    expect(viewPaths()).toEqual([original]);
   });
 
   it("lists what a resolver holds", () => {
