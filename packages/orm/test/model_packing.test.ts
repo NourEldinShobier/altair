@@ -72,8 +72,7 @@ beforeEach(async () => {
   setConnection(connection);
 
   for (const klass of [Author, Post]) {
-    klass.columnCache = undefined;
-    klass.columnTypeCache = undefined;
+    klass.resetColumnInformation();
   }
 
   const schema = new SchemaStatements(connection);

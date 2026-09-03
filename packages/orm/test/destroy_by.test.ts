@@ -33,8 +33,7 @@ beforeEach(async () => {
     t.boolean("draft");
   });
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
   destroyed.length = 0;
 
   await Post.create({ title: "A", draft: true });

@@ -862,8 +862,7 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // The subclass reads and writes the root's table, which is what makes
       // this single-table inheritance rather than two tables.
       this.tableName = root.table;
-      this.columnCache = undefined;
-      this.columnTypeCache = undefined;
+      this.resetColumnInformation();
 
       // Copy on write, so a hierarchy under one root cannot see another's.
       if (!Object.hasOwn(root, "descendants")) root.descendants = { ...root.descendants };
@@ -2588,12 +2587,30 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * Without that the running application selects a column the migration has
      * just removed, and every query fails until the deploy catches up.
      */
+    /**
+     * Forgets what this class knows about its columns. Rails'
+     * `reset_column_information`.
+     *
+     * One call rather than two assignments, and the difference is not
+     * keystrokes: there are two caches today and the next one added would
+     * otherwise need finding at every place that clears them. There are a
+     * hundred and sixteen, most of them in tests, and a test that clears one
+     * of three passes while asking the wrong schema.
+     *
+     * What it is for: a migration has run and the table is not the one this
+     * class read at boot. Rails documents it for exactly that, and a test that
+     * builds a schema per case is the same situation four hundred times over.
+     */
+    static resetColumnInformation(): void {
+      this.columnCache = undefined;
+      this.columnTypeCache = undefined;
+    }
+
     static ignoreColumns(...names: string[]): void {
       if (!Object.hasOwn(this, "ignoredColumns")) this.ignoredColumns = [...this.ignoredColumns];
 
       this.ignoredColumns.push(...names);
-      this.columnCache = undefined;
-      this.columnTypeCache = undefined;
+      this.resetColumnInformation();
     }
 
     static ignoredColumns: string[] = [];
@@ -5546,6 +5563,8 @@ export interface ModelClass<A extends object> {
   databaseName: string | undefined;
   connectsTo(options: { database: string }): void;
   columnTypeCache: Record<string, ColumnType> | undefined;
+  /** Rails' `reset_column_information`. */
+  resetColumnInformation(): void;
   columnTypes(): Promise<Record<string, ColumnType>>;
   castRow(row: Row, options?: { encrypted?: boolean }): Row;
   encryptedAttributes: Record<string, EncryptedAttributeOptions>;

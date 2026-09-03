@@ -47,8 +47,7 @@ beforeEach(async () => {
   });
 
   for (const model of [User, Post]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   Post.strictLoadingByDefault = false;

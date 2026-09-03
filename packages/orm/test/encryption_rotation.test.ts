@@ -45,8 +45,7 @@ let connection: Connection;
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
-  Vault.columnCache = undefined;
-  Vault.columnTypeCache = undefined;
+  Vault.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("vaults", (t) => {
     t.string("ssn", { limit: 500 });

@@ -25,8 +25,7 @@ beforeEach(async () => {
     t.integer("views");
   });
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
 
   await Post.create({ title: "First", views: 10 });
   await Post.create({ title: "Second", views: 20 });

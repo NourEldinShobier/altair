@@ -49,8 +49,7 @@ beforeEach(async () => {
   setConnection(connection);
 
   for (const model of [Post, Comment, Bare]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   const schema = new SchemaStatements(connection);

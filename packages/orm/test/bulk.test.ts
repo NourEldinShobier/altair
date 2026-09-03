@@ -38,8 +38,7 @@ let connection: Connection;
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
-  Widget.columnCache = undefined;
-  Widget.columnTypeCache = undefined;
+  Widget.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
   await schema.dropTable("widgets", { ifExists: true });

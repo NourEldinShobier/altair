@@ -32,8 +32,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Reading.columnCache = undefined;
-  Reading.columnTypeCache = undefined;
+  Reading.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("readings", (t) => {
     t.integer("value");

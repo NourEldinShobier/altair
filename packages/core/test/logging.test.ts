@@ -31,8 +31,7 @@ beforeEach(async () => {
 
   const connection = new Connection("sqlite://:memory:");
   setConnection(connection);
-  Item.columnCache = undefined;
-  Item.columnTypeCache = undefined;
+  Item.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("items", (t) => {
     t.string("name");

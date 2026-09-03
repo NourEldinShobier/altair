@@ -56,8 +56,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
   for (const model of [RichText, Post, Page]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   const schema = new SchemaStatements(connection);

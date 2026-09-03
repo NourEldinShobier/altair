@@ -43,8 +43,7 @@ beforeEach(async () => {
   setConnection(connection);
 
   for (const model of [Entry, ScopedEntry, UnscopedEntry]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   await new SchemaStatements(connection).createTable("entries", (t) => {

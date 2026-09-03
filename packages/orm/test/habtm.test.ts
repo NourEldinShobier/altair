@@ -47,10 +47,8 @@ beforeEach(async () => {
     { id: false },
   );
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
-  Tag.columnCache = undefined;
-  Tag.columnTypeCache = undefined;
+  Post.resetColumnInformation();
+  Tag.resetColumnInformation();
 });
 
 afterEach(async () => {

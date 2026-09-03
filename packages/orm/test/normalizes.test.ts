@@ -34,8 +34,7 @@ let connection: Connection;
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
-  User.columnCache = undefined;
-  User.columnTypeCache = undefined;
+  User.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
   await schema.dropTable("users", { ifExists: true });
@@ -151,8 +150,7 @@ describe("with a uniqueness validation", () => {
   }
 
   beforeEach(() => {
-    Account.columnCache = undefined;
-    Account.columnTypeCache = undefined;
+    Account.resetColumnInformation();
   });
 
   it("catches a duplicate written untidily", async () => {

@@ -35,8 +35,7 @@ const bodies = async (): Promise<string[]> =>
 beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
-  Note.columnCache = undefined;
-  Note.columnTypeCache = undefined;
+  Note.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
   await schema.dropTable("notes", { ifExists: true });

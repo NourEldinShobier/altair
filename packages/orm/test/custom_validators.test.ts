@@ -31,8 +31,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Post.columnCache = undefined;
-  Post.columnTypeCache = undefined;
+  Post.resetColumnInformation();
   Post.validations = [];
   Post.customValidations = [];
 

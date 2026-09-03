@@ -66,8 +66,7 @@ beforeEach(async () => {
   events = [];
   connection = await testConnection();
   setConnection(connection);
-  Order.columnCache = undefined;
-  Order.columnTypeCache = undefined;
+  Order.resetColumnInformation();
 
   const schema = new SchemaStatements(connection);
   await schema.dropTable("orders", { ifExists: true });
@@ -235,8 +234,7 @@ describe("a callback that throws", () => {
       }
     }
 
-    Fragile.columnCache = undefined;
-    Fragile.columnTypeCache = undefined;
+    Fragile.resetColumnInformation();
 
     const reported: unknown[] = [];
     const subscription = errors.subscribe((error) => reported.push(error));
@@ -259,8 +257,7 @@ describe("a callback that throws", () => {
       }
     }
 
-    AlsoFragile.columnCache = undefined;
-    AlsoFragile.columnTypeCache = undefined;
+    AlsoFragile.resetColumnInformation();
 
     await expect(
       connection.transaction(async () => {

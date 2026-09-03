@@ -40,8 +40,7 @@ beforeEach(async () => {
     t.integer("legacy_ctr");
   });
 
-  User.columnCache = undefined;
-  User.columnTypeCache = undefined;
+  User.resetColumnInformation();
 });
 
 afterEach(async () => {

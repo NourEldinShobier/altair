@@ -47,8 +47,7 @@ const modelWith = (attribute: string, options: object) => {
     }
   }
 
-  Subject.columnCache = undefined;
-  Subject.columnTypeCache = undefined;
+  Subject.resetColumnInformation();
 
   return Subject;
 };

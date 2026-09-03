@@ -25,8 +25,7 @@ let connection: Connection;
 async function seed(count: number): Promise<void> {
   connection = await testConnection();
   setConnection(connection);
-  Item.columnCache = undefined;
-  Item.columnTypeCache = undefined;
+  Item.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("items", (t) => {
     t.string("name");

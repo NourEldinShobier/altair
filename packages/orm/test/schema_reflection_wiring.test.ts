@@ -36,8 +36,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
 
-  Widget.columnCache = undefined;
-  Widget.columnTypeCache = undefined;
+  Widget.resetColumnInformation();
 
   await new SchemaStatements(connection).createTable("widgets", (t) => {
     t.string("name");

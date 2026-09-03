@@ -57,8 +57,7 @@ beforeEach(async () => {
   connection = await testConnection();
   setConnection(connection);
   for (const model of [Author, Post, Comment]) {
-    model.columnCache = undefined;
-    model.columnTypeCache = undefined;
+    model.resetColumnInformation();
   }
 
   const schema = new SchemaStatements(connection);
@@ -326,8 +325,7 @@ describe("a model with a secure password", () => {
   }
 
   beforeEach(async () => {
-    User.columnCache = undefined;
-    User.columnTypeCache = undefined;
+    User.resetColumnInformation();
 
     await new SchemaStatements(connection).createTable("users", (t) => {
       t.string("email");
