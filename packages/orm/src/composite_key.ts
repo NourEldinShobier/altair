@@ -358,6 +358,34 @@ export function compositeIdentify(label: string, key: readonly string[]): Record
  * list of one — a distinction with no visual weight and a completely different
  * result, so it is worth a named function rather than an inline check.
  */
+/**
+ * The `WHERE` one id means. Rails' `Key#where_hash`.
+ *
+ * Distinct from `queryConstraintsHash`, which reads the columns off a record
+ * it already has. This is the finder's direction: a caller hands over an id
+ * and the key says which columns it lands on, so `[4, 7]` against a key of
+ * `(account_id, id)` becomes both columns rather than an `IN` on one.
+ *
+ * A short id is refused. Zipping a missing value to `undefined` would drop the
+ * column from the hash and leave a `WHERE` on the tenant alone — the exact
+ * cross-tenant match this file exists to prevent, and it would look like a
+ * successful lookup.
+ */
+export function whereHashFor(key: PrimaryKey, id: unknown): Record<string, unknown> {
+  if (!composite(key)) return { [key as string]: id };
+
+  const columns = keyColumns(key);
+
+  if (!Array.isArray(id) || id.length !== columns.length) {
+    throw new PartialCompositeKey(
+      columns,
+      columns.slice(Array.isArray(id) ? id.length : 0).map((column) => column),
+    );
+  }
+
+  return Object.fromEntries(columns.map((column, index) => [column, id[index]]));
+}
+
 export function expectsMultipleIds(key: PrimaryKey, ids: unknown): boolean {
   if (!Array.isArray(ids)) return false;
   if (!composite(key)) return true;

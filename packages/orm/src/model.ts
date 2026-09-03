@@ -24,6 +24,13 @@ import { didYouMean, secureToken } from "@altair/support";
 import { errors } from "@altair/support";
 import { lookupType, typeNames, typeRegistered, type Type, type TypeOptions } from "./types.js";
 import {
+  composite,
+  expectsMultipleIds,
+  idFor,
+  whereHashFor,
+  type PrimaryKey,
+} from "./composite_key.js";
+import {
   camelize,
   humanize,
   isBlank,
@@ -127,6 +134,24 @@ import {
 } from "./nested.js";
 
 export { RecordNotFound } from "./relation.js";
+
+/**
+ * An id as a map key, so the record that came back can be matched to the id
+ * that asked for it.
+ *
+ * Compared as strings because an id off the database is a number and one out
+ * of a URL is not, and `find(["4"])` is the ordinary case. A composite id
+ * joins on a NUL, which no identifier or id can contain — a comma would let
+ * `["a,b", "c"]` and `["a", "b,c"]` collide.
+ */
+function idKey(id: unknown): string {
+  return Array.isArray(id) ? id.map((part) => String(part)).join("\0") : String(id);
+}
+
+/** An id in an error message, with a composite one kept legible as a tuple. */
+function describeId(id: unknown): string {
+  return Array.isArray(id) ? `(${id.map((part) => String(part)).join(", ")})` : String(id);
+}
 
 /** The part of a model class nested attributes reach for. */
 interface NestedModel {
@@ -3070,6 +3095,15 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
      * ids became an `IN` and `first()` took whatever came out of it — so a
      * caller expecting two got one, and `find([1, 999])` for a row that does
      * not exist answered with the row that does.
+     *
+     * Under `queryConstraints` an array means the other thing: `find([4, 7])`
+     * is the single row `(account_id: 4, id: 7)`, and a list is an array *of*
+     * arrays. The overloads below cannot say so — the key's arity is a runtime
+     * value and the return type would have to depend on it — so a composite
+     * `find` of one id types as an array and needs a cast at the call site.
+     * The runtime is the authority here, which is the one place a type and a
+     * behaviour are allowed to disagree only because the type cannot be
+     * written.
      */
     static async find<M extends typeof BaseModel>(this: M, id: unknown): Promise<InstanceType<M>>;
     static async find<M extends typeof BaseModel>(
@@ -3080,32 +3114,45 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       this: M,
       id: unknown,
     ): Promise<InstanceType<M> | InstanceType<M>[]> {
-      if (!Array.isArray(id)) {
-        const record = await this.all()
-          .where({ [this.primaryKey]: id })
-          .first();
+      const constraints = this.queryConstraintsList();
+      const key: PrimaryKey = constraints.length === 1 ? (constraints[0] as string) : constraints;
+
+      // What counts as "several ids" depends on the key. Under a single key an
+      // array is a list; under a composite one `[4, 7]` is a single id and only
+      // an array *of* arrays is a list. Reading `[4, 7]` the first way is the
+      // failure this replaced: it became an `IN` on the first key column alone,
+      // matching every tenant's row 4 and row 7 and returning them as two.
+      if (!expectsMultipleIds(key, id)) {
+        const record = await this.all().where(whereHashFor(key, id)).first();
 
         if (!record) {
           throw new RecordNotFound(
-            `Could not find ${this.name} with ${this.primaryKey} = ${String(id)}`,
+            `Could not find ${this.name} with ${String(key)} = ${describeId(id)}`,
           );
         }
 
         return record as InstanceType<M>;
       }
 
-      // Asking for none of them is not an error, and does not need a query.
-      if (id.length === 0) return [];
+      const ids = id as readonly unknown[];
 
-      const found = await this.all()
-        .where({ [this.primaryKey]: id })
-        .toArray();
+      // Asking for none of them is not an error, and does not need a query.
+      if (ids.length === 0) return [];
+
+      // One `IN` where the key is a single column, and a chain of ORs where it
+      // is not — a composite key has no portable tuple `IN`, and the OR is the
+      // form every adapter here plans the same way.
+      const scope = composite(key)
+        ? ids
+            .map((one) => this.all().where(whereHashFor(key, one)))
+            .reduce((left, right) => left.or(right))
+        : this.all().where({ [key as string]: ids });
+
+      const found = await scope.toArray();
 
       const byId = new Map(
         found.map((record) => [
-          // Compared as strings: an id off the database is a number and one
-          // out of a URL is not, and `find(["4"])` is the ordinary case.
-          String((record as unknown as Record<string, unknown>)[this.primaryKey]),
+          idKey(idFor(record as unknown as Record<string, unknown>, key)),
           record,
         ]),
       );
@@ -3113,13 +3160,13 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
       // Rails answers in the order the ids were given rather than the order
       // the database returns them, which is what makes `find(ids)` usable for
       // rebuilding a list somebody has already sorted.
-      const ordered = id.map((one) => byId.get(String(one))).filter(Boolean);
+      const ordered = ids.map((one) => byId.get(idKey(one))).filter(Boolean);
 
-      if (ordered.length !== id.length) {
+      if (ordered.length !== ids.length) {
         throw new RecordNotFound(
-          `Could not find all ${this.name} records with ${this.primaryKey}: ` +
-            `(${id.map((one) => String(one)).join(", ")}) ` +
-            `(found ${ordered.length} results, but was looking for ${id.length}).`,
+          `Could not find all ${this.name} records with ${String(key)}: ` +
+            `(${ids.map((one) => describeId(one)).join(", ")}) ` +
+            `(found ${ordered.length} results, but was looking for ${ids.length}).`,
         );
       }
 
