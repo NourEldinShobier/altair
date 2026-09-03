@@ -26,9 +26,9 @@
  *   its neighbours. `content_for` is `provide` and `yieldContent`, because
  *   writing and reading through one name is a Ruby-block trick with no
  *   JavaScript spelling. ActionMailbox's one missing name, `routing`, is
- *   `MailboxRouter.route`. The sixteen of these that are one name for one name
- *   are in `ALIASES` below, each with the file it was checked against; the
- *   rest are one-to-many and have nowhere to be written down but here.
+ *   `MailboxRouter.route`. The twenty-one that are one name for one name are
+ *   in `ALIASES` below, each with the file it was checked against; the rest
+ *   are one-to-many and have nowhere to be written down but here.
  * - **Rails internals.** `addLeftAssociation`, `typeCastForDatabase`,
  *   `attributesBuilder`. Public in the sense that Ruby has no private, not in
  *   the sense that anybody calls them. The ones Rails marks `# :nodoc:` are no
@@ -55,13 +55,13 @@
  * to add second names for things that already work. That is worth saying
  * plainly, because 96% reads like four points of work left and it is not.
  *
- * Every one of the 126 was matched to the Rails line that defines it. Of
- * those, 47 have an RDoc comment above them — Rails documenting them as API —
- * and each of those 47 was read: every one is in a bullet above. The other 79
- * have no comment at all, which is the weaker form of the signal `# :nodoc:`
- * gives, and they were read in batches by the file that defines them rather
- * than one at a time. None of the 126 turned out to be a feature a person
- * could want and could not have here.
+ * Every remaining name was matched to the Rails line that defines it. The
+ * ones Rails documents with an RDoc comment above the `def` — its own
+ * statement that this is API — were read one at a time, and every one of them
+ * is accounted for in a bullet above. The rest have no comment at all, which
+ * is the weaker form of the signal `# :nodoc:` gives, and were read in batches
+ * by the file that defines them. None of them turned out to be a feature a
+ * person could want and could not have here.
  *
  * What is left is in `WIRING.md`: whether the code that exists is reachable.
  */
@@ -407,6 +407,27 @@ const ALIASES: Record<string, string> = {
   // Rails swaps the digest by handing over a class; there is no class to hand
   // over here, so it takes the algorithm's name.
   hashDigestClass: "setHashDigestAlgorithm", // packages/support/src/digest.ts
+
+  // Rails has both because its plain `subscribe` hands the block wall-clock
+  // times, which jump when NTP or a daylight-saving change moves the clock,
+  // and a duration computed across one of those is wrong. `subscribe` here
+  // times with `performance.now()` and always has, so the guarantee
+  // `monotonic_subscribe` exists to offer is the only one on offer.
+  monotonicSubscribe: "subscribe", // packages/support/src/notifications.ts
+
+  // Same decision, asked the other way round: whether this user agent is one
+  // `allowBrowser` turns away.
+  blocked: "browserAllowed", // packages/controller/src/allow_browser.ts
+
+  // Rails wraps a Rack response for assertions with a factory; here the class
+  // is constructed directly, because it needs the already-read body and a
+  // factory that cannot get it would be a factory that lies.
+  fromResponse: "TestResponse", // packages/testing/src/request.ts
+
+  // Generated per flash type, like the collection id readers above:
+  // `flash.alert` exists because `alert` is in the list, so the list is what
+  // the reader should be sent to.
+  alert: "flashTypes", // packages/controller/src/controller.ts
 };
 
 console.log("component        rails   ours   covered   missing (a sample)");
