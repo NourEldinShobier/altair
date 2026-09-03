@@ -128,7 +128,10 @@ describe("deleting by pattern", () => {
    * reporting success.
    */
   it("refuses on a store that cannot list its keys", async () => {
-    const blind = { ...cache, keys: undefined } as unknown as MemoryStore;
+    // Own properties only, which is the point: the store keeps its methods on
+    // the prototype, so `delete` on the instance is a no-op and the test would
+    // pass for the wrong reason.
+    const blind = Object.assign({}, cache, { keys: undefined }) as unknown as MemoryStore;
 
     await expect(deleteMatched(blind, /x/)).rejects.toThrow(/cannot list its keys/);
   });

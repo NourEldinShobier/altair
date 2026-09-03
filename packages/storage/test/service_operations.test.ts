@@ -87,7 +87,9 @@ describe("serviceDeletePrefixed", () => {
     // Built without a keys method rather than deleting one: FakeService keeps
     // its methods on the prototype, so `delete` on the instance is a no-op and
     // the test would pass for the wrong reason.
-    const listless = { ...new FakeService(), keys: undefined } as unknown as StorageService;
+    const listless = Object.assign({}, new FakeService(), {
+      keys: undefined,
+    }) as unknown as StorageService;
 
     await expect(serviceDeletePrefixed(listless, "x")).rejects.toThrow(/cannot list its keys/);
   });

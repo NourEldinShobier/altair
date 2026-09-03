@@ -47,9 +47,11 @@ export function derivePartialPath(record: unknown): string {
     throw new TypeError("Cannot work out a partial for null.");
   }
 
-  const declared = (record as Partialable).toPartialPath;
+  const partialable = record as Partialable;
 
-  if (typeof declared === "function") return declared.call(record);
+  // Called as a method rather than read and re-bound, so `this` is whatever
+  // it should be without anybody having to say so.
+  if (typeof partialable.toPartialPath === "function") return partialable.toPartialPath();
 
   const name = (record as Partialable).constructor?.name;
 

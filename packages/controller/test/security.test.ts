@@ -35,10 +35,14 @@ const secrets = new Secrets(SECRET);
 
 function request(init: RequestInit & { cookie?: string } = {}): Request {
   const { cookie, ...rest } = init;
-  return new Request("http://test.host/posts", {
-    ...rest,
-    headers: { ...(cookie ? { cookie } : {}), ...rest.headers },
-  });
+  // Through `Headers` rather than an object spread: `HeadersInit` is also a
+  // `Headers` and a list of pairs, and neither of those spreads into an
+  // object — the first to nothing, the second to a header named `0`.
+  const headers = new Headers(rest.headers);
+
+  if (cookie !== undefined) headers.set("cookie", cookie);
+
+  return new Request("http://test.host/posts", { ...rest, headers });
 }
 
 function jarFor(cookie?: string): CookieJar {

@@ -269,7 +269,10 @@ export abstract class ActiveModel {
     // The declared ones are not own properties — they live behind an accessor
     // — so spreading alone would miss exactly the attributes that were
     // declared most carefully.
-    return { ...declared, ...this } as Record<string, unknown>;
+    // `Object.assign` onto a fresh object rather than a spread of `this`: the
+    // same own enumerable properties, and it says plainly that a plain record
+    // is what is being built rather than a copy of the model.
+    return Object.assign({}, declared, this) as Record<string, unknown>;
   }
 
   assign(values: Record<string, unknown>): void {

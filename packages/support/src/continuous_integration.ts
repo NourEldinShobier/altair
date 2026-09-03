@@ -72,7 +72,11 @@ export class ContinuousIntegration {
 
   constructor(options: CiOptions = {}) {
     this.#run = options.run ?? notConfigured;
-    this.#write = options.write ?? ((line) => void console.log(line));
+    this.#write =
+      options.write ??
+      ((line) => {
+        console.log(line);
+      });
     this.#clock = options.clock ?? (() => performance.now());
     this.#failFast = options.failFast ?? false;
     this.#colour = options.colour ?? colorizeLogging();

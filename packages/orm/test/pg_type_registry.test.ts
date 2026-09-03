@@ -205,7 +205,7 @@ describe("turning pg_type rows into types", () => {
       row({ oid: 2, typname: "b", typelem: 1 }),
     ]);
 
-    expect(initializer.pendingOids().sort()).toEqual([1, 2]);
+    expect(initializer.pendingOids().sort((a, b) => a - b)).toEqual([1, 2]);
   });
 
   it("reports what it registered", () => {
