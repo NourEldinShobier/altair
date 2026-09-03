@@ -9,6 +9,8 @@
  * bindings, then boot, then the app starts, then it terminates.
  */
 
+import cluster from "node:cluster";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import {
   errors,
@@ -137,6 +139,10 @@ export class Application {
   #queryLog: Subscription | undefined;
   #connection: Connection | undefined;
   #booted = false;
+  /** The forked workers, when this process is a supervisor. */
+  #workers: import("node:cluster").Worker[] = [];
+  /** Whether `stop` is running, so a killed worker is not restarted. */
+  #stopping = false;
   #server: { stop: (closeActive?: boolean) => void } | undefined;
   #onError: ErrorHandler | undefined;
 
@@ -530,10 +536,28 @@ export class Application {
     return new Response("Internal Server Error", { status });
   }
 
-  /** Boots if needed, runs the start phase, and serves. */
+  /**
+   * Boots if needed, runs the start phase, and serves.
+   *
+   * With `server.workers` above one this process becomes a supervisor: it
+   * forks that many workers, serves nothing itself, and replaces any worker
+   * that dies. `node:cluster` does the balancing — the supervisor accepts
+   * connections and hands the file descriptor to a worker, round-robin.
+   *
+   * Cluster rather than `Bun.serve`'s `reusePort`, which is the other way to
+   * share a port. `reusePort` is a Linux-only socket option that Windows and
+   * macOS silently *ignore* — the same code would run four unbalanced servers
+   * on a developer's machine and behave differently in production, which is
+   * the worst property a concurrency setting can have.
+   */
   async listen(
     port: number = this.config.server.port,
+    options: { workers?: number | "auto" } = {},
   ): Promise<{ port: number; stop: () => void }> {
+    const workers = workerCount(options.workers ?? this.config.server.workers);
+
+    if (workers > 1 && cluster.isPrimary) return await this.#supervise(port, workers);
+
     await this.boot();
     for (const provider of this.providers) await provider.start?.(this);
 
@@ -547,11 +571,64 @@ export class Application {
     });
 
     this.#server = server;
+
+    // Tells the supervisor this worker is serving. Cluster's own `listening`
+    // event does not fire for `Bun.serve` — it does for `node:http` — so
+    // waiting on that would wait for ever while the workers served traffic.
+    process.send?.({ altair: "listening", port: Number(server.port ?? port) });
+
     return { port: Number(server.port ?? port), stop: () => void this.stop() };
+  }
+
+  /**
+   * Forks the workers and keeps them alive. Returns once all are serving, so
+   * a caller that starts the server and then makes a request does not race it.
+   */
+  async #supervise(port: number, workers: number): Promise<{ port: number; stop: () => void }> {
+    // Every worker re-runs the entry file, so each boots for itself. Rails
+    // preloads and forks; this cannot, because a forked Bun process does not
+    // inherit the parent's heap. The cost is boot time paid per worker; the
+    // benefit is that a worker restarted an hour later is identical to one
+    // started at boot rather than a copy of a heap that has since drifted.
+    this.#workers = Array.from({ length: workers }, () => cluster.fork());
+
+    const serving = new Promise<number>((resolve) => {
+      let listening = 0;
+      let resolved = false;
+
+      for (const worker of this.#workers) {
+        worker.on("message", (message: { altair?: string; port?: number }) => {
+          if (message.altair !== "listening" || resolved) return;
+          if ((listening += 1) < workers) return;
+
+          resolved = true;
+          resolve(message.port ?? port);
+        });
+      }
+    });
+
+    // A worker that dies is replaced, which is the whole reason to have a
+    // supervisor rather than four processes started by a shell. Not while
+    // stopping: there, an exit is the point.
+    cluster.on("exit", (dead) => {
+      if (this.#stopping) return;
+
+      this.logger.error(`worker ${String(dead.process.pid)} died; starting another`);
+      this.#workers = [...this.#workers.filter((one) => one !== dead), cluster.fork()];
+    });
+
+    return { port: await serving, stop: () => void this.stop() };
   }
 
   /** Runs the terminate phase and closes the connection. */
   async stop(): Promise<void> {
+    // Set before the workers are killed, so the `exit` handler above reads a
+    // deliberate shutdown as one rather than restarting everything it kills.
+    this.#stopping = true;
+
+    for (const worker of this.#workers) worker.kill();
+    this.#workers = [];
+
     this.#server?.stop(true);
     this.#server = undefined;
 
@@ -564,6 +641,19 @@ export class Application {
     this.#connection = undefined;
     this.#booted = false;
   }
+}
+
+/**
+ * How many workers a setting asks for.
+ *
+ * `availableParallelism` rather than `cpus().length`: in a container it
+ * reports the cores the cgroup actually allows, so a four-core limit does not
+ * start thirty-two workers that spend their time preempting each other.
+ */
+export function workerCount(setting: number | "auto" | undefined): number {
+  if (setting === "auto") return Math.max(1, availableParallelism());
+
+  return setting === undefined || setting < 1 ? 1 : Math.floor(setting);
 }
 
 /** Builds an application. The entry point an app's `bin/server` calls. */
