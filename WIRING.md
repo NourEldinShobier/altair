@@ -27,7 +27,7 @@ unused beside it. A `where` given a range bound it as an object and matched
 nothing; a `where` given `[1, null]` dropped the null rows. One wired export
 hid both.
 
-That number is not a defect count. Three different things land in the list.
+That number is not a defect count. Four different things land in the list.
 
 ## Public API, by design
 
@@ -45,21 +45,47 @@ from. A middleware or a store an application installs — `permissions_policy`,
 `session_store` — really is public API. A module the framework should be
 calling on every request is not.
 
+## An export that should be private
+
+Used only inside its own module, and exported by habit. `isEachValidator` is
+one: the validator runner calls it and nothing else should. `SQLITE_GENERATED`
+is another. Harmless, and worth narrowing when the file is next touched — but
+`--dead` is the mode that separates these out, because an export used all over
+its own file is public API and an export nothing reads at all is either this
+or a loose end.
+
 ## A second implementation of something already done another way
 
 These are worth attention, because two implementations means one of them is
 what runs and the other is what gets maintained.
 
-| Unwired                                                     | What actually runs                            |
-| ----------------------------------------------------------- | --------------------------------------------- |
-| `orm/preloader.ts`, `orm/preload_batching.ts`               | `preloadAssociation` in `orm/associations.ts` |
-| `orm/binds.ts`, `orm/select_statements.ts`, `orm/arel.ts`\* | `relation.ts` builds SQL strings directly     |
-| `orm/generated_methods.ts`                                  | nothing generates methods through it          |
-| `orm/attribute_methods.ts`                                  | attribute handling inside `model.ts`          |
+| Unwired                                                     | What actually runs                                                  |
+| ----------------------------------------------------------- | ------------------------------------------------------------------- |
+| `orm/preloader.ts`, `orm/preload_batching.ts`               | `preloadAssociation` in `orm/associations.ts`                       |
+| `orm/binds.ts`, `orm/select_statements.ts`, `orm/arel.ts`\* | `relation.ts` builds SQL strings directly                           |
+| `orm/generated_methods.ts`                                  | nothing generates methods through it                                |
+| `orm/attribute_methods.ts`                                  | attribute handling inside `model.ts`                                |
+| `orm/model_naming.ts`                                       | `tableize(this.name)` in `model.ts`, and `indexName` in `schema.ts` |
+| `orm/inheritance.ts`                                        | STI and touch inside `model.ts`                                     |
+| `orm/connection_leasing.ts`                                 | `capabilities.ts` for the `supports*` half                          |
+| `controller/security_headers.ts`                            | `csrf.ts`, `csp.ts`, `forceSsl()` in `middleware.ts`                |
 
 None of these is wrong. Each was ported against its Rails counterpart and each
 has its own tests. The question they raise is which one should survive, and
 that is a decision rather than a bug.
+
+Read one before believing it belongs here. Each row above cost a real read and
+two of them nearly went the other way: `forceSsl` looked like it redirected
+without sending HSTS, and does send it; `model_naming.ts` looked like a rival
+table-name derivation, and is a superset whose extra half — prefixes,
+suffixes, `pluralizeTableNames: false` — has no configuration surface to reach
+it, so it is an absent feature rather than a duplicate. A one-line dismissal
+is a hypothesis.
+
+The dangerous shape is the module that looks like a duplicate and is a missing
+piece. `composite_key.ts` read as a rival to `model.ts`'s `queryConstraints`
+and was the half `find` needed; the two disagreed for as long as nobody
+checked.
 
 ## Joined up since
 
@@ -113,6 +139,26 @@ that is a decision rather than a bug.
   API for something already typed — and the rest is still unread. A module
   that collects unrelated helpers cannot be classified as a whole, which is
   the argument for splitting it.
+- **`orm/composite_key.ts`** was the sharpest case so far, because it looked
+  like a rival to the `queryConstraints` already in `model.ts` and was the half
+  that finished it. `update`, `delete` and `reload` honoured a composite key
+  and `find` alone still went to `primaryKey`, so a tenanted model wrote to the
+  right row and read the wrong one: `find([4, 7])` means one row and became
+  `WHERE account_id IN (4, 7)`, every account 4 row and every account 7 row,
+  from accounts the caller never named. `expectsMultipleIds` was already there
+  and already uncalled — under a single key an array is a list, under a
+  composite one only an array _of_ arrays is — and `whereHashFor` is the piece
+  that was genuinely missing.
+
+## A gap the audit found by standing next to it
+
+Not every finding is a module. `where` never serialized its bindings while
+`create` always had, so a read and a write of one column disagreed about what
+its values are: `where({ at: aDate })` handed a Date to the driver, which
+refuses it outright, and finding a record by the timestamp just written to it
+threw. `serialize` was exported from `model.ts` and called by `updateAll` and
+`touch` — two callers where there should have been three, which no report
+counts, because the module is wired and the export is used.
 
 ## A feature ported ahead of the thing it serves
 
@@ -127,12 +173,14 @@ It matches exported names, not import paths, because a package's `index.ts`
 re-exports everything and cross-package callers name the symbol either way. An
 `index.ts` is never counted as a caller: re-exporting a thing is not using it.
 
-Two false-positive modes are handled, and both were found by checking a result
-by hand rather than by trusting it. Comments are stripped, because
+Three false-positive modes are handled, and each was found by checking a
+result by hand rather than by trusting it. Comments are stripped, because
 `preloader.ts` read as called on the strength of another module _mentioning it
-in a sentence_. And a name the other module declares for itself is discounted,
-because `relation.ts` has its own `WhereClause` interface and `arel.ts` exports
-one too.
+in a sentence_. Module specifiers are blanked, because `introspect.ts` exports
+an `introspect` and every file importing anything from it carries the string
+`"./introspect.js"`. And a name the other module declares for itself is
+discounted, because `relation.ts` has its own `WhereClause` interface and
+`arel.ts` exports one too.
 
 \* One mode is left. A _method_ of the same name still reads as a call:
 `relation.ts` has a `toSql()` method and `arel.ts` exports a `toSql`, so
