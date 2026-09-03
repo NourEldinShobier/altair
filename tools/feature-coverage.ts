@@ -22,13 +22,13 @@
  *
  * - **A different shape for the same thing**, and this is most of it. Rails'
  *   view layer is helper functions and this one is JSX components, so
- *   `link_to` is `<Link>`, `form_with` is `<FormWith>`, and `form_tag`'s
- *   family is `TextFieldTag` and its neighbours. `content_for` is `provide`
- *   and `yieldContent`, because writing and reading through one name is a
- *   Ruby-block trick with no JavaScript spelling. `left_outer_joins` is
- *   `leftJoins`. `establish_connection` and `configurations` are
- *   `configureDatabases`. ActionMailbox's one missing name, `routing`, is
- *   `MailboxRouter.route`.
+ *   `form_with` is `<FormWith>` and `form_tag`'s family is `TextFieldTag` and
+ *   its neighbours. `content_for` is `provide` and `yieldContent`, because
+ *   writing and reading through one name is a Ruby-block trick with no
+ *   JavaScript spelling. ActionMailbox's one missing name, `routing`, is
+ *   `MailboxRouter.route`. The sixteen of these that are one name for one name
+ *   are in `ALIASES` below, each with the file it was checked against; the
+ *   rest are one-to-many and have nowhere to be written down but here.
  * - **Rails internals.** `addLeftAssociation`, `typeCastForDatabase`,
  *   `attributesBuilder`. Public in the sense that Ruby has no private, not in
  *   the sense that anybody calls them. The ones Rails marks `# :nodoc:` are no
@@ -37,16 +37,27 @@
  *   we scored, so it moved the ratio by half a point and the noise by a lot
  *   more. What is left in this bullet is the plumbing Rails never got round to
  *   marking.
- * - **Scraper artifacts**, about a dozen: `build_`, `create_`, `reload_` and
- *   `reset_` are the halves of interpolated method names, and `pp`, `self`,
- *   `str` and `fmod` are Ruby.
+ * - **Ruby, not a feature.** `try`, `to_ary`, `pop`, `flatten`,
+ *   `symbolize_keys` and the `with_indifferent_access` family, which a
+ *   language with symbols needs and this one does not; `silence_warnings` and
+ *   its neighbours, which are `$VERBOSE`; `method_symbol` and
+ *   `request_method_symbol`, which are the same string twice.
+ * - **Scraper artifacts**, now two: `pp` and `fmod` are real Ruby methods
+ *   nobody would want here, and both stay counted against us, which is the
+ *   honest way for them to read. The interpolated halves — `build_`,
+ *   `create_`, `reload_`, `reset_` — and the `self` and `str` that came from
+ *   `def self.[]` and `def str.inspect` are no longer counted, because Rails
+ *   defines no method by any of those names.
  * - **Deliberately not ported.** `form_for` is Rails' own legacy form
  *   builder, superseded by `form_with` in its documentation.
  *
  * So the number is close to its ceiling, and the way to raise it from here is
  * to add second names for things that already work. That is worth saying
- * plainly, because 95% reads like five points of work left and it is not.
- * What is left is in `WIRING.md`: whether the code that exists is reachable.
+ * plainly, because 96% reads like four points of work left and it is not: all
+ * 126 remaining names were opened and read against the Rails line that defines
+ * them, and the count of them that turned out to be a feature a person could
+ * want and could not have here was zero. What is left is in `WIRING.md`:
+ * whether the code that exists is reachable.
  */
 
 import { Glob } from "bun";
