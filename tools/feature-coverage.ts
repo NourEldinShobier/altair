@@ -53,11 +53,17 @@
  *
  * So the number is close to its ceiling, and the way to raise it from here is
  * to add second names for things that already work. That is worth saying
- * plainly, because 96% reads like four points of work left and it is not: all
- * 126 remaining names were opened and read against the Rails line that defines
- * them, and the count of them that turned out to be a feature a person could
- * want and could not have here was zero. What is left is in `WIRING.md`:
- * whether the code that exists is reachable.
+ * plainly, because 96% reads like four points of work left and it is not.
+ *
+ * Every one of the 126 was matched to the Rails line that defines it. Of
+ * those, 47 have an RDoc comment above them — Rails documenting them as API —
+ * and each of those 47 was read: every one is in a bullet above. The other 79
+ * have no comment at all, which is the weaker form of the signal `# :nodoc:`
+ * gives, and they were read in batches by the file that defines them rather
+ * than one at a time. None of the 126 turned out to be a feature a person
+ * could want and could not have here.
+ *
+ * What is left is in `WIRING.md`: whether the code that exists is reachable.
  */
 
 import { Glob } from "bun";
