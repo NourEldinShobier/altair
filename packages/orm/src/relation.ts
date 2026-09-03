@@ -190,6 +190,30 @@ function bracketed(sql: string): string {
   return /\bor\b/i.test(sql) ? `(${sql})` : sql;
 }
 
+/**
+ * One value back from an aggregate, as a number where it is one.
+ *
+ * PostgreSQL hands back `BIGINT` and `NUMERIC` as strings, so a sum over an
+ * integer column arrives as `"10"` and has to be coerced or every total on
+ * that adapter is a string. That coercion used to be unconditional, which
+ * made `MAX` over a datetime or a text column `NaN`.
+ *
+ * A text column whose values happen to be digits still comes back as a
+ * number, which is the one case this reads wrongly. Knowing better needs the
+ * column's declared type, and answering `NaN` for every date was the worse
+ * half of that trade.
+ */
+export function scalarValue(value: unknown): unknown {
+  if (value === undefined) return null;
+  // An empty string is not a zero. `Number("")` is 0, so a MIN over a text
+  // column holding one would answer with a number nobody stored.
+  if (typeof value !== "string" || value.trim() === "") return value;
+
+  const asNumber = Number(value);
+
+  return Number.isNaN(asNumber) ? value : asNumber;
+}
+
 function joinClauses(clauses: WhereClause[]): { sql: string; bindings: unknown[] } | undefined {
   if (clauses.length === 0) return undefined;
 
@@ -1255,11 +1279,14 @@ export class Relation<T> implements PromiseLike<T[]> {
    */
   async collectionCacheKey(timestampColumn = "updated_at"): Promise<string> {
     const table = this.#source.tableName;
-    // One statement, and the maximum read raw. `maximum` returns a number, so
-    // a datetime column comes back NaN through it — which made the timestamp
-    // half of this key contribute nothing at all, and the key change only when
-    // the count did. Counting and taking the maximum together also costs one
+    // One statement, counting and taking the maximum together, which costs one
     // round trip rather than two.
+    //
+    // It used to be written this way for a second reason: `maximum` coerced to
+    // a number, so a datetime column came back NaN through it and the
+    // timestamp half of this key contributed nothing — the key changed only
+    // when the count did. That was worked around here instead of being fixed
+    // where it was, and every other caller of `maximum` kept the NaN.
     const { sql, bindings } = this.toSql();
     const quoted = this.connection.quote(timestampColumn);
 
@@ -1435,7 +1462,7 @@ export class Relation<T> implements PromiseLike<T[]> {
    * Rails spells these sum/average/minimum/maximum. They ignore order, limit
    * and offset, which would otherwise change the answer rather than the rows.
    */
-  async #aggregate(fn: string, column: string): Promise<number | null> {
+  async #aggregate(fn: string, column: string): Promise<unknown> {
     if (this.#none) return null;
 
     this.#refuseGrouped(fn.toLowerCase(), `${fn.toLowerCase()}ByGroup("${column}")`);
@@ -1446,22 +1473,46 @@ export class Relation<T> implements PromiseLike<T[]> {
       `${fn}(${this.connection.quote(column.split(".").pop() as string)})`,
     );
 
-    return value === null || value === undefined ? null : Number(value);
+    return scalarValue(value);
   }
 
   async sum(column: string): Promise<number> {
-    return (await this.#aggregate("SUM", column)) ?? 0;
+    return Number(await this.#aggregate("SUM", column)) || 0;
   }
 
   async average(column: string): Promise<number | null> {
-    return await this.#aggregate("AVG", column);
+    const value = await this.#aggregate("AVG", column);
+
+    return value === null ? null : Number(value);
   }
 
-  async minimum(column: string): Promise<number | null> {
+  /**
+   * The smallest value in a column. Rails' `minimum`.
+   *
+   * Answers in the column's own terms rather than as a number, because a
+   * minimum is only a number when the column is. This used to coerce, so
+   * `maximum("created_at")` — the ordinary way to ask when a set of records
+   * was last touched — answered `NaN`, and so did a minimum over any text
+   * column. NaN is worse than an error: it survives arithmetic, compares
+   * unequal to itself, and prints as `null` through `JSON.stringify`.
+   *
+   * Two overloads rather than one defaulted type parameter, because a
+   * parameter that appears only in the return position is inferred from
+   * whatever context surrounds the call — inside an `expect(...)` it resolved
+   * to `null` and the assertion stopped compiling. An overload has nothing to
+   * infer. `minimum("price")` is a number, and a column that is not one says
+   * so: `maximum<string>("created_at")`.
+   */
+  async minimum(column: string): Promise<number | null>;
+  async minimum<V>(column: string): Promise<V | null>;
+  async minimum(column: string): Promise<unknown> {
     return await this.#aggregate("MIN", column);
   }
 
-  async maximum(column: string): Promise<number | null> {
+  /** The largest value in a column, in the column's own terms. Rails' `maximum`. */
+  async maximum(column: string): Promise<number | null>;
+  async maximum<V>(column: string): Promise<V | null>;
+  async maximum(column: string): Promise<unknown> {
     return await this.#aggregate("MAX", column);
   }
 
@@ -1481,7 +1532,7 @@ export class Relation<T> implements PromiseLike<T[]> {
     // COUNT(column) counts the rows where it is not null, which is the whole
     // difference from COUNT(*) and the reason Rails takes a column here.
     if (operation === "count") {
-      return column ? ((await this.#aggregate("COUNT", column)) ?? 0) : await this.count();
+      return column ? Number(await this.#aggregate("COUNT", column)) || 0 : await this.count();
     }
 
     if (!column) throw new Error(`calculate("${operation}") needs a column`);
