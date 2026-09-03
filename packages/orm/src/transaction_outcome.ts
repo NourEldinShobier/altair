@@ -25,6 +25,8 @@
  * because from the object's point of view everything is fine.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { type IsolationLevel, checkIsolationLevel } from "./transaction_manager.js";
 
 export type TransactionOutcome =
@@ -154,11 +156,13 @@ export function restorableFromOutcome(state: OutcomeState): boolean {
 
 // --- isolation for a pooled connection -------------------------------------------------
 
+/** The level a block set, and the one the pool was configured with. */
+const scopedLevel = new AsyncLocalStorage<IsolationLevel>();
 let poolLevel: IsolationLevel | undefined;
 
 /** Rails' `pool_transaction_isolation_level`. */
 export function poolTransactionIsolationLevel(): IsolationLevel | undefined {
-  return poolLevel;
+  return scopedLevel.getStore() ?? poolLevel;
 }
 
 export function resetIsolationLevel(): void {
@@ -181,14 +185,13 @@ export async function withPoolTransactionIsolationLevel<T>(
   body: () => Promise<T> | T,
 ): Promise<T> {
   const checked = checkIsolationLevel(level);
-  const held = poolLevel;
-  poolLevel = checked;
 
-  try {
-    return await body();
-  } finally {
-    poolLevel = held;
-  }
+  // Scoped, not swapped. A module-level variable made this the isolation level
+  // of every transaction running beside the block, which is the one setting a
+  // concurrent transaction most needs to be its own: a read-committed
+  // transaction quietly becoming serializable deadlocks, and the reverse loses
+  // the guarantee it was opened for.
+  return await scopedLevel.run(checked, async () => await body());
 }
 
 /**

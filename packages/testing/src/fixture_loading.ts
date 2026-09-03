@@ -21,6 +21,8 @@
  *   exactly the schemas that are most careful.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { cachedFixtures, identify } from "./fixture_set.js";
 
 /** A fixture as written: a label and its columns. */
@@ -169,14 +171,23 @@ export function deletionOrder(
 
 let parsingCache = true;
 
+/** Whether a `withoutParsingCache` block is running here. */
+const withoutCache = new AsyncLocalStorage<boolean>();
+
+function parsingCacheHere(): boolean {
+  return parsingCache && withoutCache.getStore() !== true;
+}
+
 /** Rails' `all_loaded_fixtures` — what the parse cache is currently holding. */
 export function allLoadedFixtures(names: readonly string[]): (FixtureSet | undefined)[] {
-  return names.map((name) => (parsingCache ? (cachedFixtures(name) as FixtureSet) : undefined));
+  return names.map((name) =>
+    parsingCacheHere() ? (cachedFixtures(name) as FixtureSet) : undefined,
+  );
 }
 
 /** Whether the parse cache is in use. */
 export function parsingCacheEnabled(): boolean {
-  return parsingCache;
+  return parsingCacheHere();
 }
 
 /**
@@ -187,16 +198,10 @@ export function parsingCacheEnabled(): boolean {
  * startup, so turning it off is deliberately scoped rather than global.
  */
 export async function withoutParsingCache<T>(body: () => Promise<T> | T): Promise<T> {
-  const held = parsingCache;
-  parsingCache = false;
-
-  try {
-    return await body();
-  } finally {
-    // In a `finally`, or one test that threw makes every later test re-parse
-    // every file — a suite that gets slower for a reason nobody can see.
-    parsingCache = held;
-  }
+  // Scoped: turning the cache off is a decision about this block, and a
+  // module-level flag made every test running beside it re-parse every file.
+  // There is nothing to put back, so a body that throws leaves nothing off.
+  return await withoutCache.run(true, async () => await body());
 }
 
 // --- reaching them from a test ---------------------------------------------

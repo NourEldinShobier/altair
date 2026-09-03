@@ -29,6 +29,8 @@
  * has said where the document came from.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /** Thrown when a document cannot be read, or must not be. */
 export class XmlParseError extends Error {
   constructor(message: string) {
@@ -485,8 +487,11 @@ const DEFAULT_BACKEND: XmlBackend = { name: "altair", parse: fromXml };
 
 let current: XmlBackend = DEFAULT_BACKEND;
 
+/** The parser a `withBackend` block chose, which is not the process's. */
+const scopedBackend = new AsyncLocalStorage<XmlBackend>();
+
 export function backend(): XmlBackend {
-  return current;
+  return scopedBackend.getStore() ?? current;
 }
 
 export function setBackend(replacement: XmlBackend): void {
@@ -501,14 +506,7 @@ export function setBackend(replacement: XmlBackend): void {
  * test that did nothing wrong.
  */
 export function withBackend<T>(replacement: XmlBackend, body: () => T): T {
-  const previous = current;
-  current = replacement;
-
-  try {
-    return body();
-  } finally {
-    current = previous;
-  }
+  return scopedBackend.run(replacement, body);
 }
 
 export function resetBackend(): void {
