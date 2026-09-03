@@ -22,6 +22,20 @@ import {
   toPlainText,
 } from "../src/attachables.js";
 
+/**
+ * The same message with its last few characters changed.
+ *
+ * Each character is flipped rather than replaced by a fixed string, which is
+ * not fussiness: a signature is hex, and `slice(0, -3) + "aaa"` leaves a
+ * signature ending in `aaa` untouched. That is one run in 4096, and it came
+ * back as a test that failed once and then passed seven times.
+ */
+function edited(message: string, count = 3): string {
+  const tail = message.slice(-count).replaceAll(/./g, (one) => (one === "a" ? "b" : "a"));
+
+  return message.slice(0, -count) + tail;
+}
+
 /** A record, near enough: an id, a class name, and something to show. */
 class Person {
   constructor(
@@ -123,7 +137,7 @@ describe("reading a placeholder back", () => {
   it("refuses a tampered one", async () => {
     const signed = signedIdFor(ada());
 
-    expect(await fromAttachableSgid(`${signed.slice(0, -4)}AAAA`)).toBeNull();
+    expect(await fromAttachableSgid(edited(signed))).toBeNull();
   });
 
   /**
