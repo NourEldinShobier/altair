@@ -66,13 +66,62 @@ export class UnsafeRedirect extends Error {
  * Parsed, not matched. Every bypass here works by writing a URL a string check
  * reads as relative and a browser reads as absolute.
  */
+/**
+ * Whether a location is literally this host, ignoring what is configured.
+ *
+ * Distinct from `redirectAllowed`, which also permits the hosts an application
+ * named. A caller asking "is this link leaving the site" — to add
+ * `rel="noopener"`, to mark it in the interface — wants this one: a redirect
+ * being permitted somewhere else is not a reason to call another host our own.
+ */
 export function sameHost(location: string, host: string | undefined): boolean {
-  const parsed = parseLocation(location, host);
+  return hostAllowed(location, { host });
+}
 
-  if (parsed === "relative") return true;
-  if (parsed === undefined) return false;
+/**
+ * The hosts an application says a redirect may leave for. Rails'
+ * `allowed_redirect_hosts`.
+ *
+ * Configuration, so it belongs to the process: an application knows its own
+ * SSO domain and its own marketing site at boot, and a request does not
+ * discover them.
+ *
+ * The point of the list is that it is *narrower* than `allowOtherHost: true`.
+ * An application redirecting to its own accounts domain has one legitimate
+ * destination, and turning the check off for that call turns it off for a
+ * location that came from a parameter too — which is the whole thing the check
+ * is for. `hostAllowed` has understood `allowedHosts` since it was written and
+ * nothing filled it in, so the only way to permit a second host was to permit
+ * every host.
+ */
+let allowed: readonly string[] = [];
 
-  return host !== undefined && parsed.hostname.toLowerCase() === host.toLowerCase();
+export function configureAllowedRedirectHosts(...hosts: readonly string[]): void {
+  for (const host of hosts) {
+    // Refused rather than normalised. A full URL here reads as working and
+    // matches nothing, so a redirect the application meant to permit is
+    // refused in production and nowhere else.
+    if (/[/:]/.test(host)) {
+      throw new Error(
+        `An allowed redirect host is a host, not a URL: ${JSON.stringify(host)}. Write ` +
+          `"accounts.example.com", not "https://accounts.example.com/".`,
+      );
+    }
+  }
+
+  // Stored as written. `hostAllowed` lower-cases both sides when it compares,
+  // so normalising here would only make the reporter disagree with the
+  // configuration somebody wrote.
+  allowed = [...hosts];
+}
+
+/** Every host a redirect may leave for, beside the one being served. */
+export function allowedRedirectHosts(): readonly string[] {
+  return allowed;
+}
+
+export function resetAllowedRedirectHosts(): void {
+  allowed = [];
 }
 
 /**

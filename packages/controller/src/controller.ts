@@ -22,7 +22,7 @@ import {
   setCallback,
   skipCallback,
 } from "@altair/support";
-import { UnsafeRedirect, sameHost } from "./redirect_safety.js";
+import { allowedRedirectHosts, hostAllowed, UnsafeRedirect } from "./redirect_safety.js";
 import { buildInstrumented, type ProcessActionPayload } from "./instrumentation.js";
 import { filteredParameters, filteredPath } from "./filtered_logging.js";
 import { Parameters } from "./parameters.js";
@@ -171,7 +171,10 @@ export interface RescueHandler {
  * two implementations means having one that is subtly wrong.
  */
 export function redirectAllowed(location: string, request: Request): boolean {
-  return sameHost(location, new URL(request.url).host);
+  return hostAllowed(location, {
+    host: new URL(request.url).host,
+    allowedHosts: allowedRedirectHosts(),
+  });
 }
 
 export class Controller extends Callbacks {
@@ -644,7 +647,10 @@ export class Controller extends Callbacks {
     // "back to where you were" is written everywhere — and how a link from
     // your own domain ends up delivering someone to a copy of your login page.
     if (!init.allowOtherHost && !redirectAllowed(location, this.request)) {
-      throw new UnsafeRedirect(location, [new URL(this.request.url).host]);
+      throw new UnsafeRedirect(location, [
+        new URL(this.request.url).host,
+        ...allowedRedirectHosts(),
+      ]);
     }
 
     // Written only once the redirect is certain to happen.
