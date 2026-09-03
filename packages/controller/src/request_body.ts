@@ -21,6 +21,7 @@
  * can sometimes influence, so none of it is evidence of anything on its own.
  */
 
+import { Current } from "@altair/support";
 import { clientIp } from "./client_ip.js";
 import type { ClientIpOptions } from "./client_ip.js";
 
@@ -157,7 +158,10 @@ export function xmlHttpRequest(request: Request): boolean {
 
 /** The address the connection came from, before any proxy header. Rails' `remote_addr`. */
 export function remoteAddr(request: Request, connectionAddress?: string): string | null {
-  return connectionAddress ?? request.headers.get("x-real-ip");
+  // The observed address before the header, always. `X-Real-Ip` is written by
+  // a proxy in a correct deployment and by anybody at all in the rest of them,
+  // so it is the last resort rather than the first.
+  return connectionAddress ?? Current.peerAddress ?? request.headers.get("x-real-ip");
 }
 
 /** Addresses that are not routable, so a proxy chain entry naming one tells you nothing. */

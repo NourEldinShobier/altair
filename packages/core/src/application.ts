@@ -67,6 +67,14 @@ export interface Provider {
  */
 export interface UpgradeServer {
   upgrade(request: Request, options?: { data?: unknown }): boolean;
+  /**
+   * The peer on the socket. Rails reads it out of `REMOTE_ADDR`.
+   *
+   * Optional because a test hands in a plain object, and because it is the
+   * only thing here that cannot be answered from the request alone — which is
+   * also why it has to come from the server and cannot be worked out later.
+   */
+  requestIP?(request: Request): { address: string } | null;
 }
 
 /**
@@ -351,7 +359,17 @@ export class Application {
       // Every request runs inside its own Current scope, so anything it sets
       // is invisible to the requests running beside it.
       return await Current.run(
-        { request, requestId: request.headers.get("x-request-id") ?? crypto.randomUUID() },
+        {
+          request,
+          requestId: request.headers.get("x-request-id") ?? crypto.randomUUID(),
+          // Observed, not sent, which is what makes it worth carrying: every
+          // other answer to "who is this" comes out of a header the client
+          // wrote. `clientIp` starts from this and walks back through the
+          // proxies the deployment declares; with nothing here it has only
+          // the header, and the file that resolves the chain says at length
+          // why that is the one thing it must not fall back to.
+          peerAddress: server?.requestIP?.(request)?.address,
+        },
         // A query cache per request, and only per request. A page built from
         // partials asks for the current user in the header, the sidebar and
         // the footer, and none of the three can see the other two; held any

@@ -223,6 +223,15 @@ export interface CurrentState {
   action?: string;
   /** The job running, when there is no request. */
   job?: string;
+  /**
+   * The address the connection came from. Rails' `request.ip`.
+   *
+   * Not the client's address — `clientIp` answers that, and the difference is
+   * the whole point. This is the peer on the socket, which nobody can forge
+   * because it is not sent, it is observed. `clientIp` starts here and walks
+   * back through as many proxies as the deployment says it has.
+   */
+  peerAddress?: string;
   user?: unknown;
   [key: string]: unknown;
 }
