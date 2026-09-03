@@ -14,12 +14,15 @@
  * looking for the name. An `index.ts` is never counted as a caller:
  * re-exporting a thing is not using it.
  *
- * A hit here is not automatically a defect. Three things land in the list and
+ * A hit here is not automatically a defect. Four things land in the list and
  * only two of them are problems:
  *
  * - **Public API**, which application code calls and framework code has no
  *   reason to. Every test helper, view component and migration DSL is here,
  *   and correctly so.
+ * - **An export that should be private**, used only inside its own module.
+ *   `isEachValidator` is one: the validator runner calls it and nothing else
+ *   ever should. Harmless, and worth narrowing when the file is next touched.
  * - **A parallel implementation** of something the framework already does
  *   another way. Two implementations of preloading, or of building SQL, means
  *   one of them is what runs and the other is what gets maintained.
@@ -28,12 +31,15 @@
  *
  * Telling those apart needs judgement, so this prints the list and stops.
  *
- * Comments are stripped before the search, and that is not tidiness: this tool
- * reported `preloader.ts` as called because another module *mentioned it in a
- * sentence*. A false positive here is the expensive direction — it claims a
- * module is wired when it is not, which is the exact thing being looked for.
- * A name the other module declares for itself is discounted for the same
- * reason.
+ * Three things are removed before a name is looked for, and each was a real
+ * false positive rather than a precaution. Comments go, because `preloader.ts`
+ * read as called on the strength of another module *mentioning it in a
+ * sentence*. Module specifiers go, because `introspect.ts` exports an
+ * `introspect` and every file importing anything from it carries the string
+ * `"./introspect.js"`. And a name the other module declares for itself is
+ * discounted, because `relation.ts` has its own `WhereClause`. A false
+ * positive is the expensive direction here: it claims a module is wired when
+ * it is not, which is the exact thing being looked for.
  *
  * It is a heuristic where it falls back to names, and says so. Two modules can
  * own the same name, and across a package boundary there is nothing to tell
@@ -60,6 +66,7 @@
  *     bun run tools/unwired-modules.ts --package=orm
  *     bun run tools/unwired-modules.ts --exports
  *     bun run tools/unwired-modules.ts --exports --package=orm
+ *     bun run tools/unwired-modules.ts --dead
  *     bun run tools/unwired-modules.ts --why=orm/src/arel.ts
  */
 
@@ -77,7 +84,10 @@ interface Module {
   path: string;
   package: string;
   exports: string[];
+  /** Comments and module specifiers removed: what a name is looked for in. */
   source: string;
+  /** Comments removed only. Import specifiers are still here to be read. */
+  imports: string;
 }
 
 /**
@@ -102,7 +112,7 @@ function usesOf(all: readonly Module[]): Uses {
   const whole = new Set<string>();
 
   for (const module of all) {
-    for (const [, clause, relative] of module.source.matchAll(RELATIVE_IMPORT)) {
+    for (const [, clause, relative] of module.imports.matchAll(RELATIVE_IMPORT)) {
       const target = resolveImport(module.path, relative as string, all);
 
       if (target === undefined) continue;
@@ -165,7 +175,8 @@ async function modules(): Promise<Module[]> {
       path,
       package: relative.split(/[\\/]/)[0] as string,
       exports,
-      source: withoutComments(source),
+      source: searchable(source),
+      imports: withoutProse(source),
     });
   }
 
@@ -173,14 +184,31 @@ async function modules(): Promise<Module[]> {
 }
 
 /**
- * The source with its prose removed.
+ * The source with everything that is not code removed.
  *
  * Block comments go entirely; a line comment goes only when it starts its own
  * line. Anything after code on the same line is left alone, because a `//`
  * inside a string is far more often a URL than a comment, and cutting there
  * would corrupt the code this is searching.
+ *
+ * Module specifiers go too, and that one is not cosmetic. `introspect.ts`
+ * exports an `introspect`, and every file importing *anything* from it carries
+ * the string `"./introspect.js"` — so the name matched the path, and the
+ * export read as used by files that never touched it. An export named after
+ * its own module is common enough that this was hiding a class of finding.
  */
-function withoutComments(source: string): string {
+function searchable(source: string): string {
+  return withoutProse(source).replaceAll(/\bfrom\s+"[^"]*"/g, 'from ""');
+}
+
+/**
+ * Comments gone, module specifiers kept.
+ *
+ * The import reader needs the specifiers — they are how it knows which file a
+ * name came from — so the two views are separate rather than one stripped
+ * source used for both.
+ */
+function withoutProse(source: string): string {
   return source.replaceAll(/\/\*[\s\S]*?\*\//g, " ").replaceAll(/^[ \t]*\/\/.*$/gm, "");
 }
 
@@ -223,7 +251,7 @@ function usedElsewhere(module: Module, name: string, all: readonly Module[], use
 
 /** The cross-package fallback: the name, in a module of a different package. */
 function namedInAnotherPackage(module: Module, name: string, all: readonly Module[]): boolean {
-  const wanted = new RegExp(String.raw`${escape(name)}`);
+  const wanted = new RegExp(String.raw`\b${escape(name)}\b`);
 
   return all.some(
     (other) =>
@@ -237,6 +265,23 @@ function declares(module: Module, name: string): boolean {
     `(?:^|\\n)\\s*(?:export\\s+)?(?:declare\\s+)?(?:abstract\\s+)?(?:async\\s+)?` +
       `(?:function|class|const|let|var|interface|type|enum)\\s+${escape(name)}\\b`,
   ).test(module.source);
+}
+
+/**
+ * Whether the module that exports this name also uses it, which splits the
+ * `--exports` list in two. `beginningOfDay` is called all over `dates.ts` and
+ * exported for applications; `SQLITE_GENERATED` is exported and then not even
+ * read at home. The first is public API and the second is either dead or
+ * waiting to be wired, and only the second is a worklist.
+ *
+ * Counting mentions is enough because the declaration is one of them: a name
+ * appearing once appears only where it is introduced. An overload signature
+ * makes two and reads as used, which errs towards the quiet answer.
+ */
+function usedAtHome(module: Module, name: string): boolean {
+  const mentions = module.source.match(new RegExp(String.raw`\b${escape(name)}\b`, "g"));
+
+  return (mentions?.length ?? 0) > 1;
 }
 
 function escape(name: string): string {
@@ -282,7 +327,9 @@ const all = await modules();
 const uses = usesOf(all);
 const inPackage = (module: Module) => only === undefined || module.package === only;
 
-if (process.argv.includes("--exports")) {
+const dead = process.argv.includes("--dead");
+
+if (process.argv.includes("--exports") || dead) {
   // Only the modules something *does* call: a module nothing calls at all is
   // the other report, and listing every one of its exports here would bury
   // the finding this one exists for.
@@ -290,7 +337,9 @@ if (process.argv.includes("--exports")) {
     .filter((module) => module.exports.length > 0 && called(module, all, uses) && inPackage(module))
     .map((module) => ({
       module,
-      unused: module.exports.filter((name) => !usedElsewhere(module, name, all, uses)),
+      unused: module.exports
+        .filter((name) => !usedElsewhere(module, name, all, uses))
+        .filter((name) => !dead || !usedAtHome(module, name)),
     }))
     .filter((entry) => entry.unused.length > 0)
     .sort((a, b) => b.unused.length - a.unused.length);
@@ -298,7 +347,9 @@ if (process.argv.includes("--exports")) {
   const total = partial.reduce((sum, entry) => sum + entry.unused.length, 0);
 
   console.log(
-    `${String(total)} exports of ${String(partial.length)} otherwise-called modules are named nowhere else.`,
+    dead
+      ? `${String(total)} exports of ${String(partial.length)} otherwise-called modules are used nowhere, not even at home.`
+      : `${String(total)} exports of ${String(partial.length)} otherwise-called modules are named nowhere else.`,
   );
 
   for (const { module, unused } of partial) {
