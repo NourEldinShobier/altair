@@ -26,7 +26,7 @@
  *   its neighbours. `content_for` is `provide` and `yieldContent`, because
  *   writing and reading through one name is a Ruby-block trick with no
  *   JavaScript spelling. ActionMailbox's one missing name, `routing`, is
- *   `MailboxRouter.route`. The twenty-one that are one name for one name are
+ *   `MailboxRouter.route`. The twenty-two that are one name for one name are
  *   in `ALIASES` below, each with the file it was checked against; the rest
  *   are one-to-many and have nowhere to be written down but here.
  * - **Rails internals.** `addLeftAssociation`, `typeCastForDatabase`,
@@ -489,6 +489,15 @@ const ALIASES: Record<string, string> = {
   // `flash.alert` exists because `alert` is in the list, so the list is what
   // the reader should be sent to.
   alert: "flashTypes", // packages/controller/src/controller.ts
+
+  // Rails keeps `ip` and `remote_ip` apart because `remote_ip` reads the
+  // forwarded header by default, so the two disagree behind a proxy. Here the
+  // default trusts no proxy at all — a deliberate choice, argued at length in
+  // the file — which makes `clientIp()` with nothing declared exactly the
+  // socket address, and leaves the second name nothing to name. Established by
+  // mutation rather than by reading: an `ip` accessor returning
+  // `this.clientIp()` broke no test, because it was correct.
+  ip: "clientIp", // packages/controller/src/client_ip.ts
 };
 
 console.log("component        rails   ours   covered   missing (a sample)");
