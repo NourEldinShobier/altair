@@ -22,6 +22,8 @@
  * spoofable identity.
  */
 
+import { Current } from "@altair/support";
+
 export interface ClientIpOptions {
   /**
    * How many proxies of your own sit in front of this application.
@@ -30,7 +32,14 @@ export interface ClientIpOptions {
    * default — reads nothing from the header at all.
    */
   trustedProxies?: number;
-  /** The socket address, when the server can supply one. */
+  /**
+   * The socket address, when the caller has one to hand.
+   *
+   * Left out, the address the server observed for this request is used. That
+   * default is the reason this file exists: without it the only answer
+   * available is a header, and reading an address out of a header a client
+   * wrote is exactly the spoof described above.
+   */
   socketAddress?: string;
   /** Which header the proxies write. */
   header?: string;
@@ -70,7 +79,7 @@ function stripPort(entry: string): string {
  */
 export function clientIp(request: Request, options: ClientIpOptions = {}): string | undefined {
   const trusted = Math.max(0, Math.floor(options.trustedProxies ?? 0));
-  const socket = options.socketAddress;
+  const socket = options.socketAddress ?? Current.peerAddress;
 
   if (trusted === 0) return socket;
 
