@@ -134,6 +134,19 @@ describe("combining", () => {
   });
 });
 
+describe("a Date in a having", () => {
+  /** The same question asked of a group, and it had the same hole. */
+  it("filters the groups it was written to", async () => {
+    const rows = await Event.all()
+      .select("live")
+      .group("live")
+      .having("MAX(at) > ?", MIDNIGHT)
+      .toArray();
+
+    expect(rows).toHaveLength(1);
+  });
+});
+
 describe("what a condition still remembers", () => {
   /**
    * The value a condition carries is what `whereValues` reports and what a

@@ -699,7 +699,10 @@ export class Relation<T> implements PromiseLike<T[]> {
   /** Rails' `having`, which filters groups rather than rows. */
   having(sql: string, ...bindings: unknown[]): Relation<T> {
     const next = this.#clone();
-    next.#havings.push({ sql, bindings });
+    // Bound the same way a `where` binds, because it is the same question
+    // asked of a group: `having("MAX(at) > ?", aDate)` has no reason to
+    // behave differently from `where("at > ?", aDate)`.
+    next.#havings.push({ sql, bindings: this.#bind(bindings) });
     return next;
   }
 
