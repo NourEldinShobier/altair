@@ -24,7 +24,7 @@
 
 import type { Route } from "./route.js";
 import { helperKey } from "./polymorphic.js";
-import { matchesFilter } from "./resource_scope.js";
+import { matchesFilter } from "./resource-scope.js";
 
 /** What a route dispatches to, when it is not a controller action. */
 export interface RackApp {
@@ -206,7 +206,7 @@ export function routeRow(entry: InspectedRoute): RouteRow {
 /**
  * Rails' filtering, as one pass.
  *
- * The substring match itself is `matchesFilter` in `resource_scope.ts` — a
+ * The substring match itself is `matchesFilter` in `resource-scope.ts` — a
  * second one would mean `rails routes -g` and the routing error page disagreed
  * about what a filter matches, which is the sort of difference nobody notices
  * until they are already lost.

@@ -12,7 +12,7 @@ import { Connection } from "@altair/orm";
 import { Job } from "../src/job.js";
 import { MemoryQueue } from "../src/worker.js";
 import { InvalidCronExpression, isCronExpression, lockKey, Scheduler } from "../src/schedule.js";
-import { createJobsTable, DatabaseQueue, JOBS_TABLE } from "../src/database_queue.js";
+import { createJobsTable, DatabaseQueue, JOBS_TABLE } from "../src/database-queue.js";
 
 const ran: string[] = [];
 

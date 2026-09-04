@@ -14,7 +14,7 @@
  * go, rather than a middleware somebody has to find.
  */
 
-import { directUploads, type DirectUploadsMiddlewareOptions } from "./direct_upload.js";
+import { directUploads, type DirectUploadsMiddlewareOptions } from "./direct-upload.js";
 import { serveDisk } from "./serve.js";
 import { DiskService, storageService } from "./service.js";
 

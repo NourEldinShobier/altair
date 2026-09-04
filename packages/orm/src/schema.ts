@@ -11,7 +11,7 @@ import { pluralize, singularize } from "@altair/support";
 import type { Connection, Row } from "./connection.js";
 import { ADAPTERS, maxIdentifierLength, type Capabilities } from "./capabilities.js";
 import { columnTypeFor } from "./dump.js";
-import { checkGeneratedColumn, generatedClause } from "./generated_columns.js";
+import { checkGeneratedColumn, generatedClause } from "./generated-columns.js";
 import { columnSchemas, indexSchemas, type ColumnSchema } from "./introspect.js";
 
 export type ColumnType =

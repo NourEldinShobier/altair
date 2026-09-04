@@ -529,16 +529,16 @@ const ALIASES: Record<string, string> = {
   idsWriter: "defineCollectionIds", // packages/orm/src/model.ts
 
   // Rails' `RemoteIp::GetIp#calculate_ip`, trusted-proxy list and all.
-  calculateIp: "clientIp", // packages/controller/src/client_ip.ts
+  calculateIp: "clientIp", // packages/controller/src/client-ip.ts
 
   // `max-stale` with no value is `"unlimited"` from this one, which is why
   // there is no second method asking whether it was unlimited.
-  maxStaleUnlimited: "maxStale", // packages/controller/src/request_details.ts
+  maxStaleUnlimited: "maxStale", // packages/controller/src/request-details.ts
 
   // The guard that refuses a destructive task against production, and the
   // read of what the database last recorded about itself.
-  checkCurrentProtectedEnvironment: "checkProtectedEnvironments", // packages/orm/src/protected_environments.ts
-  lastStoredEnvironment: "storedEnvironment", // packages/orm/src/protected_environments.ts
+  checkCurrentProtectedEnvironment: "checkProtectedEnvironments", // packages/orm/src/protected-environments.ts
+  lastStoredEnvironment: "storedEnvironment", // packages/orm/src/protected-environments.ts
 
   // Rails swaps the digest by handing over a class; there is no class to hand
   // over here, so it takes the algorithm's name.
@@ -553,7 +553,7 @@ const ALIASES: Record<string, string> = {
 
   // Same decision, asked the other way round: whether this user agent is one
   // `allowBrowser` turns away.
-  blocked: "browserAllowed", // packages/controller/src/allow_browser.ts
+  blocked: "browserAllowed", // packages/controller/src/allow-browser.ts
 
   // Rails wraps a Rack response for assertions with a factory; here the class
   // is constructed directly, because it needs the already-read body and a
@@ -572,7 +572,7 @@ const ALIASES: Record<string, string> = {
   // socket address, and leaves the second name nothing to name. Established by
   // mutation rather than by reading: an `ip` accessor returning
   // `this.clientIp()` broke no test, because it was correct.
-  ip: "clientIp", // packages/controller/src/client_ip.ts
+  ip: "clientIp", // packages/controller/src/client-ip.ts
 
   // ---- Internals of a feature that is here, mapped to that feature. --------
   //
@@ -605,19 +605,19 @@ const ALIASES: Record<string, string> = {
   // variable, a reaper, keepalive probes and lazy activation. Bun has no
   // threads, so the pool here leases and releases without a condvar, and each
   // of these is the corresponding step of that.
-  activate: "ConnectionPool", // packages/orm/src/connection_pool.ts
-  activated: "ConnectionPool", // packages/orm/src/connection_pool.ts
-  poll: "leaseConnection", // packages/orm/src/connection_leasing.ts
-  broadcastOnBiased: "releaseConnection", // packages/orm/src/connection_leasing.ts
-  prepopulate: "preconnect", // packages/orm/src/connection_leasing.ts
-  keepAlive: "needsVerification", // packages/orm/src/pool_lifecycle.ts
-  keepalive: "needsVerification", // packages/orm/src/pool_lifecycle.ts
-  requiresReloading: "needsReconnect", // packages/orm/src/pool_lifecycle.ts
-  retryDeadline: "connectionRetries", // packages/orm/src/connection_leasing.ts
-  verifyTimeout: "connectionRetries", // packages/orm/src/connection_leasing.ts
-  removeRole: "ConnectionHandler", // packages/orm/src/connection_handler.ts
-  primaryClass: "BASE_CLASS", // packages/orm/src/connection_scoping.ts
-  queryCache: "withQueryCache", // packages/orm/src/query_cache.ts
+  activate: "ConnectionPool", // packages/orm/src/connection-pool.ts
+  activated: "ConnectionPool", // packages/orm/src/connection-pool.ts
+  poll: "leaseConnection", // packages/orm/src/connection-leasing.ts
+  broadcastOnBiased: "releaseConnection", // packages/orm/src/connection-leasing.ts
+  prepopulate: "preconnect", // packages/orm/src/connection-leasing.ts
+  keepAlive: "needsVerification", // packages/orm/src/pool-lifecycle.ts
+  keepalive: "needsVerification", // packages/orm/src/pool-lifecycle.ts
+  requiresReloading: "needsReconnect", // packages/orm/src/pool-lifecycle.ts
+  retryDeadline: "connectionRetries", // packages/orm/src/connection-leasing.ts
+  verifyTimeout: "connectionRetries", // packages/orm/src/connection-leasing.ts
+  removeRole: "ConnectionHandler", // packages/orm/src/connection-handler.ts
+  primaryClass: "BASE_CLASS", // packages/orm/src/connection-scoping.ts
+  queryCache: "withQueryCache", // packages/orm/src/query-cache.ts
   newClient: "Connection", // packages/orm/src/connection.ts
   adapterClass: "adapterFor", // packages/orm/src/connection.ts
   installExecutorHooks: "Executor", // packages/support/src/execution.ts
@@ -625,55 +625,55 @@ const ALIASES: Record<string, string> = {
 
   // The transaction manager: `materialize!` opens a lazy transaction,
   // `restorable?` and `nullify!` are its savepoint bookkeeping.
-  materialize: "TransactionManager", // packages/orm/src/transaction_manager.ts
-  restorable: "TransactionManager", // packages/orm/src/transaction_manager.ts
-  nullify: "TransactionManager", // packages/orm/src/transaction_manager.ts
+  materialize: "TransactionManager", // packages/orm/src/transaction-manager.ts
+  restorable: "TransactionManager", // packages/orm/src/transaction-manager.ts
+  nullify: "TransactionManager", // packages/orm/src/transaction-manager.ts
 
   // Reflection and the join tree.
   addAggregateReflection: "addReflection", // packages/orm/src/reflection.ts
   reflectOnAllAutosaveAssociations: "normalizedReflections", // packages/orm/src/reflection.ts
   computeClass: "reflectionFor", // packages/orm/src/reflection.ts
   allIncludes: "includes", // packages/orm/src/relation.ts
-  addConstraints: "joinConstraints", // packages/orm/src/join_dependency.ts
+  addConstraints: "joinConstraints", // packages/orm/src/join-dependency.ts
   baseKlass: "baseClass", // packages/orm/src/model.ts
   addLeftAssociation: "hasAndBelongsToMany", // packages/orm/src/model.ts
   addRightAssociation: "hasAndBelongsToMany", // packages/orm/src/model.ts
   forceReloadReader: "reload", // packages/orm/src/model.ts
   registerHandler: "predicateBuilder", // packages/orm/src/arel.ts
   tableNameQualifiedUnscopeValues: "unscope", // packages/orm/src/relation.ts
-  finder: "findBy_", // packages/orm/src/attribute_patterns.ts
+  finder: "findBy_", // packages/orm/src/attribute-patterns.ts
 
   // Types and casting.
-  addModifier: "registerTypeMapping", // packages/orm/src/pg_type_registry.ts
-  attributesBuilder: "castValues", // packages/orm/src/type_map.ts
-  typeCastForDatabase: "castBoundValue", // packages/orm/src/type_map.ts
-  serial: "serialSequence", // packages/orm/src/query_analysis.ts
-  fmod: "sqlTypeParts", // packages/orm/src/type_map.ts
+  addModifier: "registerTypeMapping", // packages/orm/src/pg-type-registry.ts
+  attributesBuilder: "castValues", // packages/orm/src/type-map.ts
+  typeCastForDatabase: "castBoundValue", // packages/orm/src/type-map.ts
+  serial: "serialSequence", // packages/orm/src/query-analysis.ts
+  fmod: "sqlTypeParts", // packages/orm/src/type-map.ts
   includesColumn: "columnNames", // packages/orm/src/model.ts
 
   // Bulk writes.
-  keysIncludingTimestamps: "timestampColumns", // packages/orm/src/insert_all.ts
-  mapKeyWithValue: "insertColumns", // packages/orm/src/insert_all.ts
+  keysIncludingTimestamps: "timestampColumns", // packages/orm/src/insert-all.ts
+  mapKeyWithValue: "insertColumns", // packages/orm/src/insert-all.ts
   sanitizeSqlHashForAssignment: "sanitizeSqlForAssignment", // packages/orm/src/sanitization.ts
 
   // Encryption and tokens.
-  currentCustomContext: "encryptionContext", // packages/orm/src/encryption_keys.ts
-  resetDefaultContext: "resetEncryptionKeys", // packages/orm/src/encryption_keys.ts
-  deriveFrom: "deriveKeyFrom", // packages/orm/src/encryption_keys.ts
+  currentCustomContext: "encryptionContext", // packages/orm/src/encryption-keys.ts
+  resetDefaultContext: "resetEncryptionKeys", // packages/orm/src/encryption-keys.ts
+  deriveFrom: "deriveKeyFrom", // packages/orm/src/encryption-keys.ts
   installSupport: "configureEncryption", // packages/orm/src/encryption.ts
   enable: "ParameterFilter", // packages/support/src/filter.ts
-  resolveToken: "readToken", // packages/orm/src/token_for.ts
+  resolveToken: "readToken", // packages/orm/src/token-for.ts
 
   // Schema, migrations and tasks.
   createSchemaDumper: "dumpSchema", // packages/orm/src/dump.ts
   definedFor: "indexExists", // packages/orm/src/schema.ts
-  runnable: "MigrationContext", // packages/orm/src/migration_context.ts
-  usingDatabaseConfigurations: "databaseTasks", // packages/orm/src/database_configurations.ts
-  findCmdAndExec: "dbconsole", // packages/orm/src/database_tasks.ts
-  valueKey: "storedEnvironment", // packages/orm/src/protected_environments.ts
-  updateContext: "sessionContext", // packages/orm/src/connection_scoping.ts
-  setQuery: "StatementContext", // packages/orm/src/database_errors.ts
-  pp: "explainPretty", // packages/orm/src/query_analysis.ts
+  runnable: "MigrationContext", // packages/orm/src/migration-context.ts
+  usingDatabaseConfigurations: "databaseTasks", // packages/orm/src/database-configurations.ts
+  findCmdAndExec: "dbconsole", // packages/orm/src/database-tasks.ts
+  valueKey: "storedEnvironment", // packages/orm/src/protected-environments.ts
+  updateContext: "sessionContext", // packages/orm/src/connection-scoping.ts
+  setQuery: "StatementContext", // packages/orm/src/database-errors.ts
+  pp: "explainPretty", // packages/orm/src/query-analysis.ts
 
   // Fixtures.
   lhsKey: "Fixtures", // packages/testing/src/fixtures.ts
@@ -684,20 +684,20 @@ const ALIASES: Record<string, string> = {
   dispatcher: "createDispatcher", // packages/controller/src/dispatcher.ts
   newLevel: "newScope", // packages/router/src/mapper.ts
   toRegexp: "toRegexpSource", // packages/router/src/pattern.ts
-  makeDefault: "checkParamDepth", // packages/controller/src/query_parsing.ts
-  handleArray: "parseNestedParams", // packages/controller/src/nested_params.ts
-  requestParametersList: "eachPair", // packages/controller/src/query_parsing.ts
-  strictQueryStringSeparator: "STRICT_SEPARATOR", // packages/controller/src/query_parsing.ts
+  makeDefault: "checkParamDepth", // packages/controller/src/query-parsing.ts
+  handleArray: "parseNestedParams", // packages/controller/src/nested-params.ts
+  requestParametersList: "eachPair", // packages/controller/src/query-parsing.ts
+  strictQueryStringSeparator: "STRICT_SEPARATOR", // packages/controller/src/query-parsing.ts
   sort: "sortAcceptEntries", // packages/controller/src/mime.ts
   escapeJsonResponses: "jsonEscape", // packages/view/src/escaping.ts
   abort: "streamResponse", // packages/controller/src/streaming.ts
 
   // Templates.
-  allFileSystemResolvers: "allResolvers", // packages/view/src/lookup_context.ts
-  castFileSystemResolvers: "allResolvers", // packages/view/src/lookup_context.ts
-  rebuildWatcher: "clearResolverCaches", // packages/view/src/lookup_context.ts
-  deactivate: "clearResolverCaches", // packages/view/src/lookup_context.ts
-  railsRoot: "shortIdentifier", // packages/view/src/lookup_context.ts
+  allFileSystemResolvers: "allResolvers", // packages/view/src/lookup-context.ts
+  castFileSystemResolvers: "allResolvers", // packages/view/src/lookup-context.ts
+  rebuildWatcher: "clearResolverCaches", // packages/view/src/lookup-context.ts
+  deactivate: "clearResolverCaches", // packages/view/src/lookup-context.ts
+  railsRoot: "shortIdentifier", // packages/view/src/lookup-context.ts
   // Rails' own documentation supersedes `form_for` with `form_with`. Listed
   // as the successor, which is a different claim from "the same thing".
   formFor: "FormWith", // packages/view/src/form.tsx
@@ -710,13 +710,13 @@ const ALIASES: Record<string, string> = {
   findTzinfo: "isTimeZone", // packages/support/src/time.ts
   toTime: "toDate", // packages/support/src/time.ts
   toDatetime: "toDate", // packages/support/src/time.ts
-  backtraceLocations: "backtraceFrames", // packages/support/src/source_extract.ts
-  baseLabel: "backtraceFrames", // packages/support/src/source_extract.ts
-  currentHash: "fromXml", // packages/support/src/xml_mini.ts
-  readTimeValue: "readTime", // packages/support/src/extra_codecs.ts
-  writeTimeValue: "writeTime", // packages/support/src/extra_codecs.ts
-  warmup: "messagePackFactory", // packages/support/src/extra_codecs.ts
-  setLogger: "withComponentLogger", // packages/testing/src/log_assertions.ts
+  backtraceLocations: "backtraceFrames", // packages/support/src/source-extract.ts
+  baseLabel: "backtraceFrames", // packages/support/src/source-extract.ts
+  currentHash: "fromXml", // packages/support/src/xml-mini.ts
+  readTimeValue: "readTime", // packages/support/src/extra-codecs.ts
+  writeTimeValue: "writeTime", // packages/support/src/extra-codecs.ts
+  warmup: "messagePackFactory", // packages/support/src/extra-codecs.ts
+  setLogger: "withComponentLogger", // packages/testing/src/log-assertions.ts
 };
 
 console.log("component        rails   ours   covered   missing (a sample)");

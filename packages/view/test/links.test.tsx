@@ -18,7 +18,7 @@ import {
   renderWithLayout,
   withContentStore,
   yieldContent,
-} from "../src/content_for.js";
+} from "../src/content-for.js";
 
 const withCsrf = async <T,>(body: () => Promise<T>): Promise<T> =>
   await Current.run({ request: new Request("http://test.host/"), csrfToken: "tok3n" }, body);

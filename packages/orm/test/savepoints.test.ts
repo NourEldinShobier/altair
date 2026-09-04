@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { SchemaStatements, setConnection } from "../src/index.js";
 import type { Connection } from "../src/connection.js";
 import { isSqlite, testConnection } from "./support/database.js";
-import { selectValue } from "../src/select_statements.js";
+import { selectValue } from "../src/select-statements.js";
 
 let connection: Connection;
 

@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { benchmark, cpuTime, humanDuration, realtime, realtimeSync } from "../src/benchmark.js";
-import { BacktraceCleaner } from "../src/backtrace_cleaner.js";
+import { BacktraceCleaner } from "../src/backtrace-cleaner.js";
 
 describe("realtime", () => {
   it("gives the result and a duration", async () => {

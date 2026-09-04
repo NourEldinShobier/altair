@@ -17,7 +17,7 @@
  * click can be missed. This posts a real form.
  */
 
-import { preventContentExfiltration } from "./sanitize_vendor.js";
+import { preventContentExfiltration } from "./sanitize-vendor.js";
 import { useCsrfToken } from "./context.js";
 import type { Node } from "./render.js";
 

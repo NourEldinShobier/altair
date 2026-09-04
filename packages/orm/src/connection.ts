@@ -12,9 +12,9 @@ import { Mutex, componentLogger, setComponentLogger, type Logger } from "@altair
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SQL } from "bun";
 import { notifications } from "@altair/support";
-import { collectingCommitCallbacks, runBeforeCommitCallbacks } from "./after_commit.js";
-import { cachingQuery, clearQueryCache } from "./query_cache.js";
-import { withQueryLog } from "./query_logs.js";
+import { collectingCommitCallbacks, runBeforeCommitCallbacks } from "./after-commit.js";
+import { cachingQuery, clearQueryCache } from "./query-cache.js";
+import { withQueryLog } from "./query-logs.js";
 
 import {
   capabilitiesFor,

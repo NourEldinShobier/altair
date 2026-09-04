@@ -18,7 +18,7 @@
 
 import type { MailMessage } from "./mailer.js";
 import { underscore } from "@altair/support";
-import { informPreviewInterceptors } from "./preview_interceptors.js";
+import { informPreviewInterceptors } from "./preview-interceptors.js";
 import type { MessageFields } from "./message.js";
 import { formatAddresses } from "./message.js";
 

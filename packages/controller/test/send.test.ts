@@ -12,9 +12,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Controller } from "../src/controller.js";
-import { clientIp, forwardedFor } from "../src/client_ip.js";
+import { clientIp, forwardedFor } from "../src/client-ip.js";
 import { contentDisposition, safeFilename, sendData, sendFile, FileNotFound } from "../src/send.js";
-import { credentialsMatch, decodeBasic, secretsMatch } from "../src/basic_auth.js";
+import { credentialsMatch, decodeBasic, secretsMatch } from "../src/basic-auth.js";
 
 const get = (headers: Record<string, string> = {}) => new Request("http://test.host/", { headers });
 

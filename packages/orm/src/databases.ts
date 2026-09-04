@@ -286,7 +286,7 @@ export interface DatabaseSelectorOptions {
  *
  * Routes by HTTP method alone, which is enough when reads may be stale. A
  * replica lags, so the redirect after a create can render the page as it was
- * before — `selectDatabase` in `connection_scoping.ts` keeps a visitor on the
+ * before — `selectDatabase` in `connection-scoping.ts` keeps a visitor on the
  * primary for a delay after their own write, which is what that costs.
  */
 export function databaseSelector(options: DatabaseSelectorOptions = {}) {

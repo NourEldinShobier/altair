@@ -10,7 +10,7 @@
 import { Model } from "@altair/orm";
 import { createBlob, StorageBlob, type UploadedFile } from "./blob.js";
 import type { UrlOptions } from "./service.js";
-import { declareVariants } from "./named_variants.js";
+import { declareVariants } from "./named-variants.js";
 import type { Transformations } from "./variant.js";
 
 export interface AttachmentRow {

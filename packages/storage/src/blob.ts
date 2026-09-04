@@ -131,7 +131,7 @@ export class StorageBlob extends Model<BlobRow>("active_storage_blobs") {
    * configures one — so this is the caller's choice rather than the default.
    */
   async purgeLater(): Promise<void> {
-    const { PurgeBlobJob } = await import("./purge_job.js");
+    const { PurgeBlobJob } = await import("./purge-job.js");
     await PurgeBlobJob.performLater(this.id as number);
   }
 }

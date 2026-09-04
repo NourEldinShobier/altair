@@ -22,7 +22,7 @@
  * database is what catches it.
  */
 
-import { applySecondsPrecision } from "./attribute_patterns.js";
+import { applySecondsPrecision } from "./attribute-patterns.js";
 
 /** How a type reports itself. */
 export type TypeName =

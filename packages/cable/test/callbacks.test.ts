@@ -19,7 +19,7 @@ import {
   runSubscribe,
   runUnsubscribe,
 } from "../src/callbacks.js";
-import { stubConnection } from "../src/channel_testing.js";
+import { stubConnection } from "../src/channel-testing.js";
 
 let order: string[] = [];
 

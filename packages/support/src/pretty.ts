@@ -24,7 +24,7 @@
  */
 
 import type { Formatter, Level, LogEntry } from "./logger.js";
-import { defaultBacktraceCleaner, type BacktraceCleaner } from "./backtrace_cleaner.js";
+import { defaultBacktraceCleaner, type BacktraceCleaner } from "./backtrace-cleaner.js";
 
 const CODES = {
   reset: "\u001b[0m",

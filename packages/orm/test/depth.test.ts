@@ -16,7 +16,7 @@ import {
   hasSecurePassword,
   MINIMUM_PASSWORD_LENGTH,
   verifyPassword,
-} from "../src/secure_password.js";
+} from "../src/secure-password.js";
 
 interface AuthorRow {
   id: number;

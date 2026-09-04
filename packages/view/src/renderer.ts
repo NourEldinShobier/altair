@@ -2,7 +2,7 @@
  * Rendering a template found by lookup, ported from
  * `ActionView::Renderer`, `PartialRenderer` and `Template::Handlers`.
  *
- * `lookup_context.ts` answers "which component"; `collection.tsx` renders a
+ * `lookup-context.ts` answers "which component"; `collection.tsx` renders a
  * component you already have. What sits between them is the thing Rails calls
  * `render`: given a *record*, work out the partial it belongs to, find it, and
  * hand it its locals.
@@ -25,7 +25,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { LookupContext, type RegisteredTemplate, splitTemplatePath } from "./lookup_context.js";
+import { LookupContext, type RegisteredTemplate, splitTemplatePath } from "./lookup-context.js";
 import { type Node, RawHtml, renderToString } from "./render.js";
 
 /** Anything that can say which partial renders it. Rails' `to_partial_path`. */

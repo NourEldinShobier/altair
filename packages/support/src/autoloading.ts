@@ -27,10 +27,10 @@
  * one.
  */
 
-import { NameError } from "./class_attributes.js";
+import { NameError } from "./class-attributes.js";
 import { camelize, underscore } from "./inflector.js";
 import { loadInterlock, type Reloader } from "./execution.js";
-import { FileUpdateChecker, type FileStats } from "./file_update_checker.js";
+import { FileUpdateChecker, type FileStats } from "./file-update-checker.js";
 
 // --- names and paths ----------------------------------------------------------
 
@@ -219,7 +219,7 @@ function uninitializedConstant(constantName: string, detail: string): NameError 
 /**
  * Rails' `Module#const_missing` hook — resolve a name that is not loaded yet.
  *
- * Raises `class_attributes.ts`'s `NameError` rather than a second error type
+ * Raises `class-attributes.ts`'s `NameError` rather than a second error type
  * of its own: a rescue around a constant lookup should not have to know which
  * of the two ways of resolving a name was used.
  */
@@ -432,7 +432,7 @@ export interface ChangeWatch {
  * setup in the `active_support.set_configs` initializer.
  *
  * Both halves of this already existed and nothing joined them.
- * `file_update_checker.ts` answers "has anything changed since I last looked";
+ * `file-update-checker.ts` answers "has anything changed since I last looked";
  * `Reloader` in `execution.ts` knows how to take the interlock alone, unload,
  * and put everything back. `directoriesToWatch` and `watchedDirsWithExtensions`
  * above exist for exactly this and had no caller. This is the joint.

@@ -50,7 +50,7 @@
  * from, and a collision takes seconds to dismiss by looking.
  *
  * A module is too coarse a unit, and that is not a theory either.
- * `predicate_builder.ts` never appeared in this list because one of its
+ * `predicate-builder.ts` never appeared in this list because one of its
  * exports is called — and `rangePredicateFor` sat unused beside it, so a
  * `where` given a range bound it as an object and matched nothing. One wired
  * export hides every unwired one beside it. `--exports` asks the finer
@@ -94,7 +94,7 @@ interface Module {
  * A relative import and the names it takes.
  *
  * Within a package this is exact, which is the point: matching on names alone
- * says `predicate_builder.ts` is called because somebody wrote `tableName`
+ * says `predicate-builder.ts` is called because somebody wrote `tableName`
  * somewhere, and then every unused export beside the one real caller is
  * invisible. An import says which names, from which file, with no guessing.
  *
