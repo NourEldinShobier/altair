@@ -121,8 +121,8 @@ describe("loadModules", () => {
 
 describe("loadControllers", () => {
   it("keys controllers by the name a route uses", async () => {
-    await write("app/controllers/posts_controller.ts", `export class PostsController {}`);
-    await write("app/controllers/home_controller.ts", `export class HomeController {}`);
+    await write("app/controllers/posts-controller.ts", `export class PostsController {}`);
+    await write("app/controllers/home-controller.ts", `export class HomeController {}`);
 
     const registry = await loadControllers(join(root, "app/controllers"));
 
@@ -131,7 +131,7 @@ describe("loadControllers", () => {
   });
 
   it("accepts a default export", async () => {
-    await write("app/controllers/posts_controller.ts", `export default class PostsController {}`);
+    await write("app/controllers/posts-controller.ts", `export default class PostsController {}`);
 
     const registry = await loadControllers(join(root, "app/controllers"));
     expect(registry.posts).toBeDefined();
@@ -139,7 +139,7 @@ describe("loadControllers", () => {
 
   it("prefers the conventionally named export over another", async () => {
     await write(
-      "app/controllers/posts_controller.ts",
+      "app/controllers/posts-controller.ts",
       `export class Helper {}\nexport class PostsController { static marker = "right" }`,
     );
 
@@ -148,7 +148,7 @@ describe("loadControllers", () => {
   });
 
   it("ignores a file exporting no class", async () => {
-    await write("app/controllers/notes_controller.ts", `export const value = 1;`);
+    await write("app/controllers/notes-controller.ts", `export const value = 1;`);
 
     const registry = await loadControllers(join(root, "app/controllers"));
     expect(registry.notes).toBeUndefined();

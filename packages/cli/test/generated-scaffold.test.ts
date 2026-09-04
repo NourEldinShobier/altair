@@ -75,7 +75,7 @@ export default function routes(r: Mapper): void {
     "bin/boot.ts",
     `import { createApplication } from "@altair/core";
 import routes from "../config/routes.js";
-import { PostsController } from "../app/controllers/posts_controller.js";
+import { PostsController } from "../app/controllers/posts-controller.js";
 import { SchemaStatements } from "@altair/orm";
 
 

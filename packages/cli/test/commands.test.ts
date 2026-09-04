@@ -146,7 +146,7 @@ describe("generate", () => {
     const files = generate("controller", "Posts", ["index", "show"]);
 
     expect(files).toHaveLength(1);
-    expect(files[0]!.path).toBe("app/controllers/posts_controller.ts");
+    expect(files[0]!.path).toBe("app/controllers/posts-controller.ts");
   });
 
   it("produces three files for a scaffold", () => {
@@ -175,8 +175,18 @@ describe("new", () => {
     expect(files.map((file) => file.path).sort()).toEqual([
       ".env.example",
       ".gitignore",
-      "app/controllers/application_controller.ts",
-      "app/controllers/home_controller.ts",
+      "app/assets/images/.gitkeep",
+      "app/assets/stylesheets/.gitkeep",
+      "app/channels/application-cable/channel.ts",
+      "app/controllers/application-controller.ts",
+      "app/controllers/concerns/.gitkeep",
+      "app/controllers/home-controller.ts",
+      "app/helpers/.gitkeep",
+      "app/jobs/application-job.ts",
+      "app/mailers/application-mailer.tsx",
+      "app/models/application-record.ts",
+      "app/models/concerns/.gitkeep",
+      "app/views/layouts/application.tsx",
       "bin/altair.ts",
       "bin/server.ts",
       "config/console.ts",
@@ -184,13 +194,20 @@ describe("new", () => {
       "config/environments/production.ts",
       "config/environments/test.ts",
       "config/initializers/.gitkeep",
+      "config/locales/en.json",
       "config/routes.ts",
       "db/.gitkeep",
+      "db/migrate/.gitkeep",
       "db/seeds.ts",
+      "lib/tasks/.gitkeep",
+      "log/.gitkeep",
       "package.json",
       "public/404.html",
       "public/500.html",
       "public/robots.txt",
+      "storage/.gitkeep",
+      "test/.gitkeep",
+      "tmp/.gitkeep",
       "tsconfig.json",
     ]);
   });
@@ -206,7 +223,7 @@ describe("new", () => {
 
   it("wires the root route to a real controller", () => {
     expect(at("config/routes.ts")!.contents).toContain('r.root("home#index")');
-    expect(at("app/controllers/home_controller.ts")!.contents).toContain("class HomeController");
+    expect(at("app/controllers/home-controller.ts")!.contents).toContain("class HomeController");
     expect(at("bin/server.ts")!.contents).toContain("controllers: { home: HomeController }");
   });
 
@@ -288,19 +305,19 @@ describe("what a new application starts with", () => {
   const at = (path: string) => files.find((file) => file.path === path)?.contents ?? "";
 
   it("has an ApplicationController for everything else to inherit", () => {
-    expect(at("app/controllers/application_controller.ts")).toContain(
+    expect(at("app/controllers/application-controller.ts")).toContain(
       "export class ApplicationController extends Controller",
     );
   });
 
   it("turns away browsers too old to run it", () => {
-    expect(at("app/controllers/application_controller.ts")).toContain(
+    expect(at("app/controllers/application-controller.ts")).toContain(
       'this.allowBrowser({ versions: "modern" })',
     );
   });
 
   it("says how to relax that, since not every application wants it", () => {
-    expect(at("app/controllers/application_controller.ts")).toContain("Remove this if you support");
+    expect(at("app/controllers/application-controller.ts")).toContain("Remove this if you support");
   });
 
   /**
@@ -309,8 +326,8 @@ describe("what a new application starts with", () => {
    * quietly holds nowhere.
    */
   it("has its own controllers inherit from it", () => {
-    expect(at("app/controllers/home_controller.ts")).toContain("extends ApplicationController");
-    expect(at("app/controllers/home_controller.ts")).not.toContain("extends Controller");
+    expect(at("app/controllers/home-controller.ts")).toContain("extends ApplicationController");
+    expect(at("app/controllers/home-controller.ts")).not.toContain("extends Controller");
   });
 
   it("tags SQL with the controller and action in development", () => {

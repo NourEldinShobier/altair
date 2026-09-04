@@ -145,12 +145,12 @@ describe("generate controller", () => {
   it("names the file and class conventionally", () => {
     const file = generateController("Posts");
 
-    expect(file.path).toBe("app/controllers/posts_controller.ts");
+    expect(file.path).toBe("app/controllers/posts-controller.ts");
     expect(file.contents).toContain("export class PostsController extends ApplicationController");
   });
 
   it("pluralizes a singular name", () => {
-    expect(generateController("Post").path).toBe("app/controllers/posts_controller.ts");
+    expect(generateController("Post").path).toBe("app/controllers/posts-controller.ts");
   });
 
   it("writes the actions it was given", () => {
@@ -200,7 +200,7 @@ describe("generate scaffold", () => {
     expect(files.map((file) => file.path)).toEqual([
       "db/migrate/20260822143005_create_posts.ts",
       "app/models/post.ts",
-      "app/controllers/posts_controller.ts",
+      "app/controllers/posts-controller.ts",
     ]);
   });
 
@@ -250,11 +250,11 @@ describe("mailer, job and channel generators", () => {
     const written = files("mailer", "User", ["welcome", "password_reset"]);
 
     expect(Object.keys(written)).toEqual([
-      "app/mailers/user_mailer.tsx",
+      "app/mailers/user-mailer.tsx",
       "test/mailers/user_mailer.test.ts",
       "test/mailers/previews/user_mailer_preview.ts",
     ]);
-    expect(written["app/mailers/user_mailer.tsx"]).toContain("static passwordReset(");
+    expect(written["app/mailers/user-mailer.tsx"]).toContain("static passwordReset(");
   });
 
   // A preview per action, since the point is looking at each message while
@@ -273,7 +273,7 @@ describe("mailer, job and channel generators", () => {
   // Without a default sender `toMessage()` throws, so the generated test
   // failed the moment it was run.
   it("gives the mailer a sender, or its own test cannot pass", () => {
-    expect(files("mailer", "User")["app/mailers/user_mailer.tsx"]).toContain("from:");
+    expect(files("mailer", "User")["app/mailers/user-mailer.tsx"]).toContain("from:");
   });
 
   // `message.html()` is not a method; the fields come off `toMessage()`.
@@ -288,7 +288,7 @@ describe("mailer, job and channel generators", () => {
     const written = files("job", "CleanupImages");
 
     expect(Object.keys(written)).toEqual([
-      "app/jobs/cleanup_images_job.ts",
+      "app/jobs/cleanup_images-job.ts",
       "test/jobs/cleanup_images_job.test.ts",
     ]);
   });
@@ -301,15 +301,15 @@ describe("mailer, job and channel generators", () => {
   });
 
   it("does not double the suffix when the name already has it", () => {
-    expect(Object.keys(files("job", "CleanupJob"))[0]).toBe("app/jobs/cleanup_job.ts");
-    expect(Object.keys(files("channel", "ChatChannel"))[0]).toBe("app/channels/chat_channel.ts");
+    expect(Object.keys(files("job", "CleanupJob"))[0]).toBe("app/jobs/cleanup-job.ts");
+    expect(Object.keys(files("channel", "ChatChannel"))[0]).toBe("app/channels/chat-channel.ts");
   });
 
   it("generates a channel that streams", () => {
     const written = files("channel", "Chat");
 
-    expect(written["app/channels/chat_channel.ts"]).toContain("streamFrom");
-    expect(written["app/channels/chat_channel.ts"]).toContain("override async subscribed");
+    expect(written["app/channels/chat-channel.ts"]).toContain("streamFrom");
+    expect(written["app/channels/chat-channel.ts"]).toContain("override async subscribed");
   });
 
   it("still refuses a generator it does not have", () => {
@@ -328,13 +328,13 @@ describe("what generated controllers inherit", () => {
     const file = generate("controller", "Posts")[0]?.contents ?? "";
 
     expect(file).toContain("extends ApplicationController");
-    expect(file).toContain('from "#controllers/application_controller"');
+    expect(file).toContain('from "#controllers/application-controller"');
   });
 
   it("has a scaffolded controller inherit from it too", () => {
     const file =
       generate("scaffold", "Post", ["title:string"]).find((one) =>
-        one.path.endsWith("posts_controller.ts"),
+        one.path.endsWith("posts-controller.ts"),
       )?.contents ?? "";
 
     expect(file).toContain("extends ApplicationController");

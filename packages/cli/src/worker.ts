@@ -41,12 +41,40 @@ export async function registerJobs(root: string): Promise<string[]> {
       if (typeof exported !== "function" || exported === Job) continue;
       if (!(exported.prototype instanceof Job)) continue;
 
+      // Nor a base class of its own. `app/jobs/application-job.ts` holds the
+      // `ApplicationJob` every job inherits, exactly as Rails does, and it
+      // extends `Job` without implementing `perform` — there is nothing for a
+      // worker to run. Registering it made `jobs:work` report one job in an
+      // application that has written none.
+      if (!implementsPerform(exported as new () => unknown)) continue;
+
       Job.register(exported as typeof Job);
       registered.push((exported as typeof Job).jobName);
     }
   }
 
   return registered.sort();
+}
+
+/**
+ * Whether a job class actually defines the work, rather than inheriting the
+ * promise of it.
+ *
+ * Walks from the class down to `Job`, so an application with its own
+ * intermediate base — `ApplicationJob` implementing `perform` and calling
+ * `super` — still registers the jobs beneath it. Only a class where nothing
+ * between it and `Job` owns a `perform` is treated as a base class.
+ */
+function implementsPerform(klass: new () => unknown): boolean {
+  for (
+    let prototype: object | null = klass.prototype as object;
+    prototype && prototype !== Job.prototype;
+    prototype = Object.getPrototypeOf(prototype) as object | null
+  ) {
+    if (Object.hasOwn(prototype, "perform")) return true;
+  }
+
+  return false;
 }
 
 /** `--queue=mailers`, or the default queue. */

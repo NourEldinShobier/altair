@@ -104,7 +104,7 @@ describe("the generated application", () => {
       "tsconfig.json",
       "config/routes.ts",
       "bin/server.ts",
-      "app/controllers/home_controller.ts",
+      "app/controllers/home-controller.ts",
     ]) {
       expect(await Bun.file(join(root, path)).exists()).toBe(true);
     }

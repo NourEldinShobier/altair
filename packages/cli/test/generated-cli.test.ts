@@ -192,7 +192,7 @@ describe("altair jobs:work", () => {
     // A job that leaves proof it ran, since the worker is another process and
     // nothing in this one can watch it happen.
     await write(
-      "app/jobs/mark_job.ts",
+      "app/jobs/mark-job.ts",
       `import { Job } from "@altair/jobs";
 import { DatabaseQueue } from "@altair/jobs";
 
@@ -223,7 +223,7 @@ export default async function queue(app: Application): Promise<void> {
     await altair(
       "runner",
       "-e",
-      'import { MarkJob } from "./app/jobs/mark_job.js"; await MarkJob.performLater("it ran")',
+      'import { MarkJob } from "./app/jobs/mark-job.js"; await MarkJob.performLater("it ran")',
     );
 
     // Before the worker starts, nothing has performed it. This is the

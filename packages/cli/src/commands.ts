@@ -189,7 +189,7 @@ export function newApplication(name: string): GeneratedFile[] {
           },
           // One entry per directory a generator writes into. A missing one is
           // not a missing feature: `altair generate mailer User` wrote a test
-          // importing `#mailers/user_mailer`, which resolved to nothing.
+          // importing `#mailers/user-mailer`, which resolved to nothing.
           imports: {
             "#models/*": "./app/models/*.ts",
             "#controllers/*": "./app/controllers/*.ts",
@@ -233,7 +233,7 @@ export default function routes(r: Mapper): void {
 `,
     },
     {
-      path: "app/controllers/application_controller.ts",
+      path: "app/controllers/application-controller.ts",
       contents: `import { Controller } from "@altair/controller";
 
 /**
@@ -257,8 +257,8 @@ export class ApplicationController extends Controller {
 `,
     },
     {
-      path: "app/controllers/home_controller.ts",
-      contents: `import { ApplicationController } from "#controllers/application_controller";
+      path: "app/controllers/home-controller.ts",
+      contents: `import { ApplicationController } from "#controllers/application-controller";
 
 export class HomeController extends ApplicationController {
   index(): void {
@@ -273,7 +273,7 @@ export class HomeController extends ApplicationController {
 import { mountCable } from "@altair/cable";
 import { mountPreviews } from "@altair/mailer";
 import routes from "../config/routes.js";
-import { HomeController } from "#controllers/home_controller";
+import { HomeController } from "#controllers/home-controller";
 
 const app = createApplication({
   routes,
@@ -476,7 +476,136 @@ export default async function seed(): Promise<void> {}
       // everything encrypted beside it is readable the moment it is.
       contents:
         "node_modules/\ndb/*.sqlite3\n.env\n.env.*\n!.env.example\n" +
+        "log/*\n!log/.gitkeep\ntmp/*\n!tmp/.gitkeep\nstorage/*\n!storage/.gitkeep\n" +
         "config/master.key\nconfig/credentials/*.key\n",
+    },
+    {
+      path: "app/models/application-record.ts",
+      contents: `import { Model } from "@altair/orm";
+
+/**
+ * What every model in this application is built from. Rails'
+ * \`ApplicationRecord\`.
+ *
+ * Rails makes this an abstract class every model inherits. A model here needs
+ * its row type and its table name, so this is the factory rather than a class —
+ * the purpose is the same one Rails has for it, which is to give shared model
+ * behaviour a single place to live rather than repeating it per model.
+ *
+ *     interface PostRow { id: number; title: string }
+ *
+ *     export class Post extends ApplicationRecord<PostRow>("posts") {}
+ */
+export function ApplicationRecord<Row extends object>(table: string) {
+  return Model<Row>(table);
+}
+`,
+    },
+    {
+      path: "app/models/concerns/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "app/controllers/concerns/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "app/jobs/application-job.ts",
+      contents: `import { Job } from "@altair/jobs";
+
+/**
+ * What every job in this application inherits. Rails' \`ApplicationJob\`.
+ *
+ * Retries and discards declared here apply to every job, which is where they
+ * belong: "give up after five attempts" is a policy, not a per-job decision.
+ */
+export abstract class ApplicationJob extends Job {}
+`,
+    },
+    {
+      path: "app/mailers/application-mailer.tsx",
+      contents: `import { Mailer } from "@altair/mailer";
+
+/**
+ * What every mailer in this application inherits. Rails'
+ * \`ApplicationMailer\`.
+ *
+ * The default from-address and layout go here, so a new mailer does not have
+ * to remember either.
+ */
+export abstract class ApplicationMailer extends Mailer {}
+`,
+    },
+    {
+      path: "app/channels/application-cable/channel.ts",
+      contents: `import { Channel } from "@altair/cable";
+
+/**
+ * What every channel in this application inherits. Rails puts this at
+ * \`app/channels/application_cable/channel.rb\` for the same reason.
+ */
+export abstract class ApplicationCableChannel extends Channel {}
+`,
+    },
+    {
+      path: "app/views/layouts/application.tsx",
+      contents: `/**
+ * The layout every page is rendered inside. Rails'
+ * \`app/views/layouts/application.html.erb\`.
+ */
+export function ApplicationLayout({ children }: { children?: unknown }) {
+  return (
+    <html lang="en">
+      <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Altair</title>
+      </head>
+      <body>{children}</body>
+    </html>
+  );
+}
+`,
+    },
+    {
+      path: "app/helpers/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "app/assets/stylesheets/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "app/assets/images/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "config/locales/en.json",
+      contents: `${JSON.stringify({ en: { hello: "Hello world" } }, null, 2)}\n`,
+    },
+    {
+      path: "db/migrate/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "lib/tasks/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "log/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "storage/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "tmp/.gitkeep",
+      contents: "",
+    },
+    {
+      path: "test/.gitkeep",
+      contents: "",
     },
     {
       path: "tsconfig.json",

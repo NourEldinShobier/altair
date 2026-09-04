@@ -101,10 +101,10 @@ export default function routes(r: Mapper): void {
    * only have shown one.
    */
   await write(
-    "app/controllers/home_controller.ts",
+    "app/controllers/home-controller.ts",
     `import { Controller } from "@altair/controller";
-import { NotifierMailer } from "#mailers/notifier_mailer";
-import { CleanupJob } from "#jobs/cleanup_job";
+import { NotifierMailer } from "#mailers/notifier-mailer";
+import { CleanupJob } from "#jobs/cleanup-job";
 import { Widget } from "#models/widget";
 
 

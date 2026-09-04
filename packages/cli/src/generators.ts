@@ -253,8 +253,8 @@ export function generateController(name: string, actions: string[] = []): Genera
   }`;
 
   return {
-    path: `app/controllers/${resource}_controller.ts`,
-    contents: `import { ApplicationController } from "#controllers/application_controller";
+    path: `app/controllers/${resource}-controller.ts`,
+    contents: `import { ApplicationController } from "#controllers/application-controller";
 
 export class ${className} extends ApplicationController {
 ${methods}
@@ -280,9 +280,9 @@ export function generateResourceController(name: string, fields: FieldSpec[]): G
     .join(", ");
 
   return {
-    path: `app/controllers/${resource}_controller.ts`,
+    path: `app/controllers/${resource}-controller.ts`,
     contents: `import { beforeAction } from "@altair/controller";
-import { ApplicationController } from "#controllers/application_controller";
+import { ApplicationController } from "#controllers/application-controller";
 import { ${model} } from "#models/${underscore(singularize(name))}";
 
 export class ${controllerName} extends ApplicationController {
@@ -366,10 +366,10 @@ export function generateMailer(name: string, actions: string[] = []): GeneratedF
 
   return [
     {
-      path: `app/mailers/${base}_mailer.tsx`,
-      contents: `import { Mailer } from "@altair/mailer";
+      path: `app/mailers/${base}-mailer.tsx`,
+      contents: `import { ApplicationMailer } from "#mailers/application-mailer";
 
-export class ${className} extends Mailer {
+export class ${className} extends ApplicationMailer {
   // Every message needs a sender, and a mailer with no default has to be
   // given one on every call. Change this to yours.
   static override defaults = { from: "from@example.com" };
@@ -381,7 +381,7 @@ ${methods}
     {
       path: `test/mailers/${base}_mailer.test.ts`,
       contents: `import { describe, expect, it } from "bun:test";
-import { ${className} } from "#mailers/${base}_mailer";
+import { ${className} } from "#mailers/${base}-mailer";
 
 describe("${className}", () => {
 ${named
@@ -405,7 +405,7 @@ ${named
       // look at the message in a browser while writing it.
       path: `test/mailers/previews/${base}_mailer_preview.ts`,
       contents: `import { definePreviews } from "@altair/mailer";
-import { ${className} } from "#mailers/${base}_mailer";
+import { ${className} } from "#mailers/${base}-mailer";
 
 // Visible at /altair/mailers while the application is running.
 export default definePreviews({
@@ -437,10 +437,10 @@ export function generateJob(name: string): GeneratedFile[] {
 
   return [
     {
-      path: `app/jobs/${base}_job.ts`,
-      contents: `import { Job } from "@altair/jobs";
+      path: `app/jobs/${base}-job.ts`,
+      contents: `import { ApplicationJob } from "#jobs/application-job";
 
-export class ${className} extends Job {
+export class ${className} extends ApplicationJob {
   // Enqueue with \`${className}.performLater(id)\`. Inside a transaction it
   // waits for the commit, so a worker never sees a row that was rolled back.
   override async perform(id: number): Promise<void> {
@@ -452,7 +452,7 @@ export class ${className} extends Job {
     {
       path: `test/jobs/${base}_job.test.ts`,
       contents: `import { describe, expect, it } from "bun:test";
-import { ${className} } from "#jobs/${base}_job";
+import { ${className} } from "#jobs/${base}-job";
 
 describe("${className}", () => {
   it("performs", async () => {
@@ -471,10 +471,10 @@ export function generateChannel(name: string): GeneratedFile[] {
 
   return [
     {
-      path: `app/channels/${base}_channel.ts`,
-      contents: `import { Channel } from "@altair/cable";
+      path: `app/channels/${base}-channel.ts`,
+      contents: `import { ApplicationCableChannel } from "#channels/application-cable/channel";
 
-export class ${className} extends Channel {
+export class ${className} extends ApplicationCableChannel {
   override async subscribed(): Promise<void> {
     // Reject anyone who should not be here before streaming anything to them.
     this.streamFrom("${base}");
