@@ -2,7 +2,7 @@
  * The relational algebra a relation compiles into, ported from Arel's node
  * types and `ActiveRecord::Relation::WhereClause`.
  *
- * `relation.ts` builds a query from clauses and `predicate_builder.ts` turns a
+ * `relation.ts` builds a query from clauses and `predicate-builder.ts` turns a
  * hash into conditions. Both of those produce SQL text. This is the layer Rails
  * keeps *underneath* them — conditions as a tree of nodes rather than as a
  * string — and the difference is not stylistic. Three things are possible with

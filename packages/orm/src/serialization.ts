@@ -8,7 +8,7 @@
  * payload of the same record do not quietly disagree about the shape.
  */
 
-import { serializableHash, type SerializationOptions } from "./active_model.js";
+import { serializableHash, type SerializationOptions } from "./active-model.js";
 
 export interface JsonOptions extends SerializationOptions {
   /**

@@ -11,7 +11,7 @@
  * assembled at render time.
  */
 
-import { checkVia } from "./route_declaration.js";
+import { checkVia } from "./route-declaration.js";
 import { camelize, pluralize, singularize } from "@altair/support/inflector";
 import { type HttpMethod, Route, type RouteOptions } from "./route.js";
 

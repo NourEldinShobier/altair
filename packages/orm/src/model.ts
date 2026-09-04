@@ -35,7 +35,7 @@ import {
   idFor,
   whereHashFor,
   type PrimaryKey,
-} from "./composite_key.js";
+} from "./composite-key.js";
 import {
   camelize,
   humanize,
@@ -57,7 +57,7 @@ import {
 } from "./relation.js";
 import { columnTypeFor } from "./dump.js";
 import { SQLITE_VISIBLE } from "./introspect.js";
-import { schemaReflection } from "./schema_cache.js";
+import { schemaReflection } from "./schema-cache.js";
 import { columnSchemas, type ColumnSchema } from "./introspect.js";
 import {
   decryptValue,
@@ -101,14 +101,14 @@ import {
   afterRollback,
   type CommitAction,
   type CommitCallback,
-} from "./after_commit.js";
+} from "./after-commit.js";
 import {
   humanAttributeName,
   modelNameFor,
   serializableHash,
   type ModelName,
   type SerializationOptions,
-} from "./active_model.js";
+} from "./active-model.js";
 import {
   MESSAGES,
   declarationApplies,
@@ -124,8 +124,8 @@ import {
   type ValidationTarget,
   type UniquenessComparison,
 } from "./validations.js";
-import { uniquenessConditions } from "./predicate_builder.js";
-import { fingerprintMatches, generateToken, readToken, type TokenDefinition } from "./token_for.js";
+import { uniquenessConditions } from "./predicate-builder.js";
+import { fingerprintMatches, generateToken, readToken, type TokenDefinition } from "./token-for.js";
 import {
   PRELOAD_PREFIX,
   cacheKey,
@@ -3120,8 +3120,8 @@ export function Model<A extends object>(tableName?: string, options: ModelOption
 
     static defineAssociation(definition: AssociationDefinition): void {
       // Checked here, which is the one place every association goes through.
-      // `association_builder.ts` has called this since it was written and
-      // nothing calls `association_builder.ts`, so no declaration was ever
+      // `association-builder.ts` has called this since it was written and
+      // nothing calls `association-builder.ts`, so no declaration was ever
       // checked: `dependent: "delete_all"` was accepted and then nullified,
       // which is the exact thing the check exists to refuse.
       if (definition.dependent !== undefined) {

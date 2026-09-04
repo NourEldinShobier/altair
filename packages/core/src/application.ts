@@ -41,11 +41,11 @@ import {
   withQueryCache,
   type Connection,
 } from "@altair/orm";
-import { configFor } from "./config_for.js";
+import { configFor } from "./config-for.js";
 import { buildConfig, type ApplicationConfig } from "./config.js";
 import { healthCheck } from "./health.js";
-import { statusForError, statusText, wantsJson } from "./rescue_responses.js";
-import { renderErrorPage } from "./error_page.js";
+import { statusForError, statusText, wantsJson } from "./rescue-responses.js";
+import { renderErrorPage } from "./error-page.js";
 import { credentialsFor, type Credentials } from "./credentials.js";
 import { logQueries, requestLogging } from "./logging.js";
 

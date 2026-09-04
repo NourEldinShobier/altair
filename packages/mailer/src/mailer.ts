@@ -34,7 +34,7 @@ import {
   deliveryMethodNames,
   wrapDeliveryBehavior,
   type DeliveryMethodBuilder,
-} from "./delivery_registry.js";
+} from "./delivery-registry.js";
 import { currentEnvironment, type Environment } from "@altair/support";
 import { renderToString, type Node } from "@altair/view";
 import {
@@ -318,7 +318,7 @@ export function defaultDelivery(env: Environment = currentEnvironment()): Delive
  * The methods this package brings, so `MAIL_DELIVERY_METHOD` works on a fresh
  * application. Rails registers `:smtp`, `:file` and the rest the same way.
  *
- * Registered here rather than in `delivery_registry.ts` so the registry stays
+ * Registered here rather than in `delivery-registry.ts` so the registry stays
  * a registry: it knows how to hold a builder and nothing about what any of
  * them do.
  *

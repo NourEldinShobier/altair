@@ -20,7 +20,7 @@
  */
 
 import { isBlank, t, underscore } from "@altair/support";
-import { humanAttributeName } from "./active_model.js";
+import { humanAttributeName } from "./active-model.js";
 
 export interface LengthOptions {
   minimum?: number;

@@ -13,7 +13,7 @@
  */
 
 import { connectionIdentifier, trackConnection } from "./identity.js";
-import { performWork } from "./worker_pool.js";
+import { performWork } from "./worker-pool.js";
 import { UnauthorizedConnection, allowRequestOrigin, type OriginPolicy } from "./origin.js";
 import type { Broadcaster, CableSocket, ChannelContext, ConnectionContext } from "./channel.js";
 import { Channel, topicFor } from "./channel.js";

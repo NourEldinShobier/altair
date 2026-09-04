@@ -10,11 +10,11 @@
  */
 
 import { componentLogger, setComponentLogger, type Logger } from "@altair/support";
-import { parameterParserFor } from "./parameter_wrapping.js";
+import { parameterParserFor } from "./parameter-wrapping.js";
 import { Current } from "@altair/support";
 import type { Router } from "@altair/router";
 import { Controller, type ControllerContext } from "./controller.js";
-import { parseNestedParams } from "./nested_params.js";
+import { parseNestedParams } from "./nested-params.js";
 
 export type ControllerClass = new (context: ControllerContext) => Controller;
 

@@ -22,11 +22,11 @@ import {
   setCallback,
   skipCallback,
 } from "@altair/support";
-import { allowedRedirectHosts, hostAllowed, UnsafeRedirect } from "./redirect_safety.js";
+import { allowedRedirectHosts, hostAllowed, UnsafeRedirect } from "./redirect-safety.js";
 import { buildInstrumented, type ProcessActionPayload } from "./instrumentation.js";
-import { filteredParameters, filteredPath } from "./filtered_logging.js";
+import { filteredParameters, filteredPath } from "./filtered-logging.js";
 import { Parameters } from "./parameters.js";
-import { parseNestedParams } from "./nested_params.js";
+import { parseNestedParams } from "./nested-params.js";
 import { CookieJar } from "./cookies.js";
 import { Flash, Session, type SessionOptions } from "./session.js";
 import { InvalidAuthenticityToken, isSafeMethod, isVerifiedRequest, maskedToken } from "./csrf.js";
@@ -95,7 +95,7 @@ import {
   freshnessFor,
   notModified,
   type FreshnessOptions,
-} from "./conditional_get.js";
+} from "./conditional-get.js";
 import { negotiateFormat } from "./mime.js";
 import {
   eventStreamResponse,
@@ -103,15 +103,15 @@ import {
   type ServerSentEvent,
   type StreamOptions,
 } from "./streaming.js";
-import { clientIp, type ClientIpOptions } from "./client_ip.js";
+import { clientIp, type ClientIpOptions } from "./client-ip.js";
 import { sendData, sendFile, type SendOptions } from "./send.js";
-import { decodeBasic, requestAuthentication, type Credentials } from "./basic_auth.js";
+import { decodeBasic, requestAuthentication, type Credentials } from "./basic-auth.js";
 import {
   browserAllowed,
   browserBlockedResponse,
   versionsFor,
   type AllowBrowserOptions,
-} from "./allow_browser.js";
+} from "./allow-browser.js";
 
 /**
  * The caller's headers, with a content type filled in where they gave none.
@@ -165,7 +165,7 @@ export interface RescueHandler {
 /**
  * Whether a redirect stays on this host.
  *
- * Delegates to `redirect_safety.ts`, which owns the parsing. The bypasses this
+ * Delegates to `redirect-safety.ts`, which owns the parsing. The bypasses this
  * has to survive — a backslash the browser reads as a slash, a
  * protocol-relative `//host`, a userinfo `@` — are subtle enough that having
  * two implementations means having one that is subtly wrong.

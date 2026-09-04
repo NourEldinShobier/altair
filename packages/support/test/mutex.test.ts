@@ -16,7 +16,7 @@ import {
   actsLikeString,
   actsLikeTime,
   declareActsLike,
-} from "../src/acts_like.js";
+} from "../src/acts-like.js";
 
 afterEach(() => {
   resetOnce();

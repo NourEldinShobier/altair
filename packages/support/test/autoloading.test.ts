@@ -10,7 +10,7 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { NameError } from "../src/class_attributes.js";
+import { NameError } from "../src/class-attributes.js";
 import { inflections } from "../src/inflections.js";
 import {
   absolutePath,

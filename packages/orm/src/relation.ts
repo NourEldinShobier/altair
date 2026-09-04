@@ -12,7 +12,7 @@
  * against the model's known columns.
  */
 
-import { arrayPredicateFor, isRangeCondition, rangePredicateFor } from "./predicate_builder.js";
+import { arrayPredicateFor, isRangeCondition, rangePredicateFor } from "./predicate-builder.js";
 import { createHash } from "node:crypto";
 import type { Connection, Row } from "./connection.js";
 import { checkWritable } from "./databases.js";

@@ -24,7 +24,7 @@
 import { humanize, underscore } from "@altair/support";
 import type { Attributes, Node } from "./render.js";
 import { useCsrfToken } from "./context.js";
-import { preventContentExfiltration } from "./sanitize_vendor.js";
+import { preventContentExfiltration } from "./sanitize-vendor.js";
 
 /** What a builder needs from a record. Structural, so any model qualifies. */
 export interface FormRecord {

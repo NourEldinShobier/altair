@@ -17,7 +17,7 @@ import {
   type RegisteredTemplate,
   TemplateResolver,
   setViewPaths,
-} from "../src/lookup_context.js";
+} from "../src/lookup-context.js";
 import { raw } from "../src/render.js";
 import {
   MissingLocal,

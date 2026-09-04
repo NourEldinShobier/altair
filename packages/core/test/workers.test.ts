@@ -15,7 +15,7 @@
  * can have. Cluster's primary accepts and hands the descriptor to a worker.
  *
  * The count is unit-tested here; the fan-out is driven end to end from a real
- * forked supervisor in `workers_cluster.test.ts`, which needs a spawned
+ * forked supervisor in `workers-cluster.test.ts`, which needs a spawned
  * process and does not belong in the same file as the pure functions.
  */
 
