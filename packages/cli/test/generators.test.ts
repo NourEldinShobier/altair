@@ -59,7 +59,7 @@ describe("migration version", () => {
 describe("generate migration", () => {
   it("names the file after the version and the migration", () => {
     const file = generateMigration("create_posts", parseFields(["title:string"]), NOW);
-    expect(file.path).toBe("db/migrate/20260822143005_create_posts.ts");
+    expect(file.path).toBe("db/migrate/20260822143005_create-posts.ts");
   });
 
   it("builds a create table body from the fields", () => {
@@ -107,10 +107,10 @@ describe("generate model", () => {
     expect(file.contents).toContain('export class Post extends Model<PostRow>("posts")');
   });
 
-  it("singularizes and underscores a multi-word name", () => {
+  it("singularizes and dasherizes a multi-word name", () => {
     const file = generateModel("LineItems", []);
 
-    expect(file.path).toBe("app/models/line_item.ts");
+    expect(file.path).toBe("app/models/line-item.ts");
     expect(file.contents).toContain('Model<LineItemRow>("line_items")');
   });
 
@@ -198,7 +198,7 @@ describe("generate scaffold", () => {
 
   it("produces a migration, a model and a controller", () => {
     expect(files.map((file) => file.path)).toEqual([
-      "db/migrate/20260822143005_create_posts.ts",
+      "db/migrate/20260822143005_create-posts.ts",
       "app/models/post.ts",
       "app/controllers/posts-controller.ts",
     ]);
@@ -251,8 +251,8 @@ describe("mailer, job and channel generators", () => {
 
     expect(Object.keys(written)).toEqual([
       "app/mailers/user-mailer.tsx",
-      "test/mailers/user_mailer.test.ts",
-      "test/mailers/previews/user_mailer_preview.ts",
+      "test/mailers/user-mailer.test.ts",
+      "test/mailers/previews/user-mailer-preview.ts",
     ]);
     expect(written["app/mailers/user-mailer.tsx"]).toContain("static passwordReset(");
   });
@@ -262,7 +262,7 @@ describe("mailer, job and channel generators", () => {
   // than something to wire up.
   it("previews every action it generated", () => {
     const preview = files("mailer", "User", ["welcome", "password_reset"])[
-      "test/mailers/previews/user_mailer_preview.ts"
+      "test/mailers/previews/user-mailer-preview.ts"
     ] as string;
 
     expect(preview).toContain('"Welcome": () =>');
@@ -278,7 +278,7 @@ describe("mailer, job and channel generators", () => {
 
   // `message.html()` is not a method; the fields come off `toMessage()`.
   it("writes a mailer test against the API that exists", () => {
-    const test = files("mailer", "User")["test/mailers/user_mailer.test.ts"] as string;
+    const test = files("mailer", "User")["test/mailers/user-mailer.test.ts"] as string;
 
     expect(test).toContain("toMessage()");
     expect(test).not.toContain("message.html()");
@@ -288,15 +288,32 @@ describe("mailer, job and channel generators", () => {
     const written = files("job", "CleanupImages");
 
     expect(Object.keys(written)).toEqual([
-      "app/jobs/cleanup_images-job.ts",
-      "test/jobs/cleanup_images_job.test.ts",
+      "app/jobs/cleanup-images-job.ts",
+      "test/jobs/cleanup-images-job.test.ts",
     ]);
   });
 
   // `singularize` is right for a model and wrong for a job: it turned
-  // CleanupImages into cleanup_image_job.
+  // CleanupImages into cleanup-image-job.
+  // Every separator in a generated path, not only the one before the suffix.
+  // `generate job RollupMeasurements` wrote `rollup_measurements-job.ts`:
+  // half the name kebab, half of it snake, in one filename.
+  it("spells a multi-word name the same way throughout a path", () => {
+    const paths = [
+      ...Object.keys(files("job", "RollupMeasurements")),
+      ...Object.keys(files("mailer", "WeeklyDigest")),
+      ...Object.keys(files("channel", "LiveMeasurements")),
+      ...Object.keys(files("controller", "AdminReport")),
+      ...Object.keys(files("scaffold", "LineItem", ["sku:string"])),
+    ];
+
+    expect(paths.filter((path) => path.replace(/^db\/migrate\/\d+_/, "").includes("_"))).toEqual(
+      [],
+    );
+  });
+
   it("does not fold a plural in a job name", () => {
-    expect(Object.keys(files("job", "CleanupImages"))[0]).toContain("cleanup_images");
+    expect(Object.keys(files("job", "CleanupImages"))[0]).toContain("cleanup-images");
     expect(Object.keys(files("mailer", "Notifications"))[0]).toContain("notifications");
   });
 

@@ -137,7 +137,7 @@ describe("generate", () => {
     const files = generate("model", "Post", ["title:string"], { now: NOW });
 
     expect(files.map((file) => file.path)).toEqual([
-      "db/migrate/20260822143005_create_posts.ts",
+      "db/migrate/20260822143005_create-posts.ts",
       "app/models/post.ts",
     ]);
   });
@@ -273,7 +273,7 @@ describe("install migrations", () => {
   it("write a migration rather than creating tables behind the application", () => {
     const file = generateStorageInstall(now);
 
-    expect(file.path).toBe("db/migrate/20260102030405_create_active_storage_tables.ts");
+    expect(file.path).toBe("db/migrate/20260102030405_create-active-storage-tables.ts");
     expect(file.contents).toContain('version: "20260102030405"');
   });
 
