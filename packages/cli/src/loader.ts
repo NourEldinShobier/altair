@@ -114,16 +114,22 @@ export async function loadModules(directory: string): Promise<Record<string, unk
 /**
  * Builds the controller registry a route table expects.
  *
- * A route carries `posts`, and the file is `posts_controller.ts` exporting
+ * A route carries `posts`, and the file is `posts-controller.ts` exporting
  * `PostsController` — the same convention Rails resolves at runtime, resolved
  * here by reading the directory.
+ *
+ * Both separators are accepted. This project generates `posts-controller.ts`,
+ * but an application ported from Rails arrives with `posts_controller.rb` and
+ * the person translating it will name the file the way Rails did. Refusing
+ * that would be a rename demanded by the framework for no reason a user can
+ * see — the route says `posts` either way.
  */
 export async function loadControllers(directory: string): Promise<Record<string, unknown>> {
   const modules = await loadModules(directory);
   const registry: Record<string, unknown> = {};
 
   for (const [name, module] of Object.entries(modules)) {
-    const routeName = name.replace(/_controller$/, "");
+    const routeName = name.replace(/[-_]controller$/, "");
     const exported = module as Record<string, unknown>;
 
     // Prefer the conventional export name, then a default, then the only class.
