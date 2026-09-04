@@ -5,6 +5,7 @@
  * return strings, so these assert the output a person actually sees.
  */
 
+import { sqlitePragmas } from "@altair/orm";
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Connection, type Migration } from "@altair/orm";
 import { Router } from "@altair/router";
@@ -241,6 +242,26 @@ describe("new", () => {
     expect(at(".env.example")!.contents).toContain("SECRET_KEY_BASE=\n");
     expect(at(".gitignore")!.contents).toContain(".env");
     expect(at(".gitignore")!.contents).toContain("!.env.example");
+  });
+
+  /**
+   * A WAL database is three files, not one. `db/*.sqlite3` ignored the first
+   * and left `-shm` and `-wal` to be staged by whoever ran `git add -A` — two
+   * binary files, in the first commit of a new application.
+   *
+   * Tied to the pragma rather than to a list: if SQLite stops running in WAL
+   * mode here, this stops demanding the two lines.
+   */
+  it("ignores the files a WAL database actually leaves on disk", () => {
+    const journal = new Map(sqlitePragmas("sqlite://db/development.sqlite3")).get("journal_mode");
+    const ignored = at(".gitignore")!.contents.split("\n");
+
+    expect(ignored).toContain("db/*.sqlite3");
+
+    if (journal === "WAL") {
+      expect(ignored).toContain("db/*.sqlite3-shm");
+      expect(ignored).toContain("db/*.sqlite3-wal");
+    }
   });
 
   it("declares subpath imports so app code avoids relative paths", () => {

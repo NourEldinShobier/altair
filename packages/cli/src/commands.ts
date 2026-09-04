@@ -474,8 +474,14 @@ export default async function seed(): Promise<void> {}
       path: ".gitignore",
       // The master key is the one thing that must not be committed:
       // everything encrypted beside it is readable the moment it is.
+      //
+      // `db/*.sqlite3` alone is not enough. SQLite runs in WAL mode here
+      // (SQLITE_DEFAULT_PRAGMAS), which leaves a `-shm` and a `-wal` beside
+      // the database — both binary, both staged by the first `git add -A`
+      // anyone runs in a new application.
       contents:
-        "node_modules/\ndb/*.sqlite3\n.env\n.env.*\n!.env.example\n" +
+        "node_modules/\ndb/*.sqlite3\ndb/*.sqlite3-shm\ndb/*.sqlite3-wal\n" +
+        ".env\n.env.*\n!.env.example\n" +
         "log/*\n!log/.gitkeep\ntmp/*\n!tmp/.gitkeep\nstorage/*\n!storage/.gitkeep\n" +
         "config/master.key\nconfig/credentials/*.key\n",
     },
