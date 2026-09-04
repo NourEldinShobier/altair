@@ -12,6 +12,7 @@
 
 import {
   camelize,
+  dasherize,
   classify,
   humanize,
   pluralize,
@@ -102,7 +103,7 @@ function columnLine(field: FieldSpec): string {
 /** `altair generate migration CreatePosts title:string` */
 export function generateMigration(name: string, fields: FieldSpec[], now: Date): GeneratedFile {
   const version = migrationVersion(now);
-  const fileName = `${version}_${underscore(name)}.ts`;
+  const fileName = `${version}_${dasherize(underscore(name))}.ts`;
 
   // A migration named CreateThings gets a table body; anything else gets a
   // skeleton, because guessing at an arbitrary name produces the wrong thing.
@@ -192,7 +193,7 @@ export function generateModel(name: string, fields: FieldSpec[]): GeneratedFile 
     : "";
 
   return {
-    path: `app/models/${underscore(singularize(name))}.ts`,
+    path: `app/models/${dasherize(underscore(singularize(name)))}.ts`,
     contents: `${imports}
 
 export class ${className} extends Model<${rowType}>(${JSON.stringify(table)}) ${
@@ -253,7 +254,7 @@ export function generateController(name: string, actions: string[] = []): Genera
   }`;
 
   return {
-    path: `app/controllers/${resource}-controller.ts`,
+    path: `app/controllers/${dasherize(resource)}-controller.ts`,
     contents: `import { ApplicationController } from "#controllers/application-controller";
 
 export class ${className} extends ApplicationController {
@@ -280,10 +281,10 @@ export function generateResourceController(name: string, fields: FieldSpec[]): G
     .join(", ");
 
   return {
-    path: `app/controllers/${resource}-controller.ts`,
+    path: `app/controllers/${dasherize(resource)}-controller.ts`,
     contents: `import { beforeAction } from "@altair/controller";
 import { ApplicationController } from "#controllers/application-controller";
-import { ${model} } from "#models/${underscore(singularize(name))}";
+import { ${model} } from "#models/${dasherize(underscore(singularize(name)))}";
 
 export class ${controllerName} extends ApplicationController {
   @beforeAction({ only: ["show", "update", "destroy"] })
@@ -350,6 +351,7 @@ export function generateMailer(name: string, actions: string[] = []): GeneratedF
   // `singularize` would turn `Notifications` into `Notification`.
   const base = underscore(name).replace(/_mailer$/, "");
   const className = `${camelize(base)}Mailer`;
+  const file = dasherize(base);
   const named = actions.length > 0 ? actions : ["welcome"];
 
   const methods = named
@@ -366,7 +368,7 @@ export function generateMailer(name: string, actions: string[] = []): GeneratedF
 
   return [
     {
-      path: `app/mailers/${base}-mailer.tsx`,
+      path: `app/mailers/${file}-mailer.tsx`,
       contents: `import { ApplicationMailer } from "#mailers/application-mailer";
 
 export class ${className} extends ApplicationMailer {
@@ -379,9 +381,9 @@ ${methods}
 `,
     },
     {
-      path: `test/mailers/${base}_mailer.test.ts`,
+      path: `test/mailers/${file}-mailer.test.ts`,
       contents: `import { describe, expect, it } from "bun:test";
-import { ${className} } from "#mailers/${base}-mailer";
+import { ${className} } from "#mailers/${file}-mailer";
 
 describe("${className}", () => {
 ${named
@@ -403,9 +405,9 @@ ${named
       // Rails generates one of these beside every mailer and mounts them at
       // /rails/mailers. Sample data rather than assertions: the point is to
       // look at the message in a browser while writing it.
-      path: `test/mailers/previews/${base}_mailer_preview.ts`,
+      path: `test/mailers/previews/${file}-mailer-preview.ts`,
       contents: `import { definePreviews } from "@altair/mailer";
-import { ${className} } from "#mailers/${base}-mailer";
+import { ${className} } from "#mailers/${file}-mailer";
 
 // Visible at /altair/mailers while the application is running.
 export default definePreviews({
@@ -434,10 +436,11 @@ export function generateJob(name: string): GeneratedFile[] {
   // Not singularized — `CleanupImages` is a job name, not a plural to fold.
   const base = underscore(name).replace(/_job$/, "");
   const className = `${camelize(base)}Job`;
+  const file = dasherize(base);
 
   return [
     {
-      path: `app/jobs/${base}-job.ts`,
+      path: `app/jobs/${file}-job.ts`,
       contents: `import { ApplicationJob } from "#jobs/application-job";
 
 export class ${className} extends ApplicationJob {
@@ -450,9 +453,9 @@ export class ${className} extends ApplicationJob {
 `,
     },
     {
-      path: `test/jobs/${base}_job.test.ts`,
+      path: `test/jobs/${file}-job.test.ts`,
       contents: `import { describe, expect, it } from "bun:test";
-import { ${className} } from "#jobs/${base}-job";
+import { ${className} } from "#jobs/${file}-job";
 
 describe("${className}", () => {
   it("performs", async () => {
@@ -468,10 +471,11 @@ describe("${className}", () => {
 export function generateChannel(name: string): GeneratedFile[] {
   const base = underscore(name).replace(/_channel$/, "");
   const className = `${camelize(base)}Channel`;
+  const file = dasherize(base);
 
   return [
     {
-      path: `app/channels/${base}-channel.ts`,
+      path: `app/channels/${file}-channel.ts`,
       contents: `import { ApplicationCableChannel } from "#channels/application-cable/channel";
 
 export class ${className} extends ApplicationCableChannel {
@@ -523,7 +527,7 @@ function installMigration(
     .join("\n");
 
   return {
-    path: `db/migrate/${version}_${name}.ts`,
+    path: `db/migrate/${version}_${dasherize(name)}.ts`,
     contents: `import type { Migration } from "@altair/orm";
 import { ${options.up} } from "${options.from}";
 

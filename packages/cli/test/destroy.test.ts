@@ -82,7 +82,7 @@ describe("undoing a generator", () => {
   it("removes everything the generator writes now, not what it wrote once", async () => {
     const written = await generated("mailer", "Notifier", ["welcome"]);
 
-    expect(written).toContain("test/mailers/previews/notifier_mailer_preview.ts");
+    expect(written).toContain("test/mailers/previews/notifier-mailer-preview.ts");
 
     await destroy("mailer", "Notifier", ["welcome"], root);
 
